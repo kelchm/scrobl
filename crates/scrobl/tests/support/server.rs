@@ -8,17 +8,22 @@
 //! bare `{}` for `track.love`, which is invented. Every other body is
 //! scripted by the test that asks for it.
 //!
-//! One request per connection, `Connection: close`. Each connection gets a
-//! number, counted from 0 in the order it was accepted, and the script picks
-//! the [`Behaviour`] by that number.
+//! Normally one request per connection, `Connection: close`. Each connection
+//! gets a number, counted from 0 in the order it was accepted, and the script
+//! picks the [`Behaviour`] by that number. After
+//! [`keep_alive`](FakeLastfm::keep_alive) a connection serves request after
+//! request and says `Connection: keep-alive`; the script then picks the
+//! behaviour by the number of the request, counted from 0 over all
+//! connections, and [`Recorded`] says which connection carried it.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Notify, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 
@@ -38,6 +43,8 @@ pub enum Behaviour {
         body: Vec<u8>,
         headers: Vec<(String, String)>,
     },
+    /// Read the request, wait `by`, then answer 200 with this body.
+    Delayed { by: Duration, body: Vec<u8> },
     /// Read the request, then say nothing and keep the socket open.
     StallBeforeResponse,
     /// Send the headers and the start of a body, then say nothing.
@@ -103,7 +110,11 @@ fn error_envelope(code: u32) -> Vec<u8> {
 pub struct Recorded {
     /// The connection number, from 0.
     pub number: usize,
-    /// When the connection was accepted.
+    /// The place of this request on its connection, from 0. Always 0 unless
+    /// the server keeps connections alive.
+    pub index: usize,
+    /// When the connection was accepted; for a later request on a kept-alive
+    /// connection, when its head had been read.
     pub arrived: Instant,
     pub verb: String,
     pub path: String,
@@ -174,7 +185,17 @@ struct Shared {
     dataset: Dataset,
     script: Mutex<Script>,
     connections: AtomicUsize,
+    /// Requests started, over all connections.
+    served: AtomicUsize,
+    keep_alive: AtomicBool,
+    /// Counts up to tell idle kept-alive connections to hang up.
+    hang_up: watch::Sender<u64>,
     requests: Mutex<Vec<Recorded>>,
+    /// Connections whose handler has ended: the client hung up, or the
+    /// script did.
+    closed: AtomicUsize,
+    /// Woken whenever a request is recorded or a connection ends.
+    arrived: Notify,
     bytes_written: AtomicU64,
 }
 
@@ -205,7 +226,12 @@ impl FakeLastfm {
                 rest: Behaviour::Normal,
             }),
             connections: AtomicUsize::new(0),
+            served: AtomicUsize::new(0),
+            keep_alive: AtomicBool::new(false),
+            hang_up: watch::channel(0).0,
             requests: Mutex::new(Vec::new()),
+            closed: AtomicUsize::new(0),
+            arrived: Notify::new(),
             bytes_written: AtomicU64::new(0),
         });
         let task = tokio::spawn(accept_loop(listener, Arc::clone(&shared)));
@@ -236,6 +262,20 @@ impl FakeLastfm {
         self
     }
 
+    /// Serves many requests on one connection instead of one, and keeps it
+    /// open until the client or [`hang_up_idle`](Self::hang_up_idle) ends it.
+    #[must_use]
+    pub fn keep_alive(self) -> Self {
+        self.shared.keep_alive.store(true, Ordering::SeqCst);
+        self
+    }
+
+    /// Closes every kept-alive connection that is waiting for its next
+    /// request, as a server does when it times an idle connection out.
+    pub fn hang_up_idle(&self) {
+        self.shared.hang_up.send_modify(|count| *count += 1);
+    }
+
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -258,7 +298,7 @@ impl FakeLastfm {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        requests.sort_by_key(|r| r.number);
+        requests.sort_by_key(|r| (r.number, r.index));
         requests
     }
 
@@ -277,8 +317,28 @@ impl FakeLastfm {
 
     /// Waits until `n` requests have arrived. The caller bounds the wait.
     pub async fn wait_for_requests(&self, n: usize) {
-        while self.request_count() < n {
-            tokio::time::sleep(Duration::from_millis(2)).await;
+        self.wait_until(|| self.request_count() >= n).await;
+    }
+
+    /// Waits until `n` connections have ended, whichever side ended them.
+    /// A flood that the client walked away from has stopped by then. The
+    /// caller bounds the wait.
+    pub async fn wait_for_closed(&self, n: usize) {
+        self.wait_until(|| self.shared.closed.load(Ordering::SeqCst) >= n)
+            .await;
+    }
+
+    async fn wait_until(&self, done: impl Fn() -> bool) {
+        loop {
+            // Ask to be woken before looking, so a change that lands in
+            // between is not missed.
+            let changed = self.shared.arrived.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if done() {
+                return;
+            }
+            changed.await;
         }
     }
 }
@@ -308,24 +368,62 @@ async fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
     }
 }
 
-async fn handle(shared: Arc<Shared>, mut stream: TcpStream, number: usize, arrived: Instant) {
-    let Some(request) = read_request(&mut stream, number, arrived).await else {
-        return;
-    };
-    let params = request.params();
-    shared
-        .requests
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(request);
+async fn handle(shared: Arc<Shared>, stream: TcpStream, number: usize, arrived: Instant) {
+    serve_connection(&shared, stream, number, arrived).await;
+    shared.closed.fetch_add(1, Ordering::SeqCst);
+    shared.arrived.notify_waiters();
+}
 
-    match shared.behaviour(number) {
+async fn serve_connection(shared: &Shared, mut stream: TcpStream, number: usize, arrived: Instant) {
+    let keep_alive = shared.keep_alive.load(Ordering::SeqCst);
+    let mut hang_up = shared.hang_up.subscribe();
+    let mut index = 0;
+    loop {
+        let request = tokio::select! {
+            request = read_request(&mut stream, number, index, arrived) => request,
+            // Only a connection that is waiting for its next request hangs up.
+            Ok(()) = hang_up.changed(), if index > 0 => None,
+        };
+        let Some(mut request) = request else {
+            return;
+        };
+        if index > 0 {
+            request.arrived = Instant::now();
+        }
+        let params = request.params();
+        shared
+            .requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+        shared.arrived.notify_waiters();
+
+        let started = shared.served.fetch_add(1, Ordering::SeqCst);
+        let step = if keep_alive { started } else { number };
+        let reusable = serve_one(shared, &mut stream, &params, step, keep_alive).await;
+        if !(keep_alive && reusable) {
+            return;
+        }
+        index += 1;
+    }
+}
+
+/// Answers one request as the script says. True if the connection can carry
+/// another request.
+async fn serve_one(
+    shared: &Shared,
+    stream: &mut TcpStream,
+    params: &[(String, String)],
+    step: usize,
+    keep_alive: bool,
+) -> bool {
+    match shared.behaviour(step) {
         Behaviour::Normal => {
-            let (status, body) = match param(&params, "method") {
-                Some("track.love") => love(&params),
-                _ => respond_to(&shared.dataset, &params),
+            let (status, body) = match param(params, "method") {
+                Some("track.love") => love(params),
+                _ => respond_to(&shared.dataset, params),
             };
-            let _ = reply(&mut stream, status, &[], &body).await;
+            reply(stream, status, &[], &body, keep_alive).await.is_ok()
         }
         Behaviour::Reply {
             status,
@@ -336,25 +434,33 @@ async fn handle(shared: Arc<Shared>, mut stream: TcpStream, number: usize, arriv
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
                 .collect();
-            let _ = reply(&mut stream, status, &headers, &body).await;
+            reply(stream, status, &headers, &body, keep_alive)
+                .await
+                .is_ok()
+        }
+        Behaviour::Delayed { by, body } => {
+            tokio::time::sleep(by).await;
+            reply(stream, 200, &[], &body, keep_alive).await.is_ok()
         }
         Behaviour::StallBeforeResponse => std::future::pending().await,
         Behaviour::StallMidBody => {
-            let _ = write_head(&mut stream, 200, &[("Content-Length", "1000")]).await;
+            let _ = write_head(stream, 200, &[("Content-Length", "1000")], false).await;
             let _ = stream.write_all(br#"{"recenttracks":"#).await;
             let _ = stream.flush().await;
             std::future::pending().await
         }
         Behaviour::TruncatedBody => {
-            let _ = write_head(&mut stream, 200, &[("Content-Length", "1000")]).await;
+            let _ = write_head(stream, 200, &[("Content-Length", "1000")], false).await;
             let _ = stream.write_all(br#"{"recenttracks":"#).await;
             let _ = stream.shutdown().await;
+            false
         }
         Behaviour::OversizeBody { total, chunked } => {
-            flood(&shared, &mut stream, total, chunked).await;
+            flood(shared, stream, total, chunked, keep_alive).await
         }
         Behaviour::Close => {
             let _ = stream.shutdown().await;
+            false
         }
     }
 }
@@ -375,15 +481,28 @@ fn love(params: &[(String, String)]) -> (u16, Vec<u8>) {
 }
 
 /// Sends `total` bytes in blocks until done or the client stops reading.
-async fn flood(shared: &Shared, stream: &mut TcpStream, total: usize, chunked: bool) {
+/// True if all of them went and the connection can carry another request.
+async fn flood(
+    shared: &Shared,
+    stream: &mut TcpStream,
+    total: usize,
+    chunked: bool,
+    keep_alive: bool,
+) -> bool {
     const BLOCK: usize = 16 * 1024;
     let head = if chunked {
-        write_head(stream, 200, &[("Transfer-Encoding", "chunked")]).await
+        write_head(stream, 200, &[("Transfer-Encoding", "chunked")], keep_alive).await
     } else {
-        write_head(stream, 200, &[("Content-Length", &total.to_string())]).await
+        write_head(
+            stream,
+            200,
+            &[("Content-Length", &total.to_string())],
+            keep_alive,
+        )
+        .await
     };
     if head.is_err() {
-        return;
+        return false;
     }
     let block = vec![b' '; BLOCK];
     let mut sent = 0;
@@ -401,23 +520,29 @@ async fn flood(shared: &Shared, stream: &mut TcpStream, total: usize, chunked: b
         }
         .await;
         if result.is_err() {
-            return;
+            return false;
         }
         shared
             .bytes_written
             .fetch_add(size as u64, Ordering::SeqCst);
         sent += size;
     }
-    if chunked {
-        let _ = stream.write_all(b"0\r\n\r\n").await;
+    if chunked && stream.write_all(b"0\r\n\r\n").await.is_err() {
+        return false;
+    }
+    if keep_alive {
+        return true;
     }
     let _ = stream.shutdown().await;
+    false
 }
 
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        301 => "Moved Permanently",
         302 => "Found",
+        303 => "See Other",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
@@ -432,21 +557,28 @@ async fn write_head(
     stream: &mut TcpStream,
     status: u16,
     headers: &[(&str, &str)],
+    keep_alive: bool,
 ) -> std::io::Result<()> {
     let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
-    head.push_str("Connection: close\r\n\r\n");
+    head.push_str(if keep_alive {
+        "Connection: keep-alive\r\n\r\n"
+    } else {
+        "Connection: close\r\n\r\n"
+    });
     stream.write_all(head.as_bytes()).await
 }
 
-/// A whole answer with a `Content-Length`, then a clean close.
+/// A whole answer with a `Content-Length`, then a clean close, or not if the
+/// connection is kept alive.
 async fn reply(
     stream: &mut TcpStream,
     status: u16,
     headers: &[(&str, &str)],
     body: &[u8],
+    keep_alive: bool,
 ) -> std::io::Result<()> {
     let length = body.len().to_string();
     let mut all = vec![
@@ -460,13 +592,21 @@ async fn reply(
             .any(|(set, _)| set.eq_ignore_ascii_case(name))
     });
     all.extend_from_slice(headers);
-    write_head(stream, status, &all).await?;
+    write_head(stream, status, &all, keep_alive).await?;
     stream.write_all(body).await?;
+    if keep_alive {
+        return stream.flush().await;
+    }
     stream.shutdown().await
 }
 
 /// Reads one request: head, then a body of the announced length.
-async fn read_request(stream: &mut TcpStream, number: usize, arrived: Instant) -> Option<Recorded> {
+async fn read_request(
+    stream: &mut TcpStream,
+    number: usize,
+    index: usize,
+    arrived: Instant,
+) -> Option<Recorded> {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
     let head_end = loop {
@@ -510,6 +650,7 @@ async fn read_request(stream: &mut TcpStream, number: usize, arrived: Instant) -
 
     Some(Recorded {
         number,
+        index,
         arrived,
         verb,
         path: path.to_owned(),

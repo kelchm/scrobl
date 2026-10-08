@@ -5,7 +5,10 @@
 //! [`Client`] is one concrete client over `reqwest` with rustls. It sends
 //! over HTTPS only, follows no redirect, keeps no cookie, and turns off
 //! `reqwest`'s own retries, so that every request that leaves is one this
-//! crate chose to send. Use [`Client::user`] for typed history access and
+//! crate chose to send. Responses are requested and kept unencoded: the client
+//! sends no `Accept-Encoding` and decodes no compression, whatever other
+//! crates in the program have switched on in `reqwest`, so [`Raw::body`] is
+//! exactly the bytes the service sent. Use [`Client::user`] for typed history access and
 //! [`Client::call`] for any of the 57 methods as a raw [`Raw`] response.
 //!
 //! ```no_run
@@ -64,8 +67,10 @@
 //! machinery underneath does what any `reqwest` client does: its connection
 //! tasks run on the calling runtime and end with the connection, and
 //! resolving a host name uses that runtime's blocking pool. A client can be
-//! built outside a runtime and used inside one. The runtime needs its timer
-//! enabled, as `#[tokio::main]` and `Runtime::new` do.
+//! built outside a runtime and used inside one. The runtime needs both its I/O driver and its time driver enabled
+//! (`enable_all`), as `#[tokio::main]`, `#[tokio::test]` and `Runtime::new`
+//! do. On a runtime built without them the first call panics inside Tokio
+//! ("timers are disabled" or "IO is disabled"); the client does not hide that.
 //!
 //! A `Client` is `Clone + Send + Sync + 'static`, and every future it
 //! returns is `Send`, so it can sit in shared application state and be used
@@ -76,12 +81,26 @@
 //!
 //! Last.fm asks applications to make no more than about one request a
 //! second. The client keeps at least [`min_interval`] (one second by
-//! default) between the starts of two requests, across all its clones.
-//! Every attempt takes a slot in turn, a retry included. Callers that arrive
-//! together queue: each is given the next free slot, so ten concurrent calls
-//! start ten intervals apart rather than together. A caller whose future is
-//! dropped while it waits spends its slot and disturbs nobody else's. Set
-//! the interval to zero to turn pacing off.
+//! default) between the starts of two requests, across all its clones, and a
+//! retry is a request like any other.
+//!
+//! A start is an *admission*: the moment a caller is let through to the
+//! transport, measured by this process's clock when it happens. Callers are
+//! admitted one at a time, in the order they asked, and each admission waits
+//! out whatever remains of the interval since the previous one. The spacing
+//! therefore holds however late a task is polled: a runtime that stalls for
+//! several intervals delays the callers queued behind the stall, it does not
+//! release them together. Nothing is reserved ahead, so a caller whose future
+//! is dropped, whether it is queued or already waiting its turn, leaves no
+//! slot spent and no debt: the next caller waits only for what remains of the
+//! interval since the last real admission.
+//!
+//! What this does not promise is the spacing of arrivals at the server.
+//! Opening a connection (the lookup, the TCP and TLS handshakes) takes
+//! different times for different requests, so requests admitted an interval
+//! apart can arrive slightly closer or farther apart. Set the interval to
+//! zero to turn pacing off; it is then not consulted at all. An interval over
+//! 24 hours is refused at [`build`](ClientBuilder::build).
 //!
 //! # Retries
 //!
@@ -107,23 +126,67 @@
 //!
 //! # Timeouts and the body cap
 //!
-//! [`connect_timeout`] (10 seconds) limits opening a connection. [`timeout`]
-//! (30 seconds) limits one attempt from start to the last body byte, so a
-//! server that sends headers and then trickles or stalls is cut off. Either
-//! gives [`ErrorKind::Timeout`](crate::ErrorKind).
+//! [`connect_timeout`] (10 seconds) limits opening a connection, the TLS
+//! handshake included. [`timeout`] (30 seconds) is the longest the client
+//! waits for one attempt, from the start to the last body byte, so a server
+//! that sends headers and then trickles or stalls is cut off. Either gives
+//! [`ErrorKind::Timeout`](crate::ErrorKind).
+//!
+//! The timeout is a limit on waiting, not on when a future is next polled. A
+//! response that has already arrived in full, and decodes, by the time the
+//! future is polled is returned even if the deadline has passed in the
+//! meantime: for a write, discarding it would turn a known outcome into
+//! [`Delivery::Unknown`], which is strictly worse. Only an attempt still
+//! waiting for the service when it is polled is cut off.
+//!
+//! The timeout is per attempt. A call that retries has that much for each
+//! attempt, and the waits between them are outside it: so are the pacing
+//! wait before an attempt and the [`retry_delay`] after one. To bound a whole
+//! operation, put a deadline around it:
+//!
+//! ```no_run
+//! use std::time::Duration;
+//!
+//! use scrobl::history::Window;
+//!
+//! # async fn deadline(client: scrobl::Client, window: Window) -> Result<(), scrobl::Error> {
+//! let mut scan = client.user("rj").recent_tracks().window(window).scan()?;
+//! // Five minutes for the whole window, however many pages and retries.
+//! let read = tokio::time::timeout(Duration::from_secs(300), async {
+//!     while let Some(page) = scan.next_page().await? {
+//! #       let _ = page;
+//!         // Store the page.
+//!     }
+//!     Ok::<_, scrobl::Error>(())
+//! })
+//! .await;
+//! match read {
+//!     Ok(result) => result?,
+//!     // The deadline cancelled `next_page`. The scan has not moved: the
+//!     // same page is still outstanding, so calling `next_page` again would
+//!     // continue it, and nothing has been skipped or repeated.
+//!     Err(_elapsed) => println!("out of time; resume later"),
+//! }
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! A body is read up to [`max_response_bytes`] (8 MiB). A `Content-Length`
 //! over the cap fails before any body is read; an unannounced or chunked
-//! body fails as soon as it passes the cap, with no more than the cap held
-//! in memory. Either is [`ErrorKind::BodyTooLarge`](crate::ErrorKind).
+//! body fails as soon as it passes the cap. The cap bounds the length of the
+//! body the client keeps, and the buffer it grows for it is never asked to
+//! be larger than the cap. On top of that the transport holds the chunk it is
+//! handing over, an amount bounded by its own read buffer and not by the cap.
+//! Either failure is [`ErrorKind::BodyTooLarge`](crate::ErrorKind).
 //!
 //! # Cancellation
 //!
 //! Dropping a future abandons the attempt in flight and closes its
-//! connection. Nothing shared is left half-updated; a pacing slot already
-//! reserved is simply spent. Dropping the future of a **write** means the
-//! outcome is unknown: the request may have been sent and acted on. Do not
-//! cancel a write unless you can find out afterwards.
+//! connection. Nothing shared is left half-updated, and a caller that was
+//! waiting for its turn to be paced leaves nothing spent behind it. Dropping
+//! the future of a **write** means the outcome is unknown: the request may
+//! have been sent and acted on. Do not cancel a write unless you can find out
+//! afterwards.
 //!
 //! # Errors
 //!
@@ -142,8 +205,10 @@
 //! # Proxies
 //!
 //! Like `reqwest`, the client honours the `HTTPS_PROXY`, `ALL_PROXY` and
-//! `NO_PROXY` environment variables. The connection to a proxy carries only
-//! a `CONNECT`; the request, its query and the key are inside TLS.
+//! `NO_PROXY` environment variables. Through an HTTP proxy the proxy sees a
+//! `CONNECT` naming the host and port and nothing else: the request, its
+//! query and the key are inside TLS. [`no_proxy`] opts out and always
+//! connects directly.
 //!
 //! [`min_interval`]: ClientBuilder::min_interval
 //! [`read_attempts`]: ClientBuilder::read_attempts
@@ -151,6 +216,8 @@
 //! [`connect_timeout`]: ClientBuilder::connect_timeout
 //! [`timeout`]: ClientBuilder::timeout
 //! [`max_response_bytes`]: ClientBuilder::max_response_bytes
+//! [`no_proxy`]: ClientBuilder::no_proxy
+//! [`Raw::body`]: crate::protocol::Raw::body
 //! [`Raw`]: crate::protocol::Raw
 //! [`Retry`]: crate::Retry
 //! [`Retry::Later`]: crate::Retry::Later
@@ -185,7 +252,7 @@ use crate::protocol::{
 };
 use crate::secret::{ApiKey, SessionKey};
 use builder::Settings;
-use cause::Cause;
+use cause::{Cause, Redactor};
 use pacing::Pacer;
 
 /// The longest the client waits before a retry, however it was worked out.
@@ -245,7 +312,7 @@ impl Client {
     /// `method`, `api_key`, `format`, and `sk` and `api_sig` where the
     /// method needs them. The caller needs no credential of its own.
     ///
-    /// One attempt takes a pacing slot, sends the request, reads the body up
+    /// One attempt waits for its turn to be paced, sends the request, reads the body up
     /// to the cap and decodes it with [`protocol::decode`]. A read that
     /// fails in a way that is worth repeating is attempted again, up to the
     /// configured number of attempts. A write is attempted once. See the
@@ -323,8 +390,10 @@ impl Client {
         User::new(self.clone(), name.into())
     }
 
-    /// One attempt: send, read the body, decode. Never longer than the
-    /// configured timeout.
+    /// One attempt: send, read the body, decode. It waits no longer than the
+    /// configured timeout for the service. A response that is complete when
+    /// the future is next polled is returned even if the deadline has passed,
+    /// because `timeout` polls the exchange before its timer.
     async fn attempt(&self, request: &Request, http: &HttpRequest) -> Attempt {
         let mut retry_after = None;
         let exchange = self.exchange(request, http, &mut retry_after);
@@ -336,6 +405,11 @@ impl Client {
             result: result.map_err(|error| error.with_method(request.spec())),
             retry_after,
         }
+    }
+
+    /// What a message about `http` must not repeat.
+    fn redactor(&self, http: &HttpRequest) -> Redactor {
+        Redactor::for_request(&self.credentials, http)
     }
 
     async fn exchange(
@@ -356,7 +430,10 @@ impl Client {
                 .header(CONTENT_TYPE, HttpRequest::CONTENT_TYPE)
                 .body(http.body().unwrap_or_default().to_vec()),
         };
-        let mut response = builder.send().await.map_err(send_error)?;
+        let mut response = builder
+            .send()
+            .await
+            .map_err(|e| send_error(e, &self.redactor(http)))?;
 
         let status = response.status().as_u16();
         let headers = response.headers().clone();
@@ -368,11 +445,14 @@ impl Client {
         }
         let reserve = announced.map_or(0, |len| usize::try_from(len).unwrap_or(limit));
         let mut body = Vec::with_capacity(reserve.min(FIRST_RESERVE));
-        while let Some(chunk) = response.chunk().await.map_err(body_error)? {
-            if chunk.len() > limit - body.len() {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| body_error(e, &self.redactor(http)))?
+        {
+            if !push_chunk(&mut body, &chunk, limit) {
                 return Err(too_large());
             }
-            body.extend_from_slice(&chunk);
         }
 
         let mut reply = HttpResponse::new(status, body);
@@ -390,6 +470,7 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("credentials", &self.credentials)
             .field("settings", &self.shared.settings)
+            .field("base_url", &self.shared.root.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -401,29 +482,48 @@ struct Attempt {
     retry_after: Option<Duration>,
 }
 
+/// Appends `chunk` to `body` unless that would make it longer than `limit`,
+/// and says whether it did.
+///
+/// The capacity is grown by doubling but never asked past `limit`, so a body
+/// that ends near the cap is not held in a buffer that doubled beyond it.
+fn push_chunk(body: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
+    if chunk.len() > limit.saturating_sub(body.len()) {
+        return false;
+    }
+    let needed = body.len() + chunk.len();
+    if needed > body.capacity() {
+        let target = body.capacity().saturating_mul(2).max(needed).min(limit);
+        body.reserve_exact(target - body.len());
+    }
+    body.extend_from_slice(chunk);
+    true
+}
+
 /// A failure to send, or to receive the headers.
 ///
 /// The URL is dropped from the error first: it holds the API key. The cause
-/// kept is a snapshot of the messages, because the `Debug` of some of the
-/// errors underneath prints the address connected to.
-fn send_error(error: reqwest::Error) -> Error {
+/// kept is a snapshot of the messages, scrubbed of the credentials and of the
+/// request, because the `Debug` of some of the errors underneath prints the
+/// address connected to, and a message may repeat what a peer sent.
+fn send_error(error: reqwest::Error, redactor: &Redactor) -> Error {
     let error = error.without_url();
     if error.is_timeout() {
         Error::timeout()
     } else {
         // Anything but a failure to connect may have left the machine.
         let possibly_sent = !(error.is_connect() || error.is_builder());
-        Error::transport(possibly_sent, Cause::of(&error))
+        Error::transport(possibly_sent, Cause::of(&error, redactor))
     }
 }
 
 /// A failure while the body was coming in. The request was sent.
-fn body_error(error: reqwest::Error) -> Error {
+fn body_error(error: reqwest::Error, redactor: &Redactor) -> Error {
     let error = error.without_url();
     if error.is_timeout() {
         Error::timeout()
     } else {
-        Error::transport(true, Cause::of(&error))
+        Error::transport(true, Cause::of(&error, redactor))
     }
 }
 
@@ -431,10 +531,20 @@ fn body_error(error: reqwest::Error) -> Error {
 /// `base * 2^(attempt - 1) * factor`, or what the response asked for if
 /// that is longer, and never more than [`MAX_WAIT`].
 fn retry_wait(base: Duration, attempt: u32, factor: u32, asked: Option<Duration>) -> Duration {
-    let backoff = base
-        .saturating_mul(2_u32.saturating_pow(attempt.saturating_sub(1)))
-        .saturating_mul(factor);
-    backoff.max(asked.unwrap_or_default()).min(MAX_WAIT)
+    // Double the `Duration` itself, which saturates, rather than a count that
+    // would plateau short of the cap for a small base. Stops at the cap, or at
+    // zero, where more doubling changes nothing.
+    let mut backoff = base;
+    for _ in 1..attempt {
+        if backoff.is_zero() || backoff >= MAX_WAIT {
+            break;
+        }
+        backoff = backoff.saturating_mul(2);
+    }
+    backoff
+        .saturating_mul(factor)
+        .max(asked.unwrap_or_default())
+        .min(MAX_WAIT)
 }
 
 /// `Retry-After` as a number of seconds, which is the form Last.fm and most

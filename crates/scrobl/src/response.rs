@@ -14,7 +14,9 @@ use crate::protocol::Raw;
 /// Last.fm sent, or read a field the typed view does not model.
 ///
 /// A `Response<T>` dereferences to `T`, so the typed accessors are called
-/// on it directly.
+/// on it directly. A method of `Response` itself wins over one of `T` with
+/// the same name; [`value`](Self::value) and [`into_value`](Self::into_value)
+/// reach the typed value without going through `Deref` when that matters.
 ///
 /// ```
 /// use scrobl::Response;
@@ -33,8 +35,8 @@ use crate::protocol::Raw;
 /// }
 /// ```
 ///
-/// `Debug` shows the value's `Debug` and leaves the body out, as [`Raw`]
-/// does.
+/// `Debug` shows the value's `Debug` and leaves the body and the header
+/// values out, as [`Raw`] does.
 #[derive(Clone)]
 pub struct Response<T> {
     value: T,
@@ -52,6 +54,21 @@ impl<T> Response<T> {
     /// The response exactly as received.
     pub fn raw(&self) -> &Raw {
         &self.raw
+    }
+
+    /// The typed value, explicitly.
+    ///
+    /// The same value `Deref` reaches, for when a method of `T` is named like
+    /// one of `Response` (`raw`, `value`, `into_parts`) and would otherwise be
+    /// shadowed: `response.value().raw()` calls `T::raw`.
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Takes the typed value and drops the response it came from. Use
+    /// [`into_parts`](Self::into_parts) to keep both.
+    pub fn into_value(self) -> T {
+        self.value
     }
 
     /// Splits the response into the typed value and the exact response.
@@ -74,5 +91,42 @@ impl<T: fmt::Debug> fmt::Debug for Response<T> {
             .field("value", &self.value)
             .field("raw", &self.raw)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::protocol::{HttpResponse, Request, decode, methods};
+
+    /// A value with methods named like the ones on `Response`.
+    struct Shadowing;
+
+    impl Shadowing {
+        fn raw(&self) -> &'static str {
+            "the value's own `raw`"
+        }
+
+        fn value(&self) -> &'static str {
+            "the value's own `value`"
+        }
+    }
+
+    fn response() -> Response<Shadowing> {
+        let request = Request::new(&methods::USER_GET_INFO).param("user", "rj");
+        let raw = decode(&request, HttpResponse::new(200, "{}")).unwrap();
+        Response::new(Shadowing, raw)
+    }
+
+    #[test]
+    fn a_method_of_the_response_shadows_the_values_but_value_reaches_it() {
+        let response = response();
+        // `Response::raw`, not `Shadowing::raw`.
+        assert_eq!(response.raw().status(), 200);
+        assert_eq!(response.value().raw(), "the value's own `raw`");
+        assert_eq!(response.value().value(), "the value's own `value`");
+        assert_eq!(response.into_value().raw(), "the value's own `raw`");
     }
 }

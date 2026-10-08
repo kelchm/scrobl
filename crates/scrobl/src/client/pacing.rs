@@ -1,53 +1,64 @@
 //! The minimum spacing between request starts, shared by every clone of a
 //! client.
 
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use tokio::time::{Instant, sleep_until};
+use tokio::sync::Mutex;
+use tokio::time::{Instant, sleep};
 
-/// Hands out start times at least `interval` apart.
+/// The longest interval a client accepts. It keeps every sum of an interval
+/// and a clock reading far inside what an `Instant` can hold.
+pub(super) const MAX_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Admits callers at least `interval` apart.
 ///
-/// A caller reserves its slot under the lock, which only does arithmetic,
-/// and then waits for the slot with the lock released. Callers therefore
-/// queue behind one another: each reservation starts where the previous one
-/// ended, so a caller that is waiting never moves the clock for the others.
-/// A caller that is dropped while waiting has spent its slot, and the slots
-/// after it keep their times.
+/// Admission is serialised and measured when it happens. A caller takes the
+/// lock, which Tokio hands out in the order callers asked for it, works out
+/// how much of the interval is left since the previous admission, sleeps
+/// that long *while holding the lock*, and then reads the clock again to
+/// record the time it was actually admitted. The next caller measures from
+/// that time. So the spacing holds however late a task is polled: a runtime
+/// that stalls past several intervals delays the callers, it does not let
+/// them through together.
+///
+/// Nothing is reserved ahead. A caller that is dropped, whether it is queued
+/// for the lock or asleep under it, has recorded nothing and leaves nothing
+/// spent: the caller behind it waits only for what remains of the interval
+/// since the last real admission.
 #[derive(Debug)]
 pub(super) struct Pacer {
     interval: Duration,
-    /// The earliest time the next request may start.
-    next: Mutex<Instant>,
+    /// When the last caller was admitted, if any was.
+    last: Mutex<Option<Instant>>,
 }
 
 impl Pacer {
     pub(super) fn new(interval: Duration) -> Self {
         Self {
             interval,
-            next: Mutex::new(Instant::now()),
+            last: Mutex::new(None),
         }
     }
 
-    /// Reserves the next slot and returns when it starts. Does no waiting.
-    pub(super) fn reserve(&self) -> Instant {
-        let now = Instant::now();
-        // The guarded value is a plain `Instant`, so a poisoned lock holds
-        // no half-made state.
-        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
-        let slot = (*next).max(now);
-        *next = slot + self.interval;
-        slot
-    }
-
-    /// Waits for a slot. Returns at once when pacing is off.
-    pub(super) async fn wait(&self) {
+    /// Waits until a request may start, and returns the time it was
+    /// admitted. Returns at once when pacing is off.
+    ///
+    /// The wait is worked out as a `Duration`, never as an `Instant` plus an
+    /// interval, so no interval can overflow the clock.
+    pub(super) async fn wait(&self) -> Instant {
         if self.interval.is_zero() {
-            return;
+            return Instant::now();
         }
-        let slot = self.reserve();
-        if slot > Instant::now() {
-            sleep_until(slot).await;
+        let mut last = self.last.lock().await;
+        if let Some(previous) = *last
+            && let Some(remaining) = self.interval.checked_sub(previous.elapsed())
+        {
+            sleep(remaining).await;
         }
+        // Read again: the sleep may have ended late. Dropping this future
+        // before this line records nothing.
+        let admitted = Instant::now();
+        *last = Some(admitted);
+        admitted
     }
 }

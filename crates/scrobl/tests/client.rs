@@ -301,6 +301,39 @@ async fn gate1_no_cookie_is_sent_even_when_the_server_sets_one() {
 }
 
 #[tokio::test]
+async fn gate1_the_client_never_asks_for_an_encoded_response() {
+    // If another crate in the application turns on a `reqwest` compression
+    // feature, `reqwest` would send `Accept-Encoding` and decode the answer,
+    // and `Raw::body` would no longer be what the service sent. The client
+    // turns every decoder off, so no header goes and nothing is decoded.
+    bounded(async {
+        let server = serve(
+            dataset(),
+            [Behaviour::status_with(
+                200,
+                "{}",
+                &[("Content-Encoding", "gzip")],
+            )],
+        )
+        .await;
+        let client = client(&server);
+        // A body that claims to be gzip and is not: it comes back untouched.
+        let raw = client.call(&read()).await.unwrap();
+        assert!(raw.body() == b"{}", "the body was decoded");
+        assert_eq!(server.request_count(), 1, "the first answer was refused");
+        client.call(&read()).await.unwrap();
+        client.call(&love()).await.unwrap();
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 3);
+        for request in requests {
+            assert_eq!(request.header("accept-encoding"), None);
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn gate1_a_session_client_signs_for_its_own_session_and_shares_the_pacing_clock() {
     bounded(async {
         let interval = Duration::from_millis(80);
@@ -412,6 +445,117 @@ async fn gate2_a_body_that_stalls_midway_times_out_because_the_budget_covers_the
     .await;
 }
 
+/// Starts `request`, lets the server see it, stops polling the call while
+/// the answer arrives in full and the timeout passes, then polls it again.
+async fn call_observed_late(request: Request) -> (Result<scrobl::protocol::Raw, Error>, Duration) {
+    let timeout = Duration::from_millis(100);
+    let server = serve(
+        dataset(),
+        [Behaviour::Delayed {
+            by: Duration::from_millis(150),
+            body: b"{}".to_vec(),
+        }],
+    )
+    .await;
+    let client = builder(&server)
+        .timeout(timeout)
+        .read_attempts(1)
+        .build()
+        .unwrap();
+
+    let started = tokio::time::Instant::now();
+    let mut call = Box::pin(client.call(&request));
+    tokio::select! {
+        _ = &mut call => panic!("the call finished before the server answered"),
+        () = server.wait_for_requests(1) => {}
+    }
+    // Nothing polls the call now. The answer arrives at 150 ms, in full,
+    // after the 100 ms timeout, and the call is polled again at 250 ms.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let result = call.await;
+    (result, started.elapsed())
+}
+
+#[tokio::test]
+async fn gate2_decision_a_read_whose_answer_arrived_in_full_is_returned_though_polled_late() {
+    // The timeout is the longest the client waits for an attempt. It does not
+    // discard an answer that has already arrived and decoded when the future
+    // is next polled.
+    bounded(async {
+        let (result, took) = call_observed_late(read()).await;
+        assert!(took >= Duration::from_millis(250), "{took:?}");
+        let raw = result.expect("a complete answer was thrown away");
+        assert_eq!(raw.body(), b"{}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate2_decision_a_write_whose_answer_arrived_in_full_is_not_turned_into_unknown() {
+    // Throwing the answer away would turn a known outcome into
+    // `Delivery::Unknown`, which is strictly worse.
+    bounded(async {
+        let (result, took) = call_observed_late(love()).await;
+        assert!(took >= Duration::from_millis(250), "{took:?}");
+        let raw = result.expect("a complete answer was thrown away");
+        assert_eq!(raw.body(), b"{}");
+    })
+    .await;
+}
+
+/// A listener that accepts TCP connections and then says nothing, so a TLS
+/// handshake with it never completes. Returns its `https` root and keeps the
+/// accepted sockets open until dropped.
+async fn mute_tls_root() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let root = format!("https://{}/2.0/", listener.local_addr().unwrap());
+    let holder = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    (root, holder)
+}
+
+#[tokio::test]
+async fn gate2_a_handshake_that_never_completes_times_out_at_the_connect_timeout() {
+    // Observed: the connect timeout covers the TLS handshake. The error is
+    // `Timeout`, as for any deadline, and for a write `Delivery::Unknown`,
+    // as the design says of every timeout: the error does not say where the
+    // deadline fell, and here nothing was in fact sent.
+    bounded(async {
+        let (root, holder) = mute_tls_root().await;
+        let connect_timeout = Duration::from_millis(300);
+        let total = Duration::from_secs(20);
+        let client = builder_for(&root)
+            .connect_timeout(connect_timeout)
+            .timeout(total)
+            .read_attempts(1)
+            .build()
+            .unwrap();
+
+        for (label, request, delivery) in [
+            ("read", read(), None),
+            ("write", love(), Some(Delivery::Unknown)),
+        ] {
+            let started = tokio::time::Instant::now();
+            let error = client.call(&request).await.unwrap_err();
+            let took = started.elapsed();
+
+            assert_eq!(error.kind(), ErrorKind::Timeout, "{label}");
+            assert_eq!(error.delivery(), delivery, "{label}");
+            assert!(took >= connect_timeout, "{label}: gave up after {took:?}");
+            // Far below the total timeout, which is what would have fired
+            // had the connect timeout not applied to the handshake.
+            assert!(took < total / 2, "{label}: took {took:?}");
+            assert_clean(label, &error);
+        }
+        holder.abort();
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn gate2_a_dead_port_is_a_transport_failure_that_certainly_sent_nothing() {
     bounded(async {
@@ -480,7 +624,9 @@ async fn gate3_an_honest_content_length_over_the_cap_is_refused_before_the_body(
 
         // Not retried, and the server was not drained.
         assert_eq!(server.request_count(), 1);
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The flood ends when the client hangs up, so what was written by
+        // then is all there will be.
+        server.wait_for_closed(1).await;
         assert!(
             server.bytes_written() < (FLOOD / 4) as u64,
             "the client let the server write {} bytes",
@@ -508,7 +654,9 @@ async fn gate3_a_chunked_body_over_the_cap_is_cut_off_as_it_passes_the_cap() {
         assert_clean("chunked oversize", &error);
 
         assert_eq!(server.request_count(), 1);
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The flood ends when the client hangs up, so what was written by
+        // then is all there will be.
+        server.wait_for_closed(1).await;
         assert!(
             server.bytes_written() < (FLOOD / 4) as u64,
             "the client let the server write {} bytes",
@@ -577,25 +725,36 @@ async fn gate4_a_redirect_is_an_http_error_and_the_target_gets_nothing() {
 }
 
 #[tokio::test]
-async fn gate4_307_and_308_are_not_followed_either() {
+async fn gate4_301_303_307_and_308_are_not_followed_either() {
     bounded(async {
         let target = serve(dataset(), []).await;
         let location = target.base_url();
+        let statuses = [301, 303, 307, 308];
         let server = serve(
             dataset(),
-            [
-                Behaviour::status_with(307, "", &[("Location", &location)]),
-                Behaviour::status_with(308, "", &[("Location", &location)]),
-            ],
+            statuses
+                .iter()
+                // One for a read and one for a write.
+                .flat_map(|status| {
+                    let redirect = Behaviour::status_with(*status, "", &[("Location", &location)]);
+                    [redirect.clone(), redirect]
+                })
+                .collect::<Vec<_>>(),
         )
         .await;
         let client = client(&server);
 
-        for status in [307, 308] {
-            let error = client.call(&love()).await.unwrap_err();
-            assert_eq!(error.http_status(), Some(status));
+        for status in statuses {
+            for (label, request) in [("read", read_as_user()), ("write", love())] {
+                let error = client.call(&request).await.unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::Http, "{status} {label}");
+                assert_eq!(error.http_status(), Some(status), "{status} {label}");
+                assert_eq!(error.retry(), Retry::No, "{status} {label}");
+                assert_clean(label, &error);
+            }
         }
-        assert_eq!(target.connections(), 0);
+        assert_eq!(server.request_count(), 8, "a redirect was retried");
+        assert_eq!(target.connections(), 0, "a redirect was followed");
     })
     .await;
 }
@@ -790,8 +949,7 @@ async fn gate6_a_write_is_sent_once_whatever_goes_wrong() {
             assert_eq!(error.retry(), Retry::No, "{label}");
             assert_eq!(error.method(), Some("track.love"), "{label}");
             assert_clean(label, &error);
-            // Give a wrongly scheduled retry time to show itself.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // A retry would happen inside the call, so it has returned.
             assert_eq!(server.request_count(), 1, "{label}: the write was resent");
         }
     })
@@ -813,7 +971,6 @@ async fn gate6_an_error_envelope_is_a_rejection_and_is_not_retried_either() {
             assert_eq!(error.kind(), ErrorKind::Api, "code {code}");
             assert_eq!(error.delivery(), Some(Delivery::Rejected), "code {code}");
             assert_eq!(error.retry(), retry, "code {code}");
-            tokio::time::sleep(Duration::from_millis(50)).await;
             assert_eq!(
                 server.request_count(),
                 1,
@@ -906,28 +1063,86 @@ async fn gate7_ten_concurrent_calls_queue_on_a_multi_thread_runtime_too() {
     bounded(ten_concurrent_calls_start_one_interval_apart()).await;
 }
 
+/// A fake service on a runtime of its own, so that stalling the client's
+/// runtime stalls neither the server nor the arrival times it records.
+fn serve_apart(dataset: Dataset) -> (tokio::runtime::Runtime, FakeLastfm) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = runtime.block_on(serve(dataset, []));
+    (runtime, server)
+}
+
+#[test]
+fn gate7_a_stalled_runtime_does_not_turn_overdue_slots_into_a_burst() {
+    let interval = Duration::from_millis(100);
+    let (_server_runtime, server) = serve_apart(dataset());
+    let client = builder(&server).min_interval(interval).build().unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(bounded(async {
+        let mut calls = JoinSet::new();
+        for _ in 0..5 {
+            let client = client.clone();
+            calls.spawn(async move { client.call(&read()).await });
+        }
+        // The first call goes out, the server sees it, and the other four are
+        // queued behind it: all five ran to the pacer before any connection
+        // could progress.
+        server.wait_for_requests(1).await;
+        // Several intervals pass while nothing on this runtime is polled.
+        std::thread::sleep(5 * interval);
+        while let Some(done) = calls.join_next().await {
+            done.unwrap().unwrap();
+        }
+    }));
+
+    let gaps = gaps_of(&server);
+    assert_eq!(gaps.len(), 4);
+    for gap in gaps {
+        assert_waited(gap, interval, "calls queued across a stalled runtime");
+    }
+}
+
 #[tokio::test]
-async fn gate7_a_caller_dropped_while_waiting_spends_its_slot_and_stalls_nobody() {
+async fn gate7_callers_dropped_while_queued_leave_no_debt_behind() {
     bounded(async {
-        let interval = Duration::from_millis(150);
+        let interval = Duration::from_millis(100);
+        let queued: u32 = 50;
         let server = serve(dataset(), []).await;
         let client = builder(&server).min_interval(interval).build().unwrap();
 
-        // `first` takes the first slot, `dropped` the second and gives up
-        // while it waits for it, `last` takes the third.
         client.call(&read()).await.unwrap();
-        let dropped = tokio::time::timeout(Duration::from_millis(30), client.call(&read())).await;
-        assert!(dropped.is_err(), "the second call should still be waiting");
-        client.call(&read()).await.unwrap();
+        let mut calls = Vec::new();
+        for _ in 0..queued {
+            let client = client.clone();
+            calls.push(tokio::spawn(async move { client.call(&read()).await }));
+        }
+        // Let every one of them run up to the pacer: the first is asleep on
+        // its wait and the rest are queued behind it.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        let last = calls.pop().unwrap();
+        for call in calls {
+            call.abort();
+        }
+        last.await.unwrap().unwrap();
 
         let requests = server.requests();
-        assert_eq!(
-            requests.len(),
-            2,
-            "the dropped call must not have been sent"
+        assert_eq!(requests.len(), 2, "a dropped call was sent");
+        let waited = requests[1].arrived - requests[0].arrived;
+        assert_waited(waited, interval, "the survivor");
+        // With the slots of the dropped calls still spent this would be
+        // fifty intervals. The bound is far above what is expected.
+        assert!(
+            waited < (queued / 2) * interval,
+            "the survivor waited {waited:?}: dropped calls left debt"
         );
-        let first_to_last = requests[1].arrived - requests[0].arrived;
-        assert_waited(first_to_last, 2 * interval, "the dropped call's slot");
     })
     .await;
 }
@@ -1534,6 +1749,74 @@ async fn gate10_debug_of_a_client_and_its_parts_shows_no_credential() {
 }
 
 #[tokio::test]
+async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
+    bounded(async {
+        // The body of a real first page of a scan, served again under
+        // hostile headers.
+        let plain = serve(Dataset::distinct(3), []).await;
+        let body = client(&plain)
+            .user(USER)
+            .recent_tracks()
+            .window(whole(3))
+            .scan()
+            .unwrap()
+            .next_page()
+            .await
+            .unwrap()
+            .unwrap()
+            .raw()
+            .body()
+            .to_vec();
+        let sentinels = [
+            ("Content-Type", "application/json; SENTINEL_CONTENT_TYPE"),
+            ("Retry-After", "SENTINEL_RETRY_AFTER"),
+            ("Date", "SENTINEL_DATE"),
+        ];
+        let hostile = serve(Dataset::distinct(3), [])
+            .await
+            .then(Behaviour::status_with(200, body, &sentinels));
+        let client = client(&hostile);
+
+        let raw = client.call(&read()).await.unwrap();
+        // The values are kept, and available through `header`.
+        assert_eq!(raw.header("retry-after"), Some("SENTINEL_RETRY_AFTER"));
+        assert_eq!(raw.header("date"), Some("SENTINEL_DATE"));
+
+        let page = client.user(USER).recent_tracks().send().await.unwrap();
+        let mut scan = client
+            .user(USER)
+            .recent_tracks()
+            .window(whole(3))
+            .scan()
+            .unwrap();
+        let scan_page = scan.next_page().await.unwrap().unwrap();
+        assert_eq!(scan_page.raw().header("date"), Some("SENTINEL_DATE"));
+        let http = scrobl::protocol::HttpResponse::new(200, "{}")
+            .with_header("Content-Type", "SENTINEL_CONTENT_TYPE")
+            .with_header("Retry-After", "SENTINEL_RETRY_AFTER")
+            .with_header("Date", "SENTINEL_DATE");
+
+        let shown = [
+            ("Raw", format!("{raw:?}\n{raw:#?}")),
+            ("Response", format!("{page:?}\n{page:#?}")),
+            (
+                "Response<()>",
+                format!("{:?}", Response::new((), raw.clone())),
+            ),
+            ("HttpResponse", format!("{http:?}\n{http:#?}")),
+            ("ScanPage", format!("{scan_page:?}\n{scan_page:#?}")),
+        ];
+        for (what, text) in shown {
+            assert!(!text.contains("SENTINEL"), "{what} shows a value: {text}");
+        }
+        // The header names are still visible, so a log says what was kept.
+        assert!(format!("{raw:?}").contains("content-type"));
+        assert!(format!("{http:?}").contains("retry-after"));
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn gate10_a_build_error_shows_no_credential() {
     let error = Client::builder(ApiKey::new(KEY))
         .secret(ApiSecret::new(SECRET))
@@ -1552,6 +1835,15 @@ async fn gate10_a_build_error_shows_no_credential() {
 // ---------------------------------------------------------------------------
 // Gate 11: cancellation.
 
+/// Polls `call` until the server has seen `n` requests, then drops it: the
+/// caller gave up while the request was in flight.
+async fn abandon_once_sent<F: Future>(server: &FakeLastfm, n: usize, call: F) {
+    tokio::select! {
+        _ = call => panic!("the call finished before it was abandoned"),
+        () = server.wait_for_requests(n) => {}
+    }
+}
+
 #[tokio::test]
 async fn gate11_a_dropped_call_leaves_the_client_and_its_clones_working_and_paced() {
     bounded(async {
@@ -1560,11 +1852,7 @@ async fn gate11_a_dropped_call_leaves_the_client_and_its_clones_working_and_pace
         let client = builder(&server).min_interval(interval).build().unwrap();
         let clone = client.clone();
 
-        let dropped = tokio::time::timeout(Duration::from_millis(150), client.call(&read())).await;
-        assert!(
-            dropped.is_err(),
-            "the stalled call should not have finished"
-        );
+        abandon_once_sent(&server, 1, client.call(&read())).await;
 
         client.call(&read()).await.unwrap();
         clone.call(&read()).await.unwrap();
@@ -1584,11 +1872,9 @@ async fn gate11_a_dropped_write_is_not_resent_and_the_client_goes_on() {
         let server = serve(dataset(), [Behaviour::StallBeforeResponse]).await;
         let client = client(&server);
 
-        let dropped = tokio::time::timeout(Duration::from_millis(150), client.call(&love())).await;
-        assert!(dropped.is_err());
+        abandon_once_sent(&server, 1, client.call(&love())).await;
         client.call(&read()).await.unwrap();
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
         let requests = server.requests();
         assert_eq!(requests.len(), 2, "the dropped write was resent");
         assert_eq!(requests[0].verb, "POST");
@@ -1610,8 +1896,7 @@ async fn gate11_a_dropped_next_page_leaves_the_same_page_outstanding() {
             .scan()
             .unwrap();
 
-        let dropped = tokio::time::timeout(Duration::from_millis(100), scan.next_page()).await;
-        assert!(dropped.is_err());
+        abandon_once_sent(&server, 1, scan.next_page()).await;
 
         let mut pages = Vec::new();
         while let Some(page) = scan.next_page().await.unwrap() {
@@ -1766,4 +2051,123 @@ fn gate13_a_client_outlives_the_runtime_it_was_first_used_on() {
         }));
     }
     assert_eq!(server.request_count(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Gate 14: pooled connections.
+//
+// The server here keeps connections open and serves several requests on
+// each, so the paths that reuse a connection run, not only the ones that open
+// a new one. Connection counts are recorded so reuse is asserted, not assumed.
+
+/// Lets the connection task of the client notice that a body has ended and
+/// hand its connection back to the pool, before the next call looks for one.
+async fn let_the_pool_settle() {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn gate14_a_read_then_a_read_reuses_the_connection() {
+    bounded(async {
+        let server = serve(dataset(), []).await.keep_alive();
+        let client = client(&server);
+
+        let first = client.call(&read()).await.unwrap();
+        let_the_pool_settle().await;
+        let second = client.call(&read()).await.unwrap();
+        assert_eq!(first.body(), second.body());
+
+        assert_eq!(server.request_count(), 2);
+        assert_eq!(server.connections(), 1, "the second call did not reuse it");
+        let requests = server.requests();
+        assert_eq!((requests[0].number, requests[0].index), (0, 0));
+        assert_eq!((requests[1].number, requests[1].index), (0, 1));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate14_a_write_after_the_server_closed_an_idle_connection_arrives_exactly_once() {
+    bounded(async {
+        let server = serve(dataset(), []).await.keep_alive();
+        let client = client(&server);
+
+        client.call(&read()).await.unwrap();
+        let_the_pool_settle().await;
+        server.hang_up_idle();
+        // There is no signal for "the client has seen the hang-up": it is a
+        // socket event in the client's own runtime. This is the one wait.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let raw = client.call(&love()).await.unwrap();
+        assert_eq!(raw.body(), b"{}");
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2, "the write was not sent exactly once");
+        assert_eq!(requests[1].verb, "POST");
+        assert_eq!(
+            requests[1].number, 1,
+            "the write used the closed connection"
+        );
+        assert_eq!(server.connections(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate14_the_call_after_a_body_too_large_gets_a_clean_response() {
+    bounded(async {
+        let server = serve(
+            dataset(),
+            [Behaviour::OversizeBody {
+                total: FLOOD,
+                chunked: false,
+            }],
+        )
+        .await
+        .keep_alive();
+        let client = builder(&server).max_response_bytes(CAP).build().unwrap();
+
+        let error = client.call(&read()).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::BodyTooLarge);
+        let_the_pool_settle().await;
+
+        // The unread rest of the first body must not be mistaken for the
+        // start of this answer.
+        let raw = client.call(&read()).await.unwrap();
+        let request = &server.requests()[1];
+        let (_, expected) = respond_to(&dataset(), &request.params());
+        assert_eq!(raw.body(), expected.as_slice());
+        assert_eq!(server.request_count(), 2);
+        assert_eq!(request.number, 1, "the abandoned connection was reused");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate14_a_chunked_body_too_large_on_a_kept_alive_connection_is_the_same() {
+    bounded(async {
+        let server = serve(
+            dataset(),
+            [Behaviour::OversizeBody {
+                total: FLOOD,
+                chunked: true,
+            }],
+        )
+        .await
+        .keep_alive();
+        let client = builder(&server).max_response_bytes(CAP).build().unwrap();
+
+        let error = client.call(&read()).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::BodyTooLarge);
+        let_the_pool_settle().await;
+
+        let raw = client.call(&read()).await.unwrap();
+        let (_, expected) = respond_to(&dataset(), &server.requests()[1].params());
+        assert_eq!(raw.body(), expected.as_slice());
+        assert_eq!(server.requests()[1].number, 1);
+    })
+    .await;
 }

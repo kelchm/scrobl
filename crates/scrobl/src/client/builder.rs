@@ -1,9 +1,11 @@
 //! [`ClientBuilder`]: configuration, checked once at [`build`](ClientBuilder::build).
 
+use std::fmt;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::pacing::Pacer;
+use super::pacing::{MAX_INTERVAL, Pacer};
 use super::{Client, Shared};
 use crate::error::Error;
 use crate::protocol::Credentials;
@@ -26,6 +28,7 @@ pub(super) struct Settings {
     pub(super) min_interval: Duration,
     pub(super) read_attempts: u32,
     pub(super) retry_delay: Duration,
+    pub(super) no_proxy: bool,
 }
 
 /// Configures and builds a [`Client`].
@@ -37,12 +40,24 @@ pub(super) struct Settings {
 /// the error.
 ///
 /// `Debug` shows the settings and hides every credential.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[must_use = "a builder does nothing until `build` is called"]
 pub struct ClientBuilder {
     credentials: Credentials,
     settings: Settings,
     base_url: Option<String>,
+}
+
+impl fmt::Debug for ClientBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Only whether a root is set: it is not part of the supported API,
+        // and a test root can carry anything.
+        f.debug_struct("ClientBuilder")
+            .field("credentials", &self.credentials)
+            .field("settings", &self.settings)
+            .field("base_url", &self.base_url.is_some())
+            .finish()
+    }
 }
 
 impl ClientBuilder {
@@ -57,6 +72,7 @@ impl ClientBuilder {
                 min_interval: DEFAULT_MIN_INTERVAL,
                 read_attempts: DEFAULT_READ_ATTEMPTS,
                 retry_delay: DEFAULT_RETRY_DELAY,
+                no_proxy: false,
             },
             base_url: None,
         }
@@ -95,11 +111,14 @@ impl ClientBuilder {
         self
     }
 
-    /// The time allowed for one attempt, from the start to the last byte of
-    /// the body. The default is 30 seconds. Must not be zero.
+    /// The longest the client waits for one attempt, from the start to the
+    /// last byte of the body. The default is 30 seconds. Must not be zero.
     ///
     /// A call that retries has this much for each attempt, not for the whole
-    /// call.
+    /// call; pacing waits and retry delays are outside it. It limits waiting,
+    /// not polling: a response that has already arrived in full when the
+    /// future is next polled is returned even if the deadline has passed. See
+    /// the [module documentation](super) for how to bound a whole scan.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.settings.timeout = timeout;
         self
@@ -109,7 +128,9 @@ impl ClientBuilder {
     /// not be zero.
     ///
     /// A response over the cap is [`ErrorKind::BodyTooLarge`](crate::ErrorKind),
-    /// and the client stops reading as soon as it knows.
+    /// and the client stops reading as soon as it knows. The cap bounds the
+    /// length of the body the client keeps; the transport's own buffer for the
+    /// chunk in hand is on top of it.
     pub fn max_response_bytes(mut self, bytes: usize) -> Self {
         self.settings.max_response_bytes = bytes;
         self
@@ -117,7 +138,13 @@ impl ClientBuilder {
 
     /// The least time between the starts of two requests, across this client
     /// and every clone of it. The default is one second, which is what
-    /// Last.fm asks of an application. Zero turns pacing off.
+    /// Last.fm asks of an application. Zero turns pacing off; more than 24
+    /// hours fails at [`build`](Self::build).
+    ///
+    /// A start is the moment a request is let through to the transport,
+    /// measured in this process; connection setup can still make requests
+    /// arrive at the server slightly closer together. See the
+    /// [module documentation](super).
     pub fn min_interval(mut self, interval: Duration) -> Self {
         self.settings.min_interval = interval;
         self
@@ -140,9 +167,26 @@ impl ClientBuilder {
         self
     }
 
-    /// Talks to a different root, such as a local test server, over plain
-    /// HTTP if it says so, and ignores proxy environment variables. Not part
-    /// of the supported API.
+    /// Ignores the proxy environment variables (`HTTPS_PROXY`, `ALL_PROXY`
+    /// and the rest), which a client honours by default, and connects
+    /// directly.
+    ///
+    /// Through an HTTP proxy the client sends the proxy a `CONNECT` naming
+    /// the host and port, and the request itself, its query and the API key
+    /// stay inside TLS. Use this to refuse a proxy anyway.
+    pub fn no_proxy(mut self) -> Self {
+        self.settings.no_proxy = true;
+        self
+    }
+
+    /// Talks to a local test server instead of Last.fm, over plain HTTP if
+    /// it says so, and ignores proxy environment variables. Not part of the
+    /// supported API.
+    ///
+    /// Only a loopback root is accepted (`127.0.0.0/8`, `::1` or
+    /// `localhost`, with no user information, query or fragment), so the hook
+    /// cannot switch off HTTPS or send a key to another host. Anything else
+    /// fails at [`build`](Self::build).
     #[doc(hidden)]
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
@@ -156,8 +200,9 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// [`ErrorKind::Config`](crate::ErrorKind) when a setting is not valid
-    /// (an empty or unusable user agent, a zero timeout, a zero body cap or
-    /// zero attempts) or when the HTTP client cannot be set up.
+    /// (an empty or unusable user agent, a zero timeout, a zero body cap, zero
+    /// attempts or a pacing interval over 24 hours) or when the HTTP client
+    /// cannot be set up.
     pub fn build(self) -> Result<Client, Error> {
         let Self {
             credentials,
@@ -174,15 +219,24 @@ impl ClientBuilder {
             .redirect(reqwest::redirect::Policy::none())
             // The built-in policy resends requests on protocol NACKs. This
             // crate decides what is safe to repeat.
-            .retry(reqwest::retry::never());
+            .retry(reqwest::retry::never())
+            // The body is exactly what the service sent. Cargo unifies
+            // features, so another crate in the application can switch these
+            // decoders on; the methods exist without the features.
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd();
         http = match &base_url {
             None => http.https_only(true),
             Some(url) => {
-                reqwest::Url::parse(url)
-                    .map_err(|_| Error::config("the base URL is not a valid URL"))?;
+                check_base_url(url)?;
                 http.no_proxy()
             }
         };
+        if settings.no_proxy {
+            http = http.no_proxy();
+        }
         let http = http.build().map_err(|e| {
             Error::config(&format!(
                 "could not set up the HTTP client: {}",
@@ -200,6 +254,42 @@ impl ClientBuilder {
             credentials: Arc::new(credentials),
         })
     }
+}
+
+/// A root is only for tests, so it must be this machine: a literal loopback
+/// address or `localhost`. The messages say what is wrong, never what was
+/// given.
+fn check_base_url(url: &str) -> Result<(), Error> {
+    let url =
+        reqwest::Url::parse(url).map_err(|_| Error::config("the base URL is not a valid URL"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(Error::config("the base URL must be http or https"));
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::config(
+            "the base URL must not carry credentials, a query or a fragment",
+        ));
+    }
+    // The parser has already made a numeric host canonical, and writes an
+    // IPv6 one in brackets.
+    let loopback = url.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if !loopback {
+        return Err(Error::config(
+            "the base URL must be a loopback address or localhost",
+        ));
+    }
+    Ok(())
 }
 
 fn check(settings: &Settings) -> Result<(), Error> {
@@ -220,6 +310,9 @@ fn check(settings: &Settings) -> Result<(), Error> {
     }
     if settings.max_response_bytes == 0 {
         return Err(Error::config("the response body cap is zero"));
+    }
+    if settings.min_interval > MAX_INTERVAL {
+        return Err(Error::config("the pacing interval is longer than 24 hours"));
     }
     if settings.read_attempts == 0 {
         return Err(Error::config("the read attempts must be at least 1"));

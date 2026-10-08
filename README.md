@@ -9,7 +9,7 @@ Early development. Not affiliated with or endorsed by Last.fm.
 
 ## Usage
 
-The async client is on by default (feature `client`). It runs on the Tokio runtime that calls it, including a current-thread runtime, and spawns nothing of its own.
+The async client is on by default (feature `client`). It runs on the Tokio runtime that calls it, including a current-thread runtime with its I/O and time drivers enabled, and spawns nothing of its own.
 
 ```rust
 use scrobl::history::Window;
@@ -44,7 +44,7 @@ async fn backup() -> Result<(), scrobl::Error> {
 }
 ```
 
-`Client::call` makes a raw call to any of the 57 methods. The client sends over HTTPS only, follows no redirect, keeps at least a second between requests, retries reads that failed in a way worth repeating, never retries a write, and bounds both time and response size. A failed write says whether it can have happened (`Error::delivery`). The module documentation of `scrobl::client` has the details. Without the `client` feature the crate is the I/O-free protocol core, for use with any other HTTP client.
+`Client::call` makes a raw call to any of the 57 methods. The client sends over HTTPS only, follows no redirect, keeps at least a second between requests (measured when each is admitted to the transport, however late the runtime polls it), sends and decodes no compressed responses so the body is exactly what the service sent, retries reads that failed in a way worth repeating, never retries a write, and bounds how long it waits and how much of a response it keeps. A failed write says whether it can have happened (`Error::delivery`). The module documentation of `scrobl::client` has the details. Without the `client` feature the crate is the I/O-free protocol core, for use with any other HTTP client.
 
 ## Development
 
