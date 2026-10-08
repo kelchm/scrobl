@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: proposed, 2026-10-08. Sections marked **open** wait on an owner decision; everything else is the contract the first implementation pass builds to. Code blocks are API sketches, not finished signatures.
+Status: 2026-10-08. Transport and coverage are decided; license and minimum Rust are still open. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -129,7 +129,7 @@ Every attempt, including a retry, takes a pacing slot. A slot is reserved under 
 
 Cancellation: dropping a future abandons the request. Nothing shared is left half-updated; a reserved pacing slot is simply spent. For a write, a dropped future means the delivery is unknown.
 
-**Open:** whether a blocking `ureq` adapter ships alongside. Recommendation: no. See [decisions](#open-decisions).
+There is no blocking adapter. A synchronous caller, such as the backup application, drives this client on a current-thread Tokio runtime.
 
 ## Errors
 
@@ -238,7 +238,11 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Coverage
 
-**Open:** whether every method needs a typed model for v1. Recommendation: no. Every method reaches *request-verified* (correct verb, credentials and parameters, raw response, error handling). A typed model is added only where a recorded response exists to check it against, starting with history, authentication, scrobble, now-playing and love. `endpoints.md` records the level each method has reached, and that table is the release claim.
+Every method gets a typed model for v1. Recorded responses exist for only a few methods, so most models are first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+
+- `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
+- The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
+- A derived model is promoted only when an approved live read confirms it.
 
 Levels:
 
@@ -246,6 +250,7 @@ Levels:
 |---|---|
 | `inventoried` | In the table with its documented verb, credentials and parameters |
 | `request-verified` | Request construction tested against the official parameter snapshot; raw response and errors handled |
+| `typed-derived` | A typed model written from documentation, tested against derived fixtures only |
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
@@ -259,12 +264,12 @@ Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
 
 No fixture comes from the owner's account and no test calls Last.fm. Credentials in fixtures are obvious sentinels.
 
-## Open decisions
+## Decisions
 
-| Decision | Recommendation |
+| Decision | State |
 |---|---|
-| Transport | One async `reqwest` client. No `ureq` adapter and no public transport trait until a consumer needs one. |
-| Coverage | Request-verified for all 57 methods; typed models where a recorded response exists. |
-| License | `MIT OR Apache-2.0`. |
-| MSRV | Declare 1.90, the Tauri 2 floor, and check it in CI. No stronger promise before publication. |
-| Visibility | Stay private until v1 passes its gates. |
+| Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
+| Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
+| License | Open; likely MIT. Until it is chosen there is no `LICENSE` file and the workspace is `publish = false`. |
+| Minimum Rust | Open. 1.90, the Tauri 2 floor, is declared provisionally and checked in CI. |
+| Visibility | Decided: private until v1 passes its gates. |
