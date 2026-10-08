@@ -59,6 +59,7 @@ Rules:
 
 - `prepare` adds `method`, `api_key` and `format=json`, then `sk` and `api_sig` when the method's `Auth` needs them. It fails with `ErrorKind::InvalidRequest` when a required credential is missing, when the caller sets a reserved name (`method`, `api_key`, `api_sig`, `sk`, `format`, `callback`), or when a parameter name repeats.
 - The signature is the MD5 hex digest of every sent parameter except `format` and `callback`, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
+- `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
 - `Raw` is the status, a small set of headers and the exact body bytes. Typed views are decoded from it and never replace it.
