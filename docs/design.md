@@ -143,7 +143,7 @@ impl Error {
     pub fn method(&self) -> Option<&'static str>;  // the Last.fm method name
     pub fn body(&self) -> Option<&[u8]>;           // the response body, capped at 64 KiB
     pub fn retry(&self) -> Retry;
-    pub fn delivery(&self) -> Delivery;
+    pub fn delivery(&self) -> Option<Delivery>;
 }
 ```
 
@@ -163,7 +163,7 @@ impl Error {
 
 `Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, pre-response transport failures of a read), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`.
 
-`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error) or `Unknown` (sent, or possibly sent, with no readable answer). Reads report `NotSent` or `Rejected`. An application persists `Unknown` and decides for itself; the library never replays it.
+`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`.
 
 `Display` gives a one-line message that is safe to log. Truncated diagnostics cut on a UTF-8 boundary.
 
@@ -228,7 +228,7 @@ match report {
     Ok(report) => for (sent, outcome) in report.items() {
         // outcome: Accepted { corrections } | Ignored { code, message }
     },
-    Err(e) if e.delivery() == Delivery::Unknown => { /* persist as uncertain */ }
+    Err(e) if e.delivery() == Some(Delivery::Unknown) => { /* persist as uncertain */ }
     Err(e) => { /* e.retry() says whether to keep it queued */ }
 }
 ```
