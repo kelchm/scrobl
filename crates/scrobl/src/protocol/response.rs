@@ -113,6 +113,10 @@ impl Raw {
         self.spec.name
     }
 
+    pub(crate) fn spec(&self) -> &'static MethodSpec {
+        self.spec
+    }
+
     /// Deserializes the body.
     ///
     /// Fails with [`ErrorKind::Decode`](crate::ErrorKind). The error says

@@ -24,7 +24,11 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 
 /// Methods whose typed model or verification level is above the default, as
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
-const LEVELS: &[(&str, &str, &str)] = &[];
+const LEVELS: &[(&str, &str, &str)] = &[(
+    "user.getRecentTracks",
+    "`model::RecentTracksPage`",
+    "fixture-verified",
+)];
 
 const BEGIN: &str = "<!-- BEGIN GENERATED -->";
 const END: &str = "<!-- END GENERATED -->";
