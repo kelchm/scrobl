@@ -65,8 +65,15 @@ impl Credentials {
 
 /// A parameter value. Strings are sent as they are, integers in decimal and
 /// booleans as `1` or `0`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ParamValue(String);
+
+// A value may be a password or a token.
+impl fmt::Debug for ParamValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ParamValue(..)")
+    }
+}
 
 impl From<&str> for ParamValue {
     fn from(value: &str) -> Self {
@@ -240,8 +247,14 @@ impl fmt::Debug for HttpRequest {
     }
 }
 
+/// Whether the value of parameter `name` is a credential. Only the part
+/// before the first `[` counts, and case does not: `Password` and `token[0]`
+/// are as sensitive as `password` and `token`.
 fn is_sensitive(name: &str) -> bool {
-    SENSITIVE.contains(&name)
+    let base = name.split('[').next().unwrap_or(name);
+    SENSITIVE
+        .iter()
+        .any(|sensitive| sensitive.eq_ignore_ascii_case(base))
 }
 
 /// A form-encoded string with sensitive values replaced.
@@ -313,6 +326,11 @@ pub fn prepare_with_root(
     let spec = request.spec;
     let invalid = |problem: &str| Error::invalid_request(spec, problem);
 
+    // Each of these would move or expose the parameters.
+    if root.contains(['?', '#', '@']) {
+        return Err(invalid("the root URL must not contain `?`, `#` or `@`"));
+    }
+
     let auth = if request.as_user {
         Auth::Session
     } else {
@@ -374,7 +392,10 @@ pub fn prepare_with_root(
 /// Checks the caller's parameters against the reserved names, each other and
 /// the method's required parameters.
 fn check_params(request: &Request, invalid: &dyn Fn(&str) -> Error) -> Result<(), Error> {
-    let name_in = |name: &str| truncate_utf8(name, MAX_NAME_IN_MESSAGE).to_owned();
+    // Escaped first, so a name cannot add a line to the message.
+    let name_in = |name: &str| {
+        truncate_utf8(&name.escape_debug().to_string(), MAX_NAME_IN_MESSAGE).to_owned()
+    };
 
     let mut seen = HashSet::new();
     for (name, _) in &request.params {
@@ -404,7 +425,11 @@ fn check_params(request: &Request, invalid: &dyn Fn(&str) -> Error) -> Result<()
         let present = if spec.indexed {
             request.params.iter().any(|(name, _)| {
                 name.strip_prefix(spec.name)
-                    .is_some_and(|rest| rest.starts_with('[') && rest.ends_with(']'))
+                    .and_then(|rest| rest.strip_prefix('['))
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    .is_some_and(|digits| {
+                        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+                    })
             })
         } else {
             seen.contains(spec.name)

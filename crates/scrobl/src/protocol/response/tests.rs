@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use super::*;
 use crate::protocol::testing::*;
-use crate::{ApiErrorCode, Delivery, ErrorKind};
+use crate::{ApiErrorCode, Delivery, ErrorKind, Retry};
 
 fn read() -> Request {
     Request::new(&READ).param("user", "rj")
@@ -375,13 +375,64 @@ fn json_failures_are_decode_errors_that_do_not_quote_the_body() {
 }
 
 #[test]
-fn json_names_a_missing_field() {
+fn json_reports_a_missing_field_without_naming_it() {
     let raw = decoded(200, br#"{"user":{"name":"rj"}}"#).unwrap();
     let error = raw.json::<UserReply>().unwrap_err();
-    assert!(
-        error.to_string().contains("missing field `playcount`"),
-        "{error}"
-    );
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert!(!error.to_string().contains("playcount"), "{error}");
+    assert!(error.to_string().contains("line 1 column"), "{error}");
+}
+
+#[test]
+fn a_callers_own_missing_field_text_cannot_carry_the_body() {
+    struct Echo;
+    impl<'de> Deserialize<'de> for Echo {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let value = String::deserialize(deserializer)?;
+            Err(serde::de::Error::custom(format!("missing field `{value}`")))
+        }
+    }
+
+    let body = format!(r#""{SENTINEL_TOKEN}""#);
+    let raw = decoded(200, body.as_bytes()).unwrap();
+    let Err(error) = raw.json::<Echo>() else {
+        unreachable!()
+    };
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert_no_sentinel(&format!("{error} {error:?} {error:#?}"));
+}
+
+#[test]
+fn a_repeated_error_member_is_a_decode_error_at_every_status() {
+    let bodies: [&[u8]; 3] = [
+        br#"{"error":6,"error":null,"message":"failed"}"#,
+        br#"{"error":6,"error":16}"#,
+        br#"{"error":null,"error":6}"#,
+    ];
+    for body in bodies {
+        for status in [200, 500] {
+            let error = decoded(status, body).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Decode, "{status} {body:?}");
+            assert_eq!(error.api_code(), None);
+            assert_eq!(error.http_status(), Some(status));
+            assert_eq!(error.body(), Some(body));
+            assert_eq!(error.delivery(), None);
+
+            let error = decode(&write(), response(status, body)).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Decode, "{status} {body:?}");
+            assert_eq!(error.delivery(), Some(Delivery::Unknown));
+            assert_eq!(error.retry(), Retry::No);
+        }
+    }
+}
+
+#[test]
+fn a_repeated_message_keeps_the_first_string() {
+    let error = decoded(200, br#"{"error":6,"message":"first","message":"second"}"#).unwrap_err();
+    assert_eq!(error.api_message(), Some("first"));
+
+    let error = decoded(200, br#"{"error":6,"message":1,"message":"second"}"#).unwrap_err();
+    assert_eq!(error.api_message(), Some("second"));
 }
 
 #[test]

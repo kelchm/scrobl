@@ -25,6 +25,10 @@ const UNSIGNED: [&str; 3] = ["format", "callback", "api_sig"];
 /// parameter, ordered by the UTF-8 bytes of the name, then the secret. Byte
 /// order puts `artist[10]` before `artist[1]`, which is what Last.fm expects.
 ///
+/// Parameter names must be unique. The scheme, name and value concatenated
+/// with no delimiter, is Last.fm's, so distinct parameter sets can share a
+/// signature.
+///
 /// ```
 /// use scrobl::{protocol::sign, ApiSecret};
 ///
@@ -187,12 +191,22 @@ mod tests {
             ("artist[2]", "B"),
             ("artist[10]", "C"),
         ];
-        let expected = "7f29b9a82947aabfd2c903668a0852f9";
-        assert_eq!(sign(params, &secret("SECRET")), expected);
+        assert_eq!(
+            sign(params, &secret("SECRET")),
+            "7f29b9a82947aabfd2c903668a0852f9"
+        );
 
-        // Numeric order would give a different digest:
+        // Numeric order would give a different digest. `sign` always sorts
+        // by bytes, so the numeric-order text is passed as one name instead:
         //   printf '%s' 'api_keyKEYartist[1]Aartist[2]Bartist[10]Cmethodtrack.scrobbleskSKSECRET' | md5
-        assert_ne!(expected, "8ff39f00549e3ba72ac056dff4ad3d11");
+        let numeric = [(
+            "api_keyKEYartist[1]Aartist[2]Bartist[10]Cmethodtrack.scrobbleskSK",
+            "",
+        )];
+        assert_eq!(
+            sign(numeric, &secret("SECRET")),
+            "8ff39f00549e3ba72ac056dff4ad3d11"
+        );
     }
 
     // synthetic input; digest from

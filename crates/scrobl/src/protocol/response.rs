@@ -143,16 +143,9 @@ fn describe(e: &serde_json::Error) -> String {
     match e.classify() {
         Category::Eof => format!("the JSON ends early, at {place}"),
         Category::Syntax | Category::Io => format!("the body is not valid JSON, at {place}"),
-        Category::Data => {
-            // A missing field is named by the type being read, not by the
-            // body. Every other data error quotes the value.
-            let message = e.to_string();
-            if message.starts_with("missing field `") {
-                message
-            } else {
-                format!("the JSON does not have the expected shape, at {place}")
-            }
-        }
+        // The text of a data error can quote the body, and a caller's own
+        // `Deserialize` impl can put anything in it.
+        Category::Data => format!("the JSON does not have the expected shape, at {place}"),
     }
 }
 
@@ -177,7 +170,9 @@ fn describe(e: &serde_json::Error) -> String {
 ///
 /// An envelope is a top-level object whose `error` member is an integer or a
 /// string of digits. A successful payload with an `error` key nested
-/// somewhere inside is not mistaken for one.
+/// somewhere inside is not mistaken for one. A body with more than one
+/// top-level `error` member is ambiguous and is a
+/// [`ErrorKind::Decode`](crate::ErrorKind) at every status.
 ///
 /// ```
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
@@ -209,14 +204,17 @@ pub fn decode(request: &Request, response: HttpResponse) -> Result<Raw, Error> {
         .and_then(|text| serde_json::from_str::<Probe>(text).ok());
 
     match probe {
-        Some(Probe(Some(envelope))) => Err(Error::api(
+        Some(Probe::Ambiguous) => Err(Error::decode("the body has more than one `error` member")
+            .with_method(spec)
+            .with_response(status, &body)),
+        Some(Probe::Envelope(envelope)) => Err(Error::api(
             spec,
             status,
             ApiErrorCode::new(envelope.code),
             envelope.message.as_deref(),
             &body,
         )),
-        Some(Probe(None)) if success => Ok(Raw {
+        Some(Probe::Plain) if success => Ok(Raw {
             spec,
             status,
             headers,
@@ -230,7 +228,13 @@ pub fn decode(request: &Request, response: HttpResponse) -> Result<Raw, Error> {
 }
 
 /// The Last.fm error envelope, if a body holds one.
-struct Probe(Option<Envelope>);
+enum Probe {
+    /// Not an envelope.
+    Plain,
+    Envelope(Envelope),
+    /// More than one top-level `error` member, so no reading is trustworthy.
+    Ambiguous,
+}
 
 struct Envelope {
     code: u32,
@@ -376,45 +380,56 @@ impl<'de> Visitor<'de> for ProbeVisitor {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Probe, A::Error> {
         let mut code = None;
         let mut message = None;
+        let mut errors = 0_usize;
         while let Some(field) = map.next_key::<Field>()? {
             match field {
-                Field::Error => code = map.next_value::<Code>()?.0,
-                Field::Message => message = map.next_value::<Message>()?.0,
+                Field::Error => {
+                    errors += 1;
+                    code = map.next_value::<Code>()?.0;
+                }
+                Field::Message => {
+                    let next = map.next_value::<Message>()?.0;
+                    message = message.or(next);
+                }
                 Field::Other => {
                     map.next_value::<IgnoredAny>()?;
                 }
             }
         }
-        Ok(Probe(code.map(|code| Envelope { code, message })))
+        Ok(match (errors, code) {
+            (2.., _) => Probe::Ambiguous,
+            (_, Some(code)) => Probe::Envelope(Envelope { code, message }),
+            _ => Probe::Plain,
+        })
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Probe, A::Error> {
         while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_bool<E>(self, _: bool) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_i64<E>(self, _: i64) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_u64<E>(self, _: u64) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_f64<E>(self, _: f64) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_str<E>(self, _: &str) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 
     fn visit_unit<E>(self) -> Result<Probe, E> {
-        Ok(Probe(None))
+        Ok(Probe::Plain)
     }
 }
 

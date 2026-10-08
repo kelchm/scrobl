@@ -587,6 +587,127 @@ fn every_sensitive_name_is_redacted() {
 }
 
 #[test]
+fn indexed_and_differently_cased_sensitive_names_are_redacted() {
+    let value = format!("{SENTINEL_PASSWORD}&x=1");
+    for name in [
+        "password[0]",
+        "token[0]",
+        "Password",
+        "TOKEN",
+        "Api_Key",
+        "token[0][1]",
+    ] {
+        let request = Request::new(&NOW_PLAYING)
+            .param("artist", "a")
+            .param("track", "t")
+            .param(name, value.as_str());
+        let text = format!("{request:?} {request:#?}");
+        assert!(!text.contains(SENTINEL_PASSWORD), "{name}: {text}");
+
+        let http = prepare(&credentials(), &request).unwrap();
+        let text = format!("{http:?} {http:#?}");
+        assert!(!text.contains(SENTINEL_PASSWORD), "{name}: {text}");
+        assert!(
+            !text.contains("x%3D1") && !text.contains("x=1"),
+            "{name}: {text}"
+        );
+
+        let get = Request::new(&SIGNED_GET)
+            .param("token", "t")
+            .param(name, value.as_str());
+        if let Ok(http) = prepare(&credentials(), &get) {
+            let text = format!("{http:?}");
+            assert!(!text.contains(SENTINEL_PASSWORD), "{name}: {text}");
+        }
+    }
+}
+
+#[test]
+fn an_indexed_session_key_is_rejected_and_never_printed() {
+    let value = format!("{SENTINEL_SESSION_KEY}&x=1");
+    let request = Request::new(&READ)
+        .param("user", "rj")
+        .param("sk[0]", value.as_str());
+    let text = format!("{request:?} {request:#?}");
+    assert!(!text.contains(SENTINEL_SESSION_KEY), "{text}");
+    let error = invalid(prepare(&credentials(), &request));
+    assert_no_sentinel(&format!("{error} {error:?} {error:#?}"));
+}
+
+#[test]
+fn malformed_bracket_names_do_not_satisfy_an_indexed_requirement() {
+    for name in [
+        "artist[0]suffix]",
+        "artist[]",
+        "artist[x]",
+        "artist[0][1]",
+        "artist[0",
+        "artist[-1]",
+        "artist[+1]",
+        "artist[ 1]",
+    ] {
+        let request = Request::new(&SCROBBLE)
+            .param(name, "a")
+            .indexed("track", 0, "t")
+            .indexed("timestamp", 0, 1);
+        let error = invalid(prepare(&credentials(), &request));
+        assert!(
+            error.to_string().contains("required parameter `artist`"),
+            "{name}: {error}"
+        );
+    }
+    for index in [0, 49, 10] {
+        let request = Request::new(&SCROBBLE)
+            .indexed("artist", index, "a")
+            .indexed("track", 0, "t")
+            .indexed("timestamp", 0, 1);
+        assert!(prepare(&credentials(), &request).is_ok(), "{index}");
+    }
+}
+
+#[test]
+fn param_value_debug_prints_no_content() {
+    let value = ParamValue::from(SENTINEL_PASSWORD);
+    let text = format!("{value:?} {value:#?}");
+    assert!(!text.contains(SENTINEL_PASSWORD), "{text}");
+    assert_eq!(format!("{value:?}"), "ParamValue(..)");
+    assert_eq!(value.clone(), value);
+}
+
+#[test]
+fn roots_that_corrupt_the_request_are_rejected() {
+    let request = Request::new(&READ).param("user", "rj");
+    for root in [
+        "http://127.0.0.1:1/2.0/?x=1",
+        "http://127.0.0.1:1/2.0/#frag",
+        "http://user:SENTINEL_PASSWORD_0001@127.0.0.1:1/2.0/",
+    ] {
+        let error = invalid(prepare_with_root(root, &credentials(), &request));
+        let text = format!("{error} {error:?}");
+        assert!(!text.contains("127.0.0.1"), "{text}");
+        assert!(!text.contains("SENTINEL_PASSWORD_0001"), "{text}");
+        let post = Request::new(&NOW_PLAYING)
+            .param("artist", "a")
+            .param("track", "t");
+        invalid(prepare_with_root(root, &credentials(), &post));
+    }
+    let http = prepare_with_root("http://127.0.0.1:1234/2.0/", &credentials(), &request).unwrap();
+    assert!(http.url().starts_with("http://127.0.0.1:1234/2.0/?method="));
+}
+
+#[test]
+fn a_newline_in_a_parameter_name_stays_out_of_the_error_text() {
+    let request = Request::new(&READ)
+        .param("user", "rj")
+        .param("x\nFORGED\r", "1")
+        .param("x\nFORGED\r", "2");
+    let error = invalid(prepare(&credentials(), &request));
+    let text = format!("{error} {error:?}");
+    assert!(text.contains("FORGED"), "{text}");
+    assert!(!text.contains('\n') && !text.contains('\r'), "{text:?}");
+}
+
+#[test]
 fn errors_from_prepare_carry_no_credentials() {
     let missing_session = Credentials::new(ApiKey::new(SENTINEL_API_KEY))
         .with_secret(ApiSecret::new(SENTINEL_API_SECRET));
