@@ -16,6 +16,10 @@
 //! insensitive, echoing its own spelling), `page`, `limit` (up to a
 //! configurable cap), `from` (inclusive), `to` (exclusive) and `extended`.
 //! [`Faults`] switch on the ways a real reply could go wrong.
+//!
+//! The expected rows of a window are computed here with a comparison written
+//! out on the raw bounds, not with `Window::contains`, so the oracle and the
+//! code under test cannot be wrong together.
 
 #![allow(
     dead_code,
@@ -40,9 +44,26 @@ pub const NOW_PLAYING_MARKER: usize = 9_999_999;
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub ts: u64,
-    /// Unique within a dataset. Sent as the track `mbid`.
+    /// Unique within a dataset. Sent as the track `mbid`, unless the rows are
+    /// made byte-identical.
     pub marker: usize,
     pub name: String,
+    /// The track `mbid` as sent.
+    pub mbid: String,
+    /// The `loved` flag as sent with `extended=1`.
+    pub loved: bool,
+}
+
+impl Entry {
+    fn new(ts: u64, marker: usize, name: String) -> Self {
+        Self {
+            ts,
+            marker,
+            name,
+            mbid: marker_mbid(marker),
+            loved: !marker.is_multiple_of(2),
+        }
+    }
 }
 
 /// Which pages carry the now-playing row.
@@ -77,6 +98,15 @@ pub struct Faults {
     /// From this page on, the newest row of the window was deleted and
     /// `total` is one lower.
     pub delete_from_page: Option<u32>,
+    /// From this page on, the oldest row of the window was deleted and
+    /// `total` is one lower.
+    pub delete_oldest_from_page: Option<u32>,
+    /// From this page on, a scrobble dated inside the history, a little
+    /// before its fifth newest row, was added and `total` is one higher.
+    pub backdate_from_page: Option<u32>,
+    /// From this page on, rows that share a second come in the opposite
+    /// order.
+    pub reverse_ties_from_page: Option<u32>,
     /// Leave out the last row of this page, keeping `total`.
     pub drop_row_on_page: Option<u32>,
     /// Serve the rows of the previous page again.
@@ -124,11 +154,7 @@ impl Dataset {
         let entries = timestamps
             .into_iter()
             .enumerate()
-            .map(|(marker, ts)| Entry {
-                ts,
-                marker,
-                name: format!("Track {marker}"),
-            })
+            .map(|(marker, ts)| Entry::new(ts, marker, format!("Track {marker}")))
             .collect();
         Self {
             user: "rj_Synthetic".to_owned(),
@@ -156,6 +182,19 @@ impl Dataset {
         self
     }
 
+    /// Makes every row the same song with the same ids, so that rows sharing a
+    /// timestamp are byte-identical. Their markers are then all the same on
+    /// the wire; compare timestamps instead.
+    #[must_use]
+    pub fn byte_identical(mut self) -> Self {
+        for entry in &mut self.entries {
+            entry.name = "Same Song".to_owned();
+            entry.mbid = marker_mbid(0);
+            entry.loved = true;
+        }
+        self
+    }
+
     #[must_use]
     pub fn with_now_playing(mut self, with_date: bool, on: Pages) -> Self {
         self.now_playing = Some(NowPlayingSpec { with_date, on });
@@ -174,13 +213,31 @@ impl Dataset {
         self
     }
 
+    /// The entries a correct scan of `window` must yield, in order. The
+    /// bounds are compared by hand: `from` inclusive, `to` exclusive.
+    fn in_window(&self, window: Window) -> impl Iterator<Item = &Entry> {
+        let (from, to) = (window.from(), window.to());
+        self.entries.iter().filter(move |e| {
+            let after_from = match from {
+                Some(from) => e.ts >= from,
+                None => true,
+            };
+            let before_to = match to {
+                Some(to) => e.ts < to,
+                None => true,
+            };
+            after_from && before_to
+        })
+    }
+
     /// The markers a correct scan of `window` must yield, in order.
     pub fn expected(&self, window: Window) -> Vec<usize> {
-        self.entries
-            .iter()
-            .filter(|e| window.contains(e.ts))
-            .map(|e| e.marker)
-            .collect()
+        self.in_window(window).map(|e| e.marker).collect()
+    }
+
+    /// The timestamps a correct scan of `window` must yield, in order.
+    pub fn expected_timestamps(&self, window: Window) -> Vec<u64> {
+        self.in_window(window).map(|e| e.ts).collect()
     }
 
     fn newest(&self) -> u64 {
@@ -278,11 +335,18 @@ pub fn respond(dataset: &Dataset, request: &HttpRequest) -> (u16, Vec<u8>) {
     if faults.arrive_from_page.is_some_and(|p| page >= p) {
         entries.insert(
             0,
-            Entry {
-                ts: dataset.newest() + 1_000,
-                marker: NOW_PLAYING_MARKER - 1,
-                name: "Arrived".to_owned(),
-            },
+            Entry::new(
+                dataset.newest() + 1_000,
+                NOW_PLAYING_MARKER - 1,
+                "Arrived".to_owned(),
+            ),
+        );
+    }
+    if faults.backdate_from_page.is_some_and(|p| page >= p) && entries.len() > 5 {
+        let ts = entries[4].ts - 5;
+        entries.insert(
+            5,
+            Entry::new(ts, NOW_PLAYING_MARKER - 2, "Backdated".to_owned()),
         );
     }
     let in_window = |e: &Entry| {
@@ -299,8 +363,20 @@ pub fn respond(dataset: &Dataset, request: &HttpRequest) -> (u16, Vec<u8>) {
     if faults.delete_from_page.is_some_and(|p| page >= p) && !windowed.is_empty() {
         windowed.remove(0);
     }
+    if faults.delete_oldest_from_page.is_some_and(|p| page >= p) {
+        windowed.pop();
+    }
     if faults.increasing_order {
         windowed.reverse();
+    }
+    if faults.reverse_ties_from_page.is_some_and(|p| page >= p) {
+        let mut start = 0;
+        while start < windowed.len() {
+            let ts = windowed[start].ts;
+            let end = start + windowed[start..].iter().take_while(|e| e.ts == ts).count();
+            windowed[start..end].reverse();
+            start = end;
+        }
     }
 
     let size = limit.min(u64::from(dataset.cap));
@@ -416,18 +492,14 @@ fn row_json(entry: &Entry, extended: bool) -> Value {
         "artist": artist,
         "streamable": "0",
         "image": images(),
-        "mbid": marker_mbid(entry.marker),
+        "mbid": entry.mbid,
         "album": {"mbid": "", "#text": "Synthetic Album"},
         "name": entry.name,
         "url": "https://example.invalid/music/Artist/_/Track",
         "date": {"uts": entry.ts.to_string(), "#text": "synthetic"},
     });
     if extended {
-        row["loved"] = json!(if entry.marker.is_multiple_of(2) {
-            "0"
-        } else {
-            "1"
-        });
+        row["loved"] = json!(if entry.loved { "1" } else { "0" });
     }
     row
 }

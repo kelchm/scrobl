@@ -23,11 +23,19 @@ const ROOT: &str = "recenttracks";
 /// - `artist` is `{"#text": .., "mbid": ..}` normally and `{"name": ..,
 ///   "mbid": .., "url": .., "image": [..]}` with `extended=1`.
 /// - `track` is an array, a single object when the page has exactly one row,
-///   and for an empty result absent, `[]` or `""`. Anything else, including
-///   `null` and a non-empty string, is an error.
-/// - A row flagged `@attr.nowplaying` (`"true"`, `"false"`, `"1"` or `"0"`)
-///   is the now-playing row, whether or not it also carries a `date`. Every
-///   other row must have a valid `date.uts`.
+///   and for an empty page absent, `[]` or `""`. Those three are accepted
+///   only when the page's own `@attr` allows no rows: `total` is 0 or `page`
+///   is beyond `totalPages`. Anything else, including `null`, a non-empty
+///   string and a missing or misspelled `track` on a page that promises
+///   rows, is an error.
+/// - A row whose `@attr.nowplaying` is `"true"` or `"1"` is the now-playing
+///   row, whether or not it also carries a `date`. `"false"` and `"0"` are
+///   also read, as an ordinary historical row. Every row that is not
+///   now-playing must have a valid `date.uts`.
+/// - `artist` may carry `name`, `#text` or both. Each one present must be a
+///   string, and two that are present must be equal.
+/// - An object that repeats a member name, at any depth, is an error: a map
+///   would keep one of the two and drop the other without a word.
 ///
 /// ```
 /// use scrobl::model::RecentTracksPage;
@@ -72,8 +80,10 @@ impl RecentTracksPage {
     /// another method, when `recenttracks`, `@attr` or any of its five
     /// members is missing or malformed, when a row is not an object, when a
     /// row has neither the now-playing flag nor a valid `date.uts`, when more
-    /// than one row is flagged now-playing, or when a field of a row has the
-    /// wrong type. The message names the field, such as
+    /// than one row is flagged now-playing, when `track` is absent or empty
+    /// although `@attr` promises rows on the page, when an object repeats a
+    /// member name, when `artist` has two names that differ, or when a field
+    /// of a row has the wrong type. The message names the field, such as
     /// `recenttracks.@attr.total` or `recenttracks.track[3].date.uts`, and
     /// never repeats response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
@@ -82,7 +92,7 @@ impl RecentTracksPage {
                 .with_method(raw.spec())
                 .with_response(raw.status(), raw.body()));
         }
-        let root = raw.json::<Value>()?;
+        let root = raw.json_value_strict()?;
         parse(root).map_err(|e| {
             e.with_method(raw.spec())
                 .with_response(raw.status(), raw.body())
@@ -204,7 +214,8 @@ impl fmt::Debug for Track {
 /// An artist, as named in a row.
 ///
 /// Both shapes decode: the name is `#text` normally and `name` with
-/// `extended=1`. `url` is only sent with `extended=1`. `mbid` and `url` are
+/// `extended=1`. A row that carries both must carry the same string twice.
+/// `url` is only sent with `extended=1`. `mbid` and `url` are
 /// `None` when the field is missing or an empty string.
 #[derive(Clone)]
 pub struct Artist {
@@ -301,8 +312,9 @@ impl Scrobble {
         &self.album
     }
 
-    /// Whether the user loved the track. `None` unless the page was
-    /// requested with `extended=1`.
+    /// Whether the user loved the track, as the row returned it. The field is
+    /// present only when the page was requested with `extended=1`; otherwise
+    /// this is `None`, which is not the same as `Some(false)`.
     pub fn loved(&self) -> Option<bool> {
         self.loved
     }
@@ -326,7 +338,9 @@ impl fmt::Debug for Scrobble {
 /// scrobble.
 ///
 /// It may carry a `date`, which is not exposed here and is never treated as
-/// a scrobble time; it is still in [`json`](Self::json).
+/// a scrobble time; it is still in [`json`](Self::json). A row whose
+/// `@attr.nowplaying` flag is false is not this: it is an ordinary
+/// [`Scrobble`].
 #[derive(Clone)]
 pub struct NowPlaying {
     track: Track,
@@ -352,8 +366,9 @@ impl NowPlaying {
         &self.album
     }
 
-    /// Whether the user loved the track. `None` unless the page was
-    /// requested with `extended=1`.
+    /// Whether the user loved the track, as the row returned it. The field is
+    /// present only when the page was requested with `extended=1`; otherwise
+    /// this is `None`, which is not the same as `Some(false)`.
     pub fn loved(&self) -> Option<bool> {
         self.loved
     }
@@ -400,6 +415,9 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
             )
         })?,
     };
+    if rows.is_empty() {
+        check_rows_may_be_absent(&attr)?;
+    }
 
     let mut scrobbles = Vec::with_capacity(rows.len());
     let mut now_playing = None;
@@ -421,6 +439,19 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
         scrobbles,
         now_playing,
     })
+}
+
+/// An absent or empty `track` is an empty page only if the page's own `@attr`
+/// allows it: no scrobbles match (`total` is 0) or the page lies beyond the
+/// last one. Otherwise the rows are missing, not absent.
+fn check_rows_may_be_absent(attr: &PageAttr) -> Result<(), Error> {
+    if attr.total == 0 || attr.page > attr.total_pages {
+        return Ok(());
+    }
+    Err(Error::decode_field(
+        "recenttracks.track",
+        "absent or empty, but `@attr` says the page holds rows",
+    ))
 }
 
 fn parse_attr(attr: &Map<String, Value>) -> Result<PageAttr, Error> {
@@ -511,16 +542,30 @@ fn parse_artist(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
     let Some(Value::Object(artist)) = row.get("artist") else {
         return Err(missing_or(&path, "an object"));
     };
-    // `name` with extended=1, `#text` without.
-    let name = match (artist.get("name"), artist.get("#text")) {
-        (Some(Value::String(name)), _) | (None, Some(Value::String(name))) => name.clone(),
+    // `name` with extended=1, `#text` without. Each one present must be a
+    // string, and two that are present must agree.
+    let name_in = |key: &str| match artist.get(key) {
+        None => Ok(None),
+        Some(Value::String(name)) => Ok(Some(name)),
+        Some(_) => Err(Error::decode_field(
+            &format!("{path}.{key}"),
+            "not a string",
+        )),
+    };
+    let name = match (name_in("name")?, name_in("#text")?) {
+        (Some(name), Some(text)) if name != text => {
+            return Err(Error::decode_field(
+                &path,
+                "`name` and `#text` are both present and disagree",
+            ));
+        }
+        (Some(name), _) | (None, Some(name)) => name.clone(),
         (None, None) => {
             return Err(Error::decode_field(
                 &format!("{path}.name"),
                 "neither `name` nor `#text` is present",
             ));
         }
-        _ => return Err(Error::decode_field(&format!("{path}.name"), "not a string")),
     };
     Ok(Artist {
         name,

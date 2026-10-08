@@ -11,7 +11,7 @@
 )]
 
 use scrobl::ErrorKind;
-use scrobl::history::{Window, WindowScan};
+use scrobl::history::RecentTracks;
 use scrobl::model::RecentTracksPage;
 use scrobl::protocol::{self, HttpResponse, Raw, Request, methods};
 
@@ -97,8 +97,10 @@ fn lastfm_excerpt_keeps_empty_mbids_distinct_from_missing_ones() {
 fn a_trimmed_excerpt_is_not_a_consistent_page() {
     // The @attr promises 200 rows; the excerpt holds 3. A scan must refuse
     // it, which is also why it is used only for row-shape decoding.
-    let mut scan = WindowScan::new("loige", Window::ALL).extended(true);
-    let error = scan.accept(raw_of(LASTFM_EXCERPT)).unwrap_err();
+    let mut scan = RecentTracks::new("loige").extended(true).scan().unwrap();
+    let request = scan.next_request().unwrap();
+    let raw = protocol::decode(&request, HttpResponse::new(200, LASTFM_EXCERPT)).unwrap();
+    let error = scan.accept(raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Inconsistent);
     assert!(error.to_string().contains("rule 4"), "{error}");
 }

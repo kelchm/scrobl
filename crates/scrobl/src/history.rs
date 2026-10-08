@@ -55,8 +55,10 @@ impl Window {
 
     /// Everything at or after `from`, with no upper bound.
     ///
-    /// A scan without an upper bound fails if the user scrobbles while it
-    /// runs. Callers that need a complete read fix `to` first.
+    /// A scan without an upper bound sees scrobbles that arrive while it
+    /// runs. That usually changes `total` and fails rule 3, but not always:
+    /// see [`WindowScan`], "What a completed scan does not prove". Callers
+    /// who want a more stable read fix `to` first.
     pub const fn since(from: u64) -> Self {
         Self {
             from: Some(from),
@@ -91,7 +93,8 @@ impl Window {
 /// One `user.getRecentTracks` request, built without I/O.
 ///
 /// Bounds, page and limit are sent exactly as set. Nothing is sent that was
-/// not set, except `user`.
+/// not set, except `user`. [`scan`](Self::scan) turns the query into a
+/// [`WindowScan`] that reads a whole window.
 ///
 /// ```
 /// use scrobl::history::{RecentTracks, Window};
@@ -172,6 +175,36 @@ impl RecentTracks {
     /// outside 1 to 200, the documented range, or `page` is 0. Nothing is
     /// clamped.
     pub fn request(&self) -> Result<Request, Error> {
+        self.check_limit()?;
+        if self.page == Some(0) {
+            return Err(Error::invalid_request(SPEC, "`page` starts at 1"));
+        }
+        Ok(self.build())
+    }
+
+    /// Starts a [`WindowScan`] of this query: the same user, window,
+    /// `extended` and [`as_user`](Self::as_user), with `limit` as the page
+    /// size, 200 when unset. The scan cannot be changed afterwards.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) when `limit` is
+    /// outside 1 to 200, or when `page` was set: a scan chooses its own
+    /// pages.
+    pub fn scan(mut self) -> Result<WindowScan, Error> {
+        if self.page.is_some() {
+            return Err(Error::invalid_request(
+                SPEC,
+                "a scan chooses its own pages: do not set `page`",
+            ));
+        }
+        self.check_limit()?;
+        self.limit.get_or_insert(MAX_LIMIT);
+        self.page = Some(1);
+        Ok(WindowScan::start(self))
+    }
+
+    fn check_limit(&self) -> Result<(), Error> {
         if self
             .limit
             .is_some_and(|limit| !(1..=MAX_LIMIT).contains(&limit))
@@ -181,10 +214,7 @@ impl RecentTracks {
                 "`limit` must be between 1 and 200",
             ));
         }
-        if self.page == Some(0) {
-            return Err(Error::invalid_request(SPEC, "`page` starts at 1"));
-        }
-        Ok(self.build())
+        Ok(())
     }
 
     /// The request for a query already known to be valid.
@@ -237,10 +267,16 @@ struct Totals {
 /// the response to [`accept`](Self::accept). When no request is left,
 /// [`finish`](Self::finish) reports the totals or fails.
 ///
-/// It pages by page number only, under the window the caller gave and a page
-/// size that never changes. It never uses a timestamp as a cursor, never
-/// drops a duplicate and never reorders a row. Every page must satisfy these
-/// rules, and a failure is [`ErrorKind::Inconsistent`](crate::ErrorKind)
+/// A scan is made by [`RecentTracks::scan`] and cannot be changed afterwards:
+/// it has no setters, so every request it issues is the same except for its
+/// `page`. It pages by page number only, under the window the caller gave and
+/// a page size that never changes. It never uses a timestamp as a cursor,
+/// never drops a duplicate and never reorders a row.
+///
+/// A response must answer the outstanding request. [`accept`](Self::accept)
+/// compares [`Raw::request`] with it first, and a response to any other
+/// request is refused without being decoded. Every page must then satisfy
+/// these rules, and a failure is [`ErrorKind::Inconsistent`](crate::ErrorKind)
 /// naming the rule:
 ///
 /// 1. `@attr.user` is the requested user, ignoring case.
@@ -262,8 +298,32 @@ struct Totals {
 /// abandons the scan: `next_request` returns `None`, and `accept` and
 /// `finish` fail.
 ///
+/// # What a completed scan does not prove
+///
+/// Success means every page satisfied the rules against the service's own
+/// totals at the time that page was read. It does not mean the rows are what
+/// the window held at any one moment. In particular:
+///
+/// - A scrobble arriving and another being deleted between two page reads
+///   leaves `total` unchanged and can shift a row across a page boundary,
+///   giving one duplicate and one omission. A fixed `to` keeps arrivals at
+///   the head out of the window, but not backdated additions or deletions
+///   inside it.
+/// - If the service changes the order of same-second rows between page
+///   reads, a row can repeat and another go missing with no rule broken.
+/// - A page repeated under a new page number is caught by rule 6 only if its
+///   timestamps differ from the previous page's last. Listens can be
+///   identical, so equal rows cannot be rejected.
+/// - A coherent wrong answer cannot be detected from the response alone:
+///   another user's rows under the right `@attr.user`, or rows left out with
+///   the totals reduced to match.
+/// - Fixed bounds are not snapshot isolation.
+///
+/// An application that needs more reads the window again and compares the two
+/// reads. The library never deduplicates.
+///
 /// ```
-/// use scrobl::history::{Window, WindowScan};
+/// use scrobl::history::{RecentTracks, Window};
 /// use scrobl::protocol::{self, HttpResponse};
 ///
 /// fn page(number: u32, rows: &str) -> String {
@@ -283,7 +343,10 @@ struct Totals {
 ///     page(2, &row(1_700_000_020)),
 /// ];
 ///
-/// let mut scan = WindowScan::new("rj", Window::new(1_700_000_000, 1_700_000_100)?).page_size(2)?;
+/// let mut scan = RecentTracks::new("rj")
+///     .window(Window::new(1_700_000_000, 1_700_000_100)?)
+///     .limit(2)
+///     .scan()?;
 /// let mut seen = 0;
 /// for body in bodies {
 ///     let request = scan.next_request().expect("a page is outstanding");
@@ -311,10 +374,9 @@ pub struct WindowScan {
 }
 
 impl WindowScan {
-    /// A scan of `window` for `user`, 200 rows to a page.
-    pub fn new(user: impl Into<String>, window: Window) -> Self {
-        let mut query = RecentTracks::new(user).window(window).limit(MAX_LIMIT);
-        query.page = Some(1);
+    /// A scan of `query`, already validated by [`RecentTracks::scan`], with
+    /// its page set to 1.
+    fn start(query: RecentTracks) -> Self {
         Self {
             query,
             state: State::Reading,
@@ -327,44 +389,14 @@ impl WindowScan {
         }
     }
 
-    /// Asks for the extended row shape. Set it before the first page; it
-    /// has no effect once a page was accepted, so that every request of a
-    /// scan is alike.
-    #[must_use]
-    pub fn extended(mut self, extended: bool) -> Self {
-        if self.pages_accepted == 0 {
-            self.query = self.query.extended(extended);
-        }
-        self
+    /// The window being read.
+    pub fn window(&self) -> Window {
+        self.query.window
     }
 
-    /// Makes every request as the session's user. Set it before the first
-    /// page; it has no effect once a page was accepted.
-    #[must_use]
-    pub fn as_user(mut self) -> Self {
-        if self.pages_accepted == 0 {
-            self.query = self.query.as_user();
-        }
-        self
-    }
-
-    /// Sets the page size, constant for the whole scan. The default and the
-    /// largest is 200.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) when `size` is
-    /// outside 1 to 200, or when a page was already accepted.
-    pub fn page_size(mut self, size: u32) -> Result<Self, Error> {
-        if self.pages_accepted > 0 {
-            return Err(Error::invalid_request(
-                SPEC,
-                "the page size cannot change once the scan has started",
-            ));
-        }
-        self.query = self.query.limit(size);
-        self.query.request()?;
-        Ok(self)
+    /// The number of rows asked for on every page, 1 to 200.
+    pub fn page_size(&self) -> u32 {
+        self.query.limit.unwrap_or(MAX_LIMIT)
     }
 
     /// The request for the next page, or `None` once the scan is complete or
@@ -382,11 +414,12 @@ impl WindowScan {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the page does not
-    /// decode, and [`ErrorKind::Inconsistent`](crate::ErrorKind) when it
-    /// breaks a rule of the scan. Either abandons the scan. Calling this
-    /// with no request outstanding is also an error and leaves a finished
-    /// scan as it was.
+    /// [`ErrorKind::Inconsistent`](crate::ErrorKind) when the response
+    /// answers a different request than the outstanding one, or breaks a
+    /// rule of the scan, and [`ErrorKind::Decode`](crate::ErrorKind) when the
+    /// page does not decode. Either abandons the scan. Calling this with no
+    /// request outstanding is also an error and leaves a finished scan as it
+    /// was.
     pub fn accept(&mut self, raw: Raw) -> Result<ScanPage, Error> {
         match self.state {
             State::Failed => return Err(abandoned()),
@@ -451,9 +484,14 @@ impl WindowScan {
 
     /// Checks `raw` against the rules without changing the scan.
     fn validate(&self, raw: &Raw) -> Result<(RecentTracksPage, Progress), Error> {
+        if raw.request() != &self.query.build() {
+            return Err(Error::inconsistent(
+                "the response answers a different request",
+            ));
+        }
         let page = RecentTracksPage::decode(raw)?;
         let attr = page.attr();
-        let limit = u64::from(self.limit());
+        let limit = u64::from(self.page_size());
         let number = self.next_page;
 
         // 1
@@ -559,10 +597,6 @@ impl WindowScan {
             self.query.page = Some(self.next_page);
         }
     }
-
-    fn limit(&self) -> u32 {
-        self.query.limit.unwrap_or(MAX_LIMIT)
-    }
 }
 
 /// What a page that passed adds to the scan.
@@ -650,7 +684,10 @@ impl ScanSummary {
         self.window
     }
 
-    /// The number of scrobbles in the window, all of which were seen.
+    /// The `total` every page reported, which is also the number of
+    /// scrobbles read. It is the service's own count when each page was read,
+    /// not a proof that the rows are the window's contents; see
+    /// [`WindowScan`].
     pub fn total(&self) -> u64 {
         self.total
     }

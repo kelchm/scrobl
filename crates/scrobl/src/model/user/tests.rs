@@ -275,13 +275,70 @@ fn track_as_a_single_object() {
     assert!(page.now_playing().is_some());
 }
 
+fn attr_of(page: u32, total_pages: u32, total: u32) -> Value {
+    json!({
+        "user": "rj", "page": page.to_string(), "perPage": "50",
+        "totalPages": total_pages.to_string(), "total": total.to_string()
+    })
+}
+
+/// The ways a page can have no rows: `track` absent, `[]` or `""`.
+fn empty_tracks() -> [Option<Value>; 3] {
+    [None, Some(json!([])), Some(json!(""))]
+}
+
 #[test]
-fn empty_result_shapes() {
-    for track in [None, Some(json!([])), Some(json!(""))] {
-        let page = decode(&page_with(track.clone(), attr())).unwrap();
-        assert!(page.scrobbles().is_empty(), "track {track:?}");
-        assert!(page.now_playing().is_none());
+fn empty_result_shapes_are_accepted_when_the_total_is_zero() {
+    for total_pages in [0, 1] {
+        for track in empty_tracks() {
+            let page = decode(&page_with(track.clone(), attr_of(1, total_pages, 0))).unwrap();
+            assert!(page.scrobbles().is_empty(), "track {track:?}");
+            assert!(page.now_playing().is_none());
+        }
     }
+}
+
+#[test]
+fn empty_result_shapes_are_accepted_for_a_page_beyond_the_last() {
+    for track in empty_tracks() {
+        let page = decode(&page_with(track.clone(), attr_of(3, 2, 80))).unwrap();
+        assert!(page.scrobbles().is_empty(), "track {track:?}");
+    }
+}
+
+#[test]
+fn empty_result_shapes_are_errors_when_the_page_promises_rows() {
+    for (page, total_pages, total) in [(1, 1, 1), (1, 2, 80), (2, 2, 80), (0, 1, 1)] {
+        for track in empty_tracks() {
+            let error = decode_error(&page_with(track.clone(), attr_of(page, total_pages, total)));
+            assert_names(&error, "recenttracks.track");
+        }
+    }
+}
+
+#[test]
+fn a_renamed_track_member_is_not_an_empty_page() {
+    let mut body = page_with(None, attr_of(1, 1, 1));
+    body["recenttracks"]["tracks"] = json!([plain_row("1700000000", "One")]);
+    let error = decode_error(&body);
+    assert_names(&error, "recenttracks.track");
+
+    // The same body is fine when the metadata says the page is empty.
+    let mut body = page_with(None, attr_of(1, 0, 0));
+    body["recenttracks"]["tracks"] = json!([plain_row("1700000000", "One")]);
+    assert!(decode(&body).unwrap().scrobbles().is_empty());
+}
+
+#[test]
+fn a_page_holding_only_the_now_playing_row_is_not_an_empty_shape() {
+    // Its count is for the scan to judge (rule 4); the shape is not empty.
+    let page = decode(&page_with(
+        Some(json!([now_playing_row()])),
+        attr_of(1, 1, 1),
+    ))
+    .unwrap();
+    assert!(page.scrobbles().is_empty());
+    assert!(page.now_playing().is_some());
 }
 
 #[test]
@@ -358,10 +415,13 @@ fn page_attr_counts_accept_numbers_and_digit_strings_only() {
     let mut numeric = attr();
     numeric["total"] = json!(7);
     assert_eq!(
-        decode(&page_with(Some(json!([])), numeric))
-            .unwrap()
-            .attr()
-            .total(),
+        decode(&page_with(
+            Some(json!([plain_row("1700000000", "One")])),
+            numeric
+        ))
+        .unwrap()
+        .attr()
+        .total(),
         7
     );
     for bad in [json!(1.5), json!("-1"), json!(""), json!(null), json!(true)] {
@@ -507,4 +567,189 @@ fn model_types_are_send_sync_and_clone() {
     assert_traits::<Track>();
     assert_traits::<Artist>();
     assert_traits::<Album>();
+}
+
+// Duplicate members. A `serde_json::Value` keeps the last of two members with
+// one name, so a decoder built on it would drop the first without a word.
+
+fn decode_text(body: &str) -> Result<RecentTracksPage, Error> {
+    let request = Request::new(&methods::USER_GET_RECENT_TRACKS).param("user", "rj");
+    let raw = protocol::decode(&request, HttpResponse::new(200, body.to_owned())).unwrap();
+    RecentTracksPage::decode(&raw)
+}
+
+/// A page promising one row, with `track`, `@attr` and the row's own members
+/// spelled out so a test can repeat any of them.
+fn page_text(track: &str, attr: &str) -> String {
+    format!(r#"{{"recenttracks": {{{track}, {attr}}}}}"#)
+}
+
+const ROW: &str = r##"{"artist": {"#text": "A", "mbid": ""}, "mbid": "", "name": "One",
+    "album": {"#text": "", "mbid": ""}, "date": {"uts": "1700000000"}}"##;
+const ATTR: &str =
+    r#""@attr": {"user": "rj", "page": "1", "perPage": "50", "totalPages": "1", "total": "1"}"#;
+
+#[test]
+fn the_text_fixtures_decode() {
+    let page = decode_text(&page_text(&format!(r#""track": [{ROW}]"#), ATTR)).unwrap();
+    assert_eq!(page.scrobbles().len(), 1);
+}
+
+#[test]
+fn a_repeated_member_is_a_decode_error_at_any_depth() {
+    let row_with = |members: &str| {
+        format!(
+            r##"{{"artist": {{"#text": "A", "mbid": ""}}, "mbid": "", "name": "One",
+                "album": {{"#text": "", "mbid": ""}}, "date": {{"uts": "1700000000"}}{members}}}"##
+        )
+    };
+    let cases: Vec<(&str, String)> = vec![
+        (
+            "track twice, the first holding the promised row",
+            page_text(&format!(r#""track": [{ROW}], "track": []"#), ATTR),
+        ),
+        (
+            "track twice, the last holding the promised row",
+            page_text(&format!(r#""track": [], "track": [{ROW}]"#), ATTR),
+        ),
+        (
+            "@attr twice",
+            page_text(&format!(r#""track": [{ROW}], {ATTR}"#), ATTR),
+        ),
+        (
+            "total twice inside @attr",
+            page_text(
+                &format!(r#""track": [{ROW}]"#),
+                r#""@attr": {"user": "rj", "page": "1", "perPage": "50", "totalPages": "1", "total": "1", "total": "1"}"#,
+            ),
+        ),
+        (
+            "recenttracks twice",
+            format!(r#"{{"recenttracks": {{"track": [{ROW}], {ATTR}}}, "recenttracks": {{}}}}"#),
+        ),
+        (
+            "name twice inside a row",
+            page_text(
+                &format!(r#""track": [{}]"#, row_with(r#", "name": "Two""#)),
+                ATTR,
+            ),
+        ),
+        (
+            "a member twice inside the artist",
+            page_text(
+                &format!(
+                    r##""track": [{}]"##,
+                    ROW.replace(r##""#text": "A""##, r##""#text": "A", "#text": "B""##)
+                ),
+                ATTR,
+            ),
+        ),
+        (
+            "deep inside an unknown field",
+            page_text(
+                &format!(
+                    r#""track": [{}]"#,
+                    row_with(r#", "future": {"a": [{"b": [{"c": 1, "c": 2}]}]}"#)
+                ),
+                ATTR,
+            ),
+        ),
+        (
+            "inside an unknown member of recenttracks",
+            page_text(
+                &format!(r#""track": [{ROW}], "extra": {{"k": 1, "k": 2}}"#),
+                ATTR,
+            ),
+        ),
+    ];
+    for (label, body) in cases {
+        let error = decode_text(&body).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Decode, "{label}: {error}");
+        assert_eq!(error.method(), Some("user.getRecentTracks"), "{label}");
+        assert!(
+            error.to_string().contains("repeats a member name"),
+            "{label}: {error}"
+        );
+        assert!(error.to_string().contains(", at line "), "{label}: {error}");
+    }
+}
+
+#[test]
+fn the_same_name_in_different_objects_is_fine() {
+    let body = page_text(
+        &format!(
+            r#""track": [{ROW}], "other": {{"name": "x", "inner": {{"name": "y"}}}}, "more": [{{"name": "z"}}, {{"name": "z"}}]"#
+        ),
+        ATTR,
+    );
+    assert_eq!(decode_text(&body).unwrap().scrobbles().len(), 1);
+}
+
+#[test]
+fn a_duplicate_error_does_not_repeat_the_names_or_values() {
+    let body = page_text(
+        &format!(
+            r#""track": [{ROW}], "{SECRET}": "{SECRET}-first", "{SECRET}": "{SECRET}-second""#
+        ),
+        ATTR,
+    );
+    let error = decode_text(&body).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert!(!error.to_string().contains(SECRET), "{error}");
+    assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+}
+
+// An artist can carry its name as `name` (extended) or `#text` (plain). A row
+// that carries both must not be resolved silently.
+
+fn row_with_artist(artist: Value) -> Value {
+    let mut row = plain_row("1700000000", "One");
+    row["artist"] = artist;
+    row
+}
+
+#[test]
+fn an_artist_with_both_name_fields_that_agree_is_accepted() {
+    let page = decode(&rows(vec![row_with_artist(
+        json!({"name": "X", "#text": "X", "mbid": ""}),
+    )]))
+    .unwrap();
+    assert_eq!(page.scrobbles()[0].artist().name(), "X");
+}
+
+#[test]
+fn an_artist_with_both_name_fields_that_differ_is_an_error() {
+    for (name, text) in [("X", "Y"), ("X", ""), ("", "Y"), ("x", "X")] {
+        let error = decode_error(&rows(vec![row_with_artist(
+            json!({"name": name, "#text": text, "mbid": ""}),
+        )]));
+        assert_names(&error, "recenttracks.track[0].artist");
+        assert!(error.to_string().contains("disagree"), "{error}");
+        assert!(!error.to_string().contains('Y'), "{error}");
+    }
+}
+
+#[test]
+fn a_malformed_name_field_is_an_error_even_beside_a_valid_one() {
+    let cases = [
+        (json!({"name": "X", "#text": false}), "artist.#text"),
+        (json!({"name": "X", "#text": null}), "artist.#text"),
+        (json!({"name": "X", "#text": 5}), "artist.#text"),
+        (json!({"name": 5, "#text": "X"}), "artist.name"),
+        (json!({"name": ["X"], "#text": "X"}), "artist.name"),
+        (json!({"name": null}), "artist.name"),
+        (json!({"#text": {"a": 1}}), "artist.#text"),
+    ];
+    for (artist, path) in cases {
+        let error = decode_error(&rows(vec![row_with_artist(artist.clone())]));
+        assert_names(&error, &format!("recenttracks.track[0].{path}"));
+    }
+}
+
+#[test]
+fn the_artist_name_is_checked_on_the_now_playing_row_too() {
+    let mut playing = now_playing_row();
+    playing["artist"] = json!({"name": "X", "#text": "Y"});
+    let error = decode_error(&rows(vec![playing]));
+    assert_names(&error, "recenttracks.track[0].artist");
 }

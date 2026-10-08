@@ -170,10 +170,35 @@ impl Request {
         self.spec.name
     }
 
+    /// The value of the first parameter set under `name`, exactly as it will
+    /// be sent. Batch elements are found by their full name, `artist[0]`.
+    ///
+    /// The value can be a credential-like one such as `token`; do not log it.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.params
+            .iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.as_str())
+    }
+
     pub(crate) fn spec(&self) -> &'static MethodSpec {
         self.spec
     }
 }
+
+/// Two requests are equal when they call the same method with the same
+/// parameters in the same order and the same [`as_user`](Request::as_user)
+/// flag. This is the comparison that tells whether a response answers a
+/// request.
+impl PartialEq for Request {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec.name == other.spec.name
+            && self.as_user == other.as_user
+            && self.params == other.params
+    }
+}
+
+impl Eq for Request {}
 
 impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
