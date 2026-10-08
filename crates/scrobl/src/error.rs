@@ -288,8 +288,7 @@ impl Error {
     }
 }
 
-// Constructors for the code in this crate. The ones no module uses yet are
-// marked `allow(dead_code)`.
+// Constructors for the code in this crate.
 impl Error {
     /// Attaches the method the call was for.
     pub(crate) fn with_method(mut self, spec: &'static MethodSpec) -> Self {
@@ -348,7 +347,7 @@ impl Error {
     /// A connection, TLS or I/O failure. `possibly_sent` says whether the
     /// request may have reached the server. The source must not expose the
     /// URL: strip it before boxing.
-    #[allow(dead_code)] // Raised by the client.
+    #[cfg_attr(not(feature = "client"), allow(dead_code))] // Raised by the client.
     pub(crate) fn transport(
         possibly_sent: bool,
         source: impl Into<Box<dyn StdError + Send + Sync>>,
@@ -360,13 +359,13 @@ impl Error {
     }
 
     /// A deadline passed.
-    #[allow(dead_code)] // Raised by the client.
+    #[cfg_attr(not(feature = "client"), allow(dead_code))] // Raised by the client.
     pub(crate) fn timeout() -> Self {
         Self::from_kind(ErrorKind::Timeout)
     }
 
     /// The response exceeded `limit` bytes.
-    #[allow(dead_code)] // Raised by the client.
+    #[cfg_attr(not(feature = "client"), allow(dead_code))] // Raised by the client.
     pub(crate) fn body_too_large(limit: usize) -> Self {
         Self::from_kind(ErrorKind::BodyTooLarge).with_detail(&format!("limit is {limit} bytes"))
     }
@@ -380,7 +379,7 @@ impl Error {
     }
 
     /// The client could not be built.
-    #[allow(dead_code)] // Raised by the client builder.
+    #[cfg_attr(not(feature = "client"), allow(dead_code))] // Raised by the client.
     pub(crate) fn config(problem: &str) -> Self {
         Self::from_kind(ErrorKind::Config).with_detail(problem)
     }
