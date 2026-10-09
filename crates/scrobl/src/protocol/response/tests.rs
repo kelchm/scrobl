@@ -352,6 +352,32 @@ fn json_deserializes_the_body() {
 }
 
 #[test]
+fn json_can_keep_the_last_of_a_repeated_member_and_json_strict_refuses_it() {
+    let raw = decoded(
+        200,
+        br#"{"user":{"name":"SENTINEL_TOKEN_0001","name":"rj","playcount":"1"}}"#,
+    )
+    .unwrap();
+    // A map or a `Value` keeps the last; a derived struct happens to refuse.
+    let loose: Value = raw.json().unwrap();
+    assert_eq!(loose["user"]["name"], "rj");
+    assert!(raw.json::<UserReply>().is_err());
+
+    let error = raw.json_strict().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert_eq!(error.method(), Some("user.getInfo"));
+    assert_eq!(error.body(), Some(raw.body()));
+    assert_no_sentinel(&format!("{error} {error:?}"));
+    assert!(
+        error.to_string().contains("repeats a member name"),
+        "{error}"
+    );
+
+    let value = decoded(200, OK_BODY).unwrap().json_strict().unwrap();
+    assert_eq!(value["user"]["name"], "rj");
+}
+
+#[test]
 fn json_failures_are_decode_errors_that_do_not_quote_the_body() {
     let raw = decoded(
         200,

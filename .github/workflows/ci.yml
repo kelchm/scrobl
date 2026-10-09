@@ -29,12 +29,13 @@ jobs:
       - run: cargo test --locked --all-features
       - run: cargo test --locked --no-default-features
       - run: cargo doc --locked --no-deps --all-features
-      - run: cargo deny check advisories
+      - run: cargo doc --locked --no-deps --no-default-features
+      - run: cargo deny check advisories licenses
 
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.90
-      - run: cargo check --locked --all-features
-      - run: cargo check --locked --no-default-features
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo test --locked --all-features
+      - run: cargo test --locked --no-default-features

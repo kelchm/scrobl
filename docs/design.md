@@ -4,7 +4,9 @@ Status: 2026-10-08. Transport and coverage are decided; license and minimum Rust
 
 ## Scope
 
-The 57 methods in the official Last.fm API index plus the web, desktop and mobile authentication flows, over JSON. Out of scope, each because the official page marks it deprecated or because it is only another encoding of the same methods: the Radio API, the Playlists API, Submissions Protocol 1.2.1, XML-RPC and XML output. Website scraping and history editing are out of scope permanently.
+The 57 methods in the official Last.fm API index (snapshot of 2026-10-05) plus the web, desktop and mobile authentication flows, over JSON. Out of scope, each because the official page marks it deprecated or because it is only another encoding of the same methods: the Radio API, the Playlists API, Submissions Protocol 1.2.1, XML-RPC and XML output. Website scraping and history editing are out of scope permanently.
+
+Older documentation and other libraries also list `track.ban`, `track.unban`, `user.getArtistTracks` and `user.getNewReleases`. The index no longer has them, so they are not in the table and cannot be called through it. They are left out on purpose and would come back only if the index lists them again.
 
 [`endpoints.md`](endpoints.md) lists every method with its verb, credentials, paging and verification status.
 
@@ -60,7 +62,7 @@ let raw: Raw = protocol::decode(&request, response)?; // Err for any Last.fm err
 Rules:
 
 - `prepare` adds `method`, `api_key` and `format=json`, then `sk` and `api_sig` when the method's `Auth` needs them. It fails with `ErrorKind::InvalidRequest` when a required credential is missing, when the caller sets a reserved name (`method`, `api_key`, `api_sig`, `sk`, `format`, `callback`), or when a parameter name repeats.
-- The signature is the MD5 hex digest of every sent parameter except `format` and `callback`, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
+- The signature is the MD5 hex digest of every sent parameter except `format`, `callback` and `api_sig` itself, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
 - `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
@@ -179,7 +181,7 @@ pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; 
 
 `scan` mirrors `RecentTracks::scan`: the query's window (`Window::ALL` when unset), `limit` as the constant page size (200 when unset), `extended` and `as_user` become the scan, and it cannot be changed afterwards. A `page` on the query, or a `limit` outside 1 to 200, is an `InvalidRequest` from `scan` itself, before anything is sent.
 
-Fixed behaviour: HTTPS only (the client refuses a plain-HTTP URL before connecting), no redirects, `reqwest`'s own retries off, no cookies, rustls, and no response decompression: every `reqwest` decoder (`gzip`, `brotli`, `deflate`, `zstd`) is switched off explicitly, because Cargo unifies features and another crate in the program could otherwise turn one on, making the client send `Accept-Encoding` and `Raw::body` something other than the bytes the service sent. The one hook that changes the root, `ClientBuilder::base_url` (hidden, for tests), accepts only a literal loopback address or `localhost` with no user information, query or fragment, so it cannot turn HTTPS-only off for a real host or send a key elsewhere; anything else is a `Config` error that does not repeat the URL, and `Debug` says only whether a root is set. A 3xx is returned to `decode` and becomes `ErrorKind::Http`; the target of a `Location` receives nothing. The proxy environment variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are honoured; through an HTTP proxy only a `CONNECT` naming the host and port is visible to the proxy and the key stays inside TLS. `ClientBuilder::no_proxy` opts out.
+Fixed behaviour: HTTPS only (the client refuses a plain-HTTP URL before connecting), no redirects, `reqwest`'s own retries off, no cookies, rustls, and no response decompression: every `reqwest` decoder (`gzip`, `brotli`, `deflate`, `zstd`) is switched off explicitly, because Cargo unifies features and another crate in the program could otherwise turn one on, making the client send `Accept-Encoding` and `Raw::body` something other than the bytes the service sent. The one hook that changes the root, `ClientBuilder::base_url` (hidden, for tests), accepts only a literal loopback address with no user information, query or fragment, so it cannot turn HTTPS-only off for a real host or send a key elsewhere; anything else is a `Config` error that does not repeat the URL, and `Debug` says only whether a root is set. A 3xx is returned to `decode` and becomes `ErrorKind::Http`; the target of a `Location` receives nothing. The proxy environment variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are honoured; through an HTTP proxy only a `CONNECT` naming the host and port is visible to the proxy and the key stays inside TLS. `ClientBuilder::no_proxy` opts out.
 
 One attempt is: wait for admission, send, read the body up to the cap, `decode`. The request is built once, before the first admission, so an invalid request waits for nothing and sends nothing.
 
@@ -226,7 +228,7 @@ impl Error {
 
 `ApiErrorCode` wraps the number and keeps unknown codes. Named constants exist for the documented ones, including `LOGIN_REQUIRED` (17) and `SUSPENDED_KEY` (26), which callers must be able to tell apart from an empty history.
 
-`Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, transport failures and timeouts of a read, and a transport failure that certainly sent a write's request), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`. The client acts on the advice for reads only.
+`Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, transport failures and timeouts of a read, and a transport failure of a write that certainly sent nothing; a write that may have been sent is `No`), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`. The client acts on the advice for reads only.
 
 `Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`. Every timeout is `Unknown`, including one while connecting, which in fact sent nothing: the error does not say where the deadline fell, and wrongly assuming `NotSent` is the dangerous mistake. A TLS handshake that never completes is the observed case: the connect timeout fires, the error is `Timeout`, and for a write `delivery()` is `Unknown`.
 
@@ -303,7 +305,7 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Coverage
 
-Every method gets a typed model for v1. Recorded responses exist for only a few methods, so most models are first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. One recorded response exists so far, for `user.getRecentTracks`, which is also the only method with a typed model, so most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
@@ -318,6 +320,18 @@ Levels:
 | `typed-derived` | A typed model written from documentation, tested against derived fixtures only |
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
+
+Order of typing, most costly to get wrong first:
+
+1. The authentication replies. A session key in a reply is modelled as `SessionKey`, so it is redacted like one the caller supplied.
+2. The scrobble reply, with the checks described under Errors. A wrong model here loses data silently.
+3. The read models. Those are written with shared helpers over the `de` primitives; a wrong one never blocks a caller, because the exact response is always there.
+
+A live acceptance pass, under explicit owner approval and with the owner's own captures as fixtures, comes before the remaining models are written: nothing in this repository has yet been checked against the live service.
+
+## Rust version
+
+The minimum is Rust 1.88, the lowest version that works: the code uses let chains, stable since 1.88, and the locked dependency tree needs 1.88 too. CI runs the whole test suite on it, with and without the client. The Tauri 2 consumer needs less (1.77.2), so the library sets the floor. Raising it is allowed in a minor release, only when the code or a dependency needs it, and never past a version less than six months old.
 
 ## Fixtures
 
@@ -335,6 +349,6 @@ No fixture comes from the owner's account and no test calls Last.fm. Credentials
 |---|---|
 | Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
-| License | Open; likely MIT. Until it is chosen there is no `LICENSE` file and the workspace is `publish = false`. |
-| Minimum Rust | Open. 1.90, the Tauri 2 floor, is declared provisionally and checked in CI. |
+| License | Decided: MIT. The workspace stays `publish = false` until the owner releases. |
+| Minimum Rust | Decided: 1.88, tested in CI. See Rust version. |
 | Visibility | Decided: private until v1 passes its gates. |

@@ -114,6 +114,8 @@ fn a_base_url_must_be_loopback_and_plain() {
         "http://127.0.0.1.example.com/2.0/",
         "http://localhost.example.com/2.0/",
         "http://notlocalhost/2.0/",
+        "http://localhost:9/2.0/",
+        "http://LOCALHOST/2.0/",
         "http://10.0.0.1/2.0/",
         "http://0.0.0.0/2.0/",
         "http://[::ffff:127.0.0.1]/2.0/",
@@ -152,8 +154,6 @@ fn a_loopback_base_url_is_accepted() {
         "http://127.0.0.1:9/2.0/",
         "http://127.8.9.10:9/",
         "http://[::1]:9/2.0/",
-        "http://localhost:9/2.0/",
-        "http://LOCALHOST/2.0/",
         "https://127.0.0.1:9/2.0/",
         "https://[::1]/",
     ] {

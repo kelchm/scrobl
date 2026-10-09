@@ -141,6 +141,12 @@ impl Raw {
 
     /// Deserializes the body.
     ///
+    /// Whether an object that repeats a member name is an error depends on
+    /// `T`: a map or a `serde_json::Value` keeps the last one and says
+    /// nothing. The typed views refuse such a body, and
+    /// [`json_strict`](Self::json_strict) does the same for a caller
+    /// reading the body itself.
+    ///
     /// Fails with [`ErrorKind::Decode`](crate::ErrorKind). The error says
     /// where the JSON went wrong but never repeats text from the body.
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
@@ -150,13 +156,14 @@ impl Raw {
                 .with_response(self.status, &self.body)
         })
     }
-}
 
-impl Raw {
     /// The body as a [`Value`], failing on an object that repeats a member
-    /// name at any depth. [`json`](Self::json) would keep the last of the two
-    /// and say nothing. Neither error repeats text from the body.
-    pub(crate) fn json_value_strict(&self) -> Result<Value, Error> {
+    /// name at any depth, where [`json`](Self::json) into a `Value` would keep
+    /// the last of the two and say nothing.
+    ///
+    /// Fails with [`ErrorKind::Decode`](crate::ErrorKind). The error says
+    /// where the JSON went wrong but never repeats text from the body.
+    pub fn json_strict(&self) -> Result<Value, Error> {
         crate::de::strict_value(&self.body).map_err(|e| {
             let problem = match e {
                 StrictError::Duplicate { line, column } => {

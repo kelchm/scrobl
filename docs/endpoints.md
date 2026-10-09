@@ -8,6 +8,8 @@ Credentials: every method needs an API key. A signature is an `api_sig` made wit
 
 Out of scope, because the official page marks it deprecated or because it is only another encoding of the same methods: the Radio API, the Playlists API, Submissions Protocol 1.2.1, XML-RPC and XML output. Website scraping and history editing are out of scope permanently.
 
+Not in the index at the snapshot date, and so not in the table: `track.ban`, `track.unban`, `user.getArtistTracks` and `user.getNewReleases`, which older documentation and other libraries list.
+
 <!-- BEGIN GENERATED -->
 
 | Method | Verb | Credentials | Write | Paging | Parameters | Typed model | Status |

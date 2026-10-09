@@ -11,6 +11,10 @@ use crate::protocol::{MethodSpec, Raw, Request, methods};
 /// The largest `limit` the documentation allows for `user.getRecentTracks`.
 const MAX_LIMIT: u32 = 200;
 
+/// The first window bound refused as not being seconds: the year 5138. The
+/// present in milliseconds is more than ten times this.
+const MAX_TIMESTAMP: u64 = 100_000_000_000;
+
 const SPEC: &MethodSpec = &methods::USER_GET_RECENT_TRACKS;
 
 /// A half-open range of Unix seconds: `from` is inclusive and `to` is
@@ -172,10 +176,11 @@ impl RecentTracks {
     /// # Errors
     ///
     /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) when `limit` is
-    /// outside 1 to 200, the documented range, or `page` is 0. Nothing is
-    /// clamped.
+    /// outside 1 to 200, the documented range, `page` is 0, or a window
+    /// bound is 100,000,000,000 or more, which is past the year 5000 as
+    /// seconds and so almost certainly milliseconds. Nothing is clamped.
     pub fn request(&self) -> Result<Request, Error> {
-        self.check_limit()?;
+        self.check()?;
         if self.page == Some(0) {
             return Err(Error::invalid_request(SPEC, "`page` starts at 1"));
         }
@@ -189,8 +194,9 @@ impl RecentTracks {
     /// # Errors
     ///
     /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) when `limit` is
-    /// outside 1 to 200, or when `page` was set: a scan chooses its own
-    /// pages.
+    /// outside 1 to 200, when a window bound is too large to be seconds
+    /// (see [`request`](Self::request)), or when `page` was set: a scan
+    /// chooses its own pages.
     pub fn scan(mut self) -> Result<WindowScan, Error> {
         if self.page.is_some() {
             return Err(Error::invalid_request(
@@ -198,13 +204,25 @@ impl RecentTracks {
                 "a scan chooses its own pages: do not set `page`",
             ));
         }
-        self.check_limit()?;
+        self.check()?;
         self.limit.get_or_insert(MAX_LIMIT);
         self.page = Some(1);
         Ok(WindowScan::start(self))
     }
 
-    fn check_limit(&self) -> Result<(), Error> {
+    fn check(&self) -> Result<(), Error> {
+        // Milliseconds are the usual mistake, and the service answers them
+        // with an empty page that looks like success.
+        if [self.window.from, self.window.to]
+            .into_iter()
+            .flatten()
+            .any(|bound| bound >= MAX_TIMESTAMP)
+        {
+            return Err(Error::invalid_request(
+                SPEC,
+                "a window bound is too large to be seconds since the epoch: is it milliseconds?",
+            ));
+        }
         if self
             .limit
             .is_some_and(|limit| !(1..=MAX_LIMIT).contains(&limit))

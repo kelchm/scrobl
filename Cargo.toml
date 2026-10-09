@@ -4,10 +4,13 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-# Provisional: the floor of the planned Tauri 2 consumer. Checked in CI.
-rust-version = "1.90"
+# The lowest version the code (let chains) and the locked dependency tree
+# need. CI runs the whole test suite on it. See "Rust version" in
+# docs/design.md.
+rust-version = "1.88"
+license = "MIT"
 repository = "https://github.com/kelchm/scrobl"
-# No license has been chosen yet, so nothing here may be published.
+# Nothing is published until the owner decides to release.
 publish = false
 
 [workspace.lints.rust]
