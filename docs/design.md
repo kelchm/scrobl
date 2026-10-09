@@ -1,0 +1,269 @@
+# scrobl design
+
+Status: proposed, 2026-10-08. Sections marked **open** wait on an owner decision; everything else is the contract the first implementation pass builds to. Code blocks are API sketches, not finished signatures.
+
+## Scope
+
+The 57 methods in the official Last.fm API index plus the web, desktop and mobile authentication flows, over JSON. Out of scope, each because the official page marks it deprecated or because it is only another encoding of the same methods: the Radio API, the Playlists API, Submissions Protocol 1.2.1, XML-RPC and XML output. Website scraping and history editing are out of scope permanently.
+
+[`endpoints.md`](endpoints.md) lists every method with its verb, credentials, paging and verification status.
+
+## Layout
+
+One Cargo workspace, one library crate. A second crate (the backup application) can be added under `crates/` later without moving anything.
+
+```
+crates/scrobl/
+  src/
+    lib.rs
+    secret.rs          ApiKey, ApiSecret, SessionKey: redacted Debug, no Display
+    error.rs           Error, ErrorKind, ApiErrorCode, Retry, Delivery
+    protocol/          I/O-free core
+      method.rs        MethodSpec and friends
+      methods.rs       the 57-row table
+      sign.rs          api_sig
+      request.rs       Request -> HttpRequest
+      response.rs      HttpResponse -> Raw, error envelope at every status
+    de.rs              tolerant scalar decoding (number-or-string, one-or-many)
+    model/             typed views, one module per API package
+    history.rs         WindowScan: the validated recent-tracks scan, I/O-free
+    client/            feature "client": reqwest executor, pacing, retries
+  tests/               integration tests, fake Last.fm server
+  fixtures/            labelled recorded / derived / synthetic
+```
+
+Features: `client` (default) enables the async client and pulls in `reqwest` and `tokio`. `--no-default-features` is the protocol core alone and must build and pass its tests.
+
+## Layers
+
+### Protocol core
+
+No sockets, clocks, sleeps, tasks or runtime. Everything a transport needs is plain data.
+
+```rust
+use scrobl::protocol::{self, methods, Credentials, HttpRequest, HttpResponse, Request};
+
+let request = Request::new(&methods::USER_GET_RECENT_TRACKS)
+    .param("user", "rj")
+    .param("limit", 200);
+
+let credentials = Credentials::new(api_key);          // .with_secret(..), .with_session(..)
+let http: HttpRequest = protocol::prepare(&credentials, &request)?;
+// http.verb(), http.url(), http.body(): send with any HTTP client
+
+let response = HttpResponse::new(status, body_bytes);
+let raw: Raw = protocol::decode(&request, response)?; // Err for any Last.fm error envelope
+```
+
+Rules:
+
+- `prepare` adds `method`, `api_key` and `format=json`, then `sk` and `api_sig` when the method's `Auth` needs them. It fails with `ErrorKind::InvalidRequest` when a required credential is missing, when the caller sets a reserved name (`method`, `api_key`, `api_sig`, `sk`, `format`, `callback`), or when a parameter name repeats.
+- The signature is the MD5 hex digest of every sent parameter except `format` and `callback`, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
+- `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
+- `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
+- `Raw` is the status, a small set of headers and the exact body bytes. Typed views are decoded from it and never replace it.
+- `HttpRequest`'s `Debug` and every error redact `api_key`, `api_sig`, `sk`, `token` and `password` values. No error carries a URL.
+
+There is no public transport trait. A caller with another HTTP client uses `prepare` and `decode` directly.
+
+### Typed views
+
+Typed models are decoded from `Raw` on request. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable:
+
+```rust
+let page: RecentTracksPage = raw.decode()?;
+for scrobble in page.scrobbles() {
+    scrobble.timestamp();        // seconds since the epoch, always present for a scrobble
+    scrobble.track().name();
+    scrobble.artist().mbid();    // None when missing or empty
+    scrobble.loved();            // None unless the page was requested with extended=1
+    scrobble.json();             // &serde_json::Value, the row exactly as decoded
+}
+page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
+page.attr();                     // user, page, per_page, total_pages, total
+```
+
+Decoding rules: counts and timestamps accept a JSON number or a numeric string, and nothing else. A field that can be one object or an array of them decodes to a list either way. A malformed value is an error naming the field; it is never dropped or defaulted. A history row with neither a valid `date.uts` nor the now-playing flag is an error, not a skipped row.
+
+### History scan
+
+`WindowScan` is the validated read of one time window of `user.getRecentTracks`. It is an I/O-free state machine, so every pagination rule is tested without a socket; the client drives it.
+
+```rust
+let mut scan = WindowScan::new(user, Window::new(from, to)).extended(true);
+while let Some(request) = scan.next_request() {
+    let raw = /* execute */;
+    let page = scan.accept(raw)?;      // validates, then yields the page
+}
+let summary = scan.finish()?;          // total scrobbles, pages, the window
+```
+
+It pages by page number under bounds that never change, with `limit=200` on every request. It never uses a timestamp as a cursor and never removes duplicates, so same-second and identical scrobbles survive. Each page must satisfy all of the following, and any failure is `ErrorKind::Inconsistent` naming the rule, after which the scan yields nothing further:
+
+1. `@attr.user` equals the requested user, ignoring case.
+2. `@attr.page` equals the requested page and `@attr.perPage` equals the requested limit.
+3. `@attr.total` and `@attr.totalPages` are present and identical on every page of the scan, and `totalPages` equals `ceil(total / perPage)`.
+4. The number of scrobbles on the page is exactly what the totals imply: `perPage` on every page but the last, the remainder on the last. A now-playing row is not a scrobble and is not counted.
+5. Every scrobble timestamp lies in `[from, to)`: `from` inclusive, `to` exclusive.
+6. Timestamps never increase, within a page or from one page to the next.
+7. At `finish`, the scrobbles seen equal `total`.
+
+The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It never issues a request with altered bounds. A scan without an upper bound is allowed but will fail rule 3 if the user scrobbles while it runs; callers that need a complete read fix `to` first.
+
+The `[from, to)` rule comes from one recorded third-party exchange, not a documented guarantee. That is why it is checked on every page rather than assumed.
+
+### Client
+
+One concrete async client over `reqwest`. Cheap to clone, `Send + Sync`, every future `Send`. It spawns nothing and owns no runtime.
+
+```rust
+let client = scrobl::Client::builder(api_key)
+    .user_agent("example-backup/0.1 (+https://example.org)")
+    .build()?;
+```
+
+Fixed behaviour: HTTPS only, no redirects, `reqwest`'s own retries off, rustls. Configurable with defaults: connect timeout 10 s, total request timeout 30 s, response body cap 8 MiB, at most one request start per second across all clones, read retry budget of 3 attempts. The user agent defaults to `scrobl/<version>`.
+
+Every attempt, including a retry, takes a pacing slot. A slot is reserved under a lock and waited for outside it, so concurrent callers queue rather than each resetting the clock. Reads are retried only for transport failures before a response, HTTP 5xx or 429, and API codes 11, 16 and 29. Writes are never retried by the client.
+
+Cancellation: dropping a future abandons the request. Nothing shared is left half-updated; a reserved pacing slot is simply spent. For a write, a dropped future means the delivery is unknown.
+
+**Open:** whether a blocking `ureq` adapter ships alongside. Recommendation: no. See [decisions](#open-decisions).
+
+## Errors
+
+One opaque `Error` with accessors, so categories can grow without breaking callers.
+
+```rust
+impl Error {
+    pub fn kind(&self) -> ErrorKind;               // Copy, #[non_exhaustive]
+    pub fn api_code(&self) -> Option<ApiErrorCode>;
+    pub fn api_message(&self) -> Option<&str>;
+    pub fn http_status(&self) -> Option<u16>;
+    pub fn method(&self) -> Option<&'static str>;  // the Last.fm method name
+    pub fn body(&self) -> Option<&[u8]>;           // the response body, capped at 64 KiB
+    pub fn retry(&self) -> Retry;
+    pub fn delivery(&self) -> Option<Delivery>;
+}
+```
+
+| `ErrorKind` | Meaning |
+|---|---|
+| `Api` | Last.fm returned an error envelope, at any HTTP status |
+| `Http` | Non-2xx status with no error envelope |
+| `Decode` | The body was not the expected JSON, or a field was malformed |
+| `Inconsistent` | A history page broke a scan rule |
+| `Transport` | Connection, TLS or I/O failure |
+| `Timeout` | A deadline passed |
+| `BodyTooLarge` | The response exceeded the body cap |
+| `InvalidRequest` | The request could not be built; nothing was sent |
+| `Config` | The client could not be built |
+
+`ApiErrorCode` wraps the number and keeps unknown codes. Named constants exist for the documented ones, including `LOGIN_REQUIRED` (17) and `SUSPENDED_KEY` (26), which callers must be able to tell apart from an empty history.
+
+`Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, pre-response transport failures of a read), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`.
+
+`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`.
+
+`Display` gives a one-line message that is safe to log. Truncated diagnostics cut on a UTF-8 boundary.
+
+## Consumer sketches
+
+### Backup application
+
+```rust
+let client = scrobl::Client::builder(api_key)
+    .user_agent("example-backup/0.1 (+https://example.org)")
+    .build()?;
+
+// One closed window, read completely or not at all.
+let mut scan = client.user("rj").recent_tracks()
+    .extended(true)
+    .scan(Window::new(from, to));
+
+while let Some(page) = scan.next_page().await? {
+    archive.write(page.raw().body())?;       // the exact bytes Last.fm sent
+    for scrobble in page.scrobbles() { /* derived view */ }
+}
+let summary = scan.finish()?;                // fails unless every rule held
+
+// A count probe: one request, the window's total.
+let total = client.user("rj").recent_tracks()
+    .window(Window::new(from, to))
+    .limit(1)
+    .send().await?
+    .attr().total();
+
+match error.api_code() {
+    Some(ApiErrorCode::LOGIN_REQUIRED) => { /* access or privacy change, not empty */ }
+    _ => {}
+}
+```
+
+The backup application runs this on a current-thread Tokio runtime. Storage, scheduling, window selection and reconciliation are its own concern.
+
+### Tauri music app
+
+```rust
+#[tauri::command]
+async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Result<Vec<Row>, UiError> {
+    let page = client.user(&user).recent_tracks().limit(50).send().await?;
+    Ok(page.scrobbles().map(Row::from).collect())
+}
+```
+
+`Client` lives in Tauri managed state and is cloned into commands. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`; secrets never cross IPC because the library's types do not serialize them.
+
+Authentication and writes (stage 4; shape only):
+
+```rust
+// Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
+let token = client.auth().token().await?;
+open_browser(token.authorization_url());
+let session = client.auth().session(&token).await?;   // Err(code 14) until the user approves
+
+let user = client.with_session(session.key().clone());
+let report = user.track().scrobble(&batch).await;     // at most 50 per call
+match report {
+    Ok(report) => for (sent, outcome) in report.items() {
+        // outcome: Accepted { corrections } | Ignored { code, message }
+    },
+    Err(e) if e.delivery() == Some(Delivery::Unknown) => { /* persist as uncertain */ }
+    Err(e) => { /* e.retry() says whether to keep it queued */ }
+}
+```
+
+A scrobble reply is checked against the request: one outcome per item, `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent; corrections are reported next to it.
+
+## Coverage
+
+**Open:** whether every method needs a typed model for v1. Recommendation: no. Every method reaches *request-verified* (correct verb, credentials and parameters, raw response, error handling). A typed model is added only where a recorded response exists to check it against, starting with history, authentication, scrobble, now-playing and love. `endpoints.md` records the level each method has reached, and that table is the release claim.
+
+Levels:
+
+| Level | Meaning |
+|---|---|
+| `inventoried` | In the table with its documented verb, credentials and parameters |
+| `request-verified` | Request construction tested against the official parameter snapshot; raw response and errors handled |
+| `fixture-verified` | A typed model checked against a recorded response |
+| `live-verified` | Exercised against Last.fm under explicit owner approval |
+
+## Fixtures
+
+Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
+
+- **recorded**: a real exchange captured by someone else, with source repository, commit, path and license. Only what a test needs is kept.
+- **derived**: written from official documentation or a recorded fixture, with the source named.
+- **synthetic**: invented, including everything the fake server generates.
+
+No fixture comes from the owner's account and no test calls Last.fm. Credentials in fixtures are obvious sentinels.
+
+## Open decisions
+
+| Decision | Recommendation |
+|---|---|
+| Transport | One async `reqwest` client. No `ureq` adapter and no public transport trait until a consumer needs one. |
+| Coverage | Request-verified for all 57 methods; typed models where a recorded response exists. |
+| License | `MIT OR Apache-2.0`. |
+| MSRV | Declare 1.90, the Tauri 2 floor, and check it in CI. No stronger promise before publication. |
+| Visibility | Stay private until v1 passes its gates. |
