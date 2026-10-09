@@ -2,13 +2,6 @@
 
 [`docs/design.md`](docs/design.md) says what the library is and why. This file says how changes are made.
 
-## Never
-
-- Call the live Last.fm service, or write to an account, without the owner's approval for that run. `tests/live.rs` stays ignored.
-- Commit a credential or a captured response the owner has not approved. Captures go in `.scratch/`.
-- Publish, tag a release, change repository settings, push to `main` or merge. The owner does those.
-- Drop "Not affiliated with or endorsed by Last.fm", or name anything "Audioscrobbler" or "Scrobbler".
-
 ## Pull requests
 
 - One logical change each. They are squash-merged: the title becomes the commit on `main`.
@@ -25,4 +18,6 @@
 - A new dependency needs a reason. Prefer none.
 - The table in `docs/endpoints.md` is generated: `SCROBL_BLESS=1 cargo test --test inventory`.
 - Every fixture is listed with its source in `crates/scrobl/fixtures/README.md`.
+- Tests never call Last.fm. `tests/live.rs` runs only when the owner asks, and what it captures stays in `.scratch/`.
+- The project is unofficial: keep the "not affiliated" line, and name nothing "Audioscrobbler" or "Scrobbler".
 - Markdown prose is not hard-wrapped.
