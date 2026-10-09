@@ -76,6 +76,11 @@ impl ParamSpec {
 /// Specs come only from [`methods`](super::methods). A spec cannot be built
 /// or changed outside this crate, so a method's verb, credentials and
 /// `write` flag are always the table's.
+///
+/// ```compile_fail
+/// let mut love = scrobl::protocol::methods::TRACK_LOVE;
+/// love.write = false; // the fields are private
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MethodSpec {
     pub(super) name: &'static str,
@@ -102,7 +107,9 @@ impl MethodSpec {
         self.auth
     }
 
-    /// Whether the method changes anything on the account.
+    /// Whether the method changes anything on the account: scrobbling, now
+    /// playing, love and unlove, and tagging. The authentication methods
+    /// create a session and are not writes.
     pub const fn write(&self) -> bool {
         self.write
     }

@@ -94,8 +94,15 @@ pub(crate) const SENTINELS: [&str; 5] = [
     SENTINEL_PASSWORD,
 ];
 
-/// Credentials made of the sentinels, with secret and session.
+/// Credentials made of the sentinels, with secret and session, that allow
+/// writes.
 pub(crate) fn credentials() -> crate::protocol::Credentials {
+    read_only_credentials().allow_writes()
+}
+
+/// The same credentials without the grant: everything a write needs except
+/// permission.
+pub(crate) fn read_only_credentials() -> crate::protocol::Credentials {
     use crate::{ApiKey, ApiSecret, SessionKey};
     crate::protocol::Credentials::new(ApiKey::new(SENTINEL_API_KEY))
         .with_secret(ApiSecret::new(SENTINEL_API_SECRET))

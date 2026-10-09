@@ -3,8 +3,9 @@
 //!
 //! Early development. Not affiliated with or endorsed by Last.fm.
 //!
-//! What works today: a raw, signed call to any of the 57 methods, and a
-//! typed, checked read of a user's scrobble history. Not built yet: typed
+//! What works today: a raw, signed call to any of the 57 methods, the ten
+//! that change an account only through a `Writer`, and a typed, checked
+//! read of a user's scrobble history. Not built yet: typed
 //! models for the other methods, the authentication flows and typed
 //! scrobbling. Only the history read has been run against the live service.
 //!
@@ -17,7 +18,9 @@
 //!   page. Both are I/O-free too.
 //! - The async client, `Client`, behind the default `client` feature,
 //!   executes those requests with `reqwest` on the caller's Tokio runtime.
-//!   It paces requests, retries reads, and bounds time and size.
+//!   It paces requests, retries reads, and bounds time and size. A `Client`
+//!   never changes an account; a `Writer`, built on purpose, is the only
+//!   thing that scrobbles, loves or tags.
 //!   [`Response`] pairs a typed value with the exact response it came from.
 
 // Labels the items behind `client` on docs.rs, which builds with nightly.
@@ -34,7 +37,7 @@ mod response;
 mod secret;
 
 #[cfg(feature = "client")]
-pub use client::{Client, ClientBuilder};
+pub use client::{Client, ClientBuilder, Writer};
 pub use error::{ApiErrorCode, Delivery, Error, ErrorKind, Retry};
 pub use response::Response;
 pub use secret::{ApiKey, ApiSecret, SessionKey};

@@ -51,7 +51,7 @@ let request = Request::new(&methods::USER_GET_RECENT_TRACKS)
     .param("user", "rj")
     .param("limit", 200);
 
-let credentials = Credentials::new(api_key);          // .with_secret(..), .with_session(..)
+let credentials = Credentials::new(api_key);          // .with_secret(..), .with_session(..), .allow_writes()
 let http: HttpRequest = protocol::prepare(&credentials, &request)?;
 // http.verb(), http.url(), http.body(): send with any HTTP client
 
@@ -61,8 +61,9 @@ let raw: Raw = protocol::decode(&request, response)?; // Err for any Last.fm err
 
 Rules:
 
+- `prepare` first refuses a method that changes the account unless the credentials allow writes (`Credentials::allow_writes`), with `ErrorKind::ReadOnly`, whatever else is held and whatever the parameters are. See [Reading and writing](#reading-and-writing).
 - `prepare` adds `method`, `api_key` and `format=json`, then `sk` and `api_sig` when the method's `Auth` needs them. It fails with `ErrorKind::InvalidRequest` when a required credential is missing, when the caller sets a reserved name (`method`, `api_key`, `api_sig`, `sk`, `format`, `callback`), or when a parameter name repeats.
-- The signature is the MD5 hex digest of every sent parameter except `format`, `callback` and `api_sig` itself, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
+- The signature is the MD5 hex digest of every sent parameter except `format`, `callback` and `api_sig` itself, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects. Signing is not public: `prepare` is the only way to get a signature, so nothing is signed that it did not check.
 - `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
@@ -72,6 +73,18 @@ Rules:
 - A `MethodSpec` has private fields and read-only getters, and the only ones that exist are the constants in `methods`, so a caller cannot build one or change a verb, credential requirement or `write` flag.
 
 There is no public transport trait. A caller with another HTTP client uses `prepare` and `decode` directly.
+
+### Reading and writing
+
+Last.fm has no read-only keys, no scopes and no per-application permissions, and a session key does not expire. A session that can read a user's hidden history can also scrobble, love, unlove and tag for them, so holding a secret and a session key says nothing about whether a program means to write. The library keeps reading and writing apart itself, in two places.
+
+In the core, `Credentials` carries a grant that is off by default, and `prepare` refuses the ten write methods without it before it checks or signs anything. Every path that produces a signed request goes through `prepare`: the client's raw `call`, the typed methods, and a caller with another HTTP client. `MethodSpec` has private fields and no constructor, so the only method descriptions are the 57 rows of the table and a description cannot be copied and relabelled as a read.
+
+In the client, the grant is a type. A `Client` never holds it and so never writes. A `Writer` holds it, is made only by `ClientBuilder::build_writer`, and dereferences to `Client`, so every read is available on it and code handed a `&Client` cannot write whichever it was given. A program that never names `Writer` or `allow_writes` cannot change an account through this crate.
+
+What counts as a write is the `write` flag of the method table: the ten methods whose official pages say "This is a write service", which are also exactly the ten that require a session. `track.updateNowPlaying` is one: it stores nothing in the history, but it changes what the profile shows. The three `auth` methods are not. They create a token or a session, and `auth.getMobileSession` sends a password, but they change nothing on the account, and a backup application needs them to sign in. A read made `as_user` is a read.
+
+This is a guard against a bug or a careless call, not a security boundary. The service enforces none of it. Code that holds the API secret and a session key can sign a request without this crate. And because Last.fm's signature joins names and values with no delimiter, the signature of a read with contrived parameters is also the signature of some write, so a `HttpRequest` taken apart on purpose can be turned into one. The promise covers requests as `prepare` built them and as the client sent them.
 
 ### Typed views
 
@@ -146,8 +159,13 @@ One concrete async client over `reqwest`. Cheap to clone (two `Arc`s), `Clone + 
 impl Client {
     pub fn builder(api_key: ApiKey) -> ClientBuilder;
     pub fn with_session(&self, session: SessionKey) -> Client;   // shares the pool and the pacing clock
-    pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any of the 57 methods
+    pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any method that is not a write
     pub fn user(&self, name: impl Into<String>) -> User;
+}
+
+impl Writer {   // Clone, Deref<Target = Client>
+    pub fn with_session(&self, session: SessionKey) -> Writer;
+    pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any of the 57 methods
 }
 
 impl ClientBuilder {   // each setting has a default; build() fails with ErrorKind::Config
@@ -160,7 +178,8 @@ impl ClientBuilder {   // each setting has a default; build() fails with ErrorKi
     pub fn read_attempts(self, u32) -> Self;              // 3, counting the first; 1 turns retries off
     pub fn retry_delay(self, Duration) -> Self;           // 1 s
     pub fn no_proxy(self) -> Self;                        // ignore HTTPS_PROXY and friends
-    pub fn build(self) -> Result<Client, Error>;
+    pub fn build(self) -> Result<Client, Error>;          // reads and authenticates
+    pub fn build_writer(self) -> Result<Writer, Error>;   // may also change the account
 }
 
 impl User { pub fn recent_tracks(&self) -> RecentTracksQuery; }
@@ -185,7 +204,7 @@ pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; 
 
 Fixed behaviour: HTTPS only (the client refuses a plain-HTTP URL before connecting), no redirects, `reqwest`'s own retries off, no cookies, rustls, and no response decompression: every `reqwest` decoder (`gzip`, `brotli`, `deflate`, `zstd`) is switched off explicitly, because Cargo unifies features and another crate in the program could otherwise turn one on, making the client send `Accept-Encoding` and `Raw::body` something other than the bytes the service sent. The one hook that changes the root, `ClientBuilder::base_url` (hidden, for tests), accepts only a literal loopback address with no user information, query or fragment, so it cannot turn HTTPS-only off for a real host or send a key elsewhere; anything else is a `Config` error that does not repeat the URL, and `Debug` says only whether a root is set. A 3xx is returned to `decode` and becomes `ErrorKind::Http`; the target of a `Location` receives nothing. The proxy environment variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are honoured; through an HTTP proxy only a `CONNECT` naming the host and port is visible to the proxy and the key stays inside TLS. `ClientBuilder::no_proxy` opts out.
 
-One attempt is: wait for admission, send, read the body up to the cap, `decode`. The request is built once, before the first admission, so an invalid request waits for nothing and sends nothing.
+One attempt is: wait for admission, send, read the body up to the cap, `decode`. The request is built once, before the first admission, so an invalid request, or a write asked of a `Client`, waits for nothing and sends nothing.
 
 Pacing: every attempt, including a retry, is admitted at least one interval after the previous admission, across all clones. Admission is serialised and measured when it happens: a caller takes an async (`tokio::sync::Mutex`, first come first served) lock over the time of the last admission, sleeps whatever remains of the interval *while holding the lock*, reads the clock again, records that as the new last admission and releases. So the spacing holds however late a task is polled (a runtime stalled for several intervals delays the queued callers; it does not release them together), nothing is reserved ahead, and a caller dropped while queued or sleeping leaves no debt: the next one waits only for what remains since the last real admission. The arithmetic is on `Duration`s, an interval over 24 hours is a `Config` error, and a zero interval skips pacing entirely. "Start" means admission to the transport, measured in this process; connection setup can still make arrivals at the server bunch slightly. The one-second default is this library's conservative choice: Last.fm's introduction only warns against making several calls per second continuously, and documents no exact allowance. Pacing is per `Client` and its clones; separate clients and separate processes do not share it.
 
@@ -226,13 +245,14 @@ impl Error {
 | `Timeout` | A deadline passed |
 | `BodyTooLarge` | The response exceeded the body cap |
 | `InvalidRequest` | The request could not be built; nothing was sent |
+| `ReadOnly` | A write was asked of a `Client`, or of credentials that do not allow writes; nothing was signed or sent |
 | `Config` | The client could not be built: an empty API key, secret or session key, an unusable user agent, a zero timeout, cap or attempt count, a pacing interval over 24 hours, a test root that is not loopback, or an HTTP client that failed to initialise |
 
 `ApiErrorCode` wraps the number and keeps unknown codes. Named constants exist for the documented ones, including `LOGIN_REQUIRED` (17) and `SUSPENDED_KEY` (26), which callers must be able to tell apart from an empty history.
 
 `Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, transport failures and timeouts of a read, and a transport failure of a write that certainly sent nothing; a write whose delivery is `Unknown` is `No`), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`. The client acts on the advice for reads only.
 
-`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`. Every timeout is `Unknown`, including one while connecting, which in fact sent nothing: the error does not say where the deadline fell, and wrongly assuming `NotSent` is the dangerous mistake. A TLS handshake that never completes is the observed case: the connect timeout fires, the error is `Timeout`, and for a write `delivery()` is `Unknown`.
+`Delivery` says what a failed write did: `NotSent` (a refusal as `ReadOnly` included), `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`. Every timeout is `Unknown`, including one while connecting, which in fact sent nothing: the error does not say where the deadline fell, and wrongly assuming `NotSent` is the dangerous mistake. A TLS handshake that never completes is the observed case: the connect timeout fires, the error is `Timeout`, and for a write `delivery()` is `Unknown`.
 
 `Display` gives a one-line message that is safe to log. Truncated diagnostics cut on a UTF-8 boundary.
 
@@ -271,7 +291,7 @@ match error.api_code() {
 }
 ```
 
-The backup application runs this on a current-thread Tokio runtime. Storage, scheduling, window selection and reconciliation are its own concern.
+A `Client` cannot write, so the backup application can hold a secret and a session key, to read a history its owner hides, without being able to change the account it backs up. It runs this on a current-thread Tokio runtime. Storage, scheduling, window selection and reconciliation are its own concern.
 
 ### Tauri music app
 
@@ -283,7 +303,7 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 }
 ```
 
-`Client` lives in Tauri managed state and is cloned into commands. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`; secrets never cross IPC because the library's types do not serialize them.
+`Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both: managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`; secrets never cross IPC because the library's types do not serialize them.
 
 Authentication and writes (stage 4; shape only):
 
@@ -293,8 +313,8 @@ let token = client.auth().token().await?;
 open_browser(token.authorization_url());
 let session = client.auth().session(&token).await?;   // Err(code 14) until the user approves
 
-let user = client.with_session(session.key().clone());
-let report = user.track().scrobble(&batch).await;     // at most 50 per call
+let user = writer.with_session(session.key().clone());   // a Writer; typed writes exist only on it
+let report = user.scrobble(&batch).await;             // at most 50 per call
 match report {
     Ok(report) => for (sent, outcome) in report.items() {
         // outcome: Accepted { corrections } | Ignored { code, message }
@@ -365,3 +385,4 @@ The recorded fixtures are the owner's own captures of their own account. No cred
 | License | Decided: MIT. The workspace stays `publish = false` until the owner releases. |
 | Minimum Rust | Decided: 1.88, tested in CI. See Rust version. |
 | Visibility | Decided: the repository is public. Nothing is published to crates.io yet. |
+| Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See Reading and writing. |

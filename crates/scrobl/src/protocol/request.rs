@@ -26,15 +26,22 @@ const REDACTED: &str = "<redacted>";
 /// The most of a parameter name an error message repeats.
 const MAX_NAME_IN_MESSAGE: usize = 64;
 
-/// The credentials a call is made with.
+/// The credentials a call is made with, and whether they may be used to
+/// change the account.
 ///
 /// An API key is always needed. The secret is needed for methods that are
 /// signed, and the session key for methods that act for a user.
+///
+/// Holding a secret and a session key is not permission to write: reading a
+/// hidden listening history needs both. [`prepare`] refuses every method
+/// that changes the account unless [`allow_writes`](Self::allow_writes) was
+/// called.
 #[derive(Debug, Clone)]
 pub struct Credentials {
     api_key: ApiKey,
     secret: Option<ApiSecret>,
     session: Option<SessionKey>,
+    writes: bool,
 }
 
 impl Credentials {
@@ -68,6 +75,7 @@ impl Credentials {
             api_key,
             secret: None,
             session: None,
+            writes: false,
         }
     }
 
@@ -83,6 +91,14 @@ impl Credentials {
     #[must_use]
     pub fn with_session(mut self, session: SessionKey) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Permits the methods that change the account: scrobbling, now playing,
+    /// love and unlove, and tagging. This is the only way to permit them.
+    #[must_use]
+    pub fn allow_writes(mut self) -> Self {
+        self.writes = true;
         self
     }
 }
@@ -337,6 +353,11 @@ fn redact_form(encoded: &[u8]) -> String {
 ///
 /// # Errors
 ///
+/// Fails with [`ErrorKind::ReadOnly`](crate::ErrorKind) when the method
+/// changes the account and the credentials do not
+/// [allow writes](Credentials::allow_writes). That is checked before
+/// anything else, and nothing is signed.
+///
 /// Fails with [`ErrorKind::InvalidRequest`](crate::ErrorKind) and sends
 /// nothing when a credential the method needs is missing, when a caller
 /// parameter has a reserved name (`method`, `api_key`, `api_sig`, `sk`,
@@ -373,6 +394,11 @@ pub fn prepare_with_root(
     request: &Request,
 ) -> Result<HttpRequest, Error> {
     let spec = request.spec;
+    // First, so a refused write is the same error whatever credentials are
+    // held and whatever the parameters are.
+    if spec.write && !credentials.writes {
+        return Err(Error::read_only(spec));
+    }
     let invalid = |problem: &str| Error::invalid_request(spec, problem);
 
     // Each of these would move or expose the parameters.

@@ -200,6 +200,32 @@ fn class_counts() {
     );
 }
 
+/// The methods that change the account, by name. A method added to the table
+/// has to be put on one side of this line or the other by hand.
+#[test]
+fn the_writes_are_exactly_these_ten() {
+    let writes: Vec<_> = methods::ALL
+        .iter()
+        .filter(|m| m.write())
+        .map(|m| m.name())
+        .collect();
+    assert_eq!(
+        writes,
+        [
+            "album.addTags",
+            "album.removeTag",
+            "artist.addTags",
+            "artist.removeTag",
+            "track.addTags",
+            "track.love",
+            "track.removeTag",
+            "track.scrobble",
+            "track.unlove",
+            "track.updateNowPlaying",
+        ]
+    );
+}
+
 #[test]
 fn by_name_ignores_ascii_case() {
     for spec in methods::ALL {

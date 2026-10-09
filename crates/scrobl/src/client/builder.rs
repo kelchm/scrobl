@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::pacing::{MAX_INTERVAL, Pacer};
-use super::{Client, Shared};
+use super::{Client, Shared, Writer};
 use crate::error::Error;
 use crate::protocol::Credentials;
 use crate::secret::{ApiKey, ApiSecret, SessionKey};
@@ -194,7 +194,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Builds the client.
+    /// Builds a client that reads and authenticates and cannot change the
+    /// account. [`build_writer`](Self::build_writer) builds one that can.
     ///
     /// Needs no runtime, so a client can be made at start-up and used later.
     ///
@@ -255,6 +256,19 @@ impl ClientBuilder {
             }),
             credentials: Arc::new(credentials),
         })
+    }
+
+    /// Builds a [`Writer`]: a client that may also change the account, by
+    /// scrobbling, setting now playing, loving and unloving, and tagging.
+    ///
+    /// This is the one place a program asks to write. [`build`](Self::build)
+    /// gives a client that cannot, whatever credentials it holds.
+    ///
+    /// # Errors
+    ///
+    /// As [`build`](Self::build).
+    pub fn build_writer(self) -> Result<Writer, Error> {
+        self.build().map(Writer::granting)
     }
 }
 

@@ -291,6 +291,7 @@ mod tests {
         use crate::secret::{ApiKey, ApiSecret, SessionKey};
 
         let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"))
+            .allow_writes()
             .with_secret(ApiSecret::new("SENTINEL_API_SECRET_0002"))
             .with_session(SessionKey::new("SENTINEL SESSION/0003+x&y"));
         let read = prepare(

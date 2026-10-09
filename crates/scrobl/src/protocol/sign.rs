@@ -2,8 +2,8 @@
 //!
 //! Last.fm authenticates a call by an `api_sig` parameter: an MD5 digest over
 //! the call's parameters and the API secret. [`prepare`](super::prepare)
-//! computes it for the methods that need one. [`sign`] is public for callers
-//! that build requests with their own HTTP stack.
+//! computes it for the methods that need one, and is the only way to get one:
+//! signing is not public, so nothing is signed that `prepare` did not check.
 
 use std::fmt::Write as _;
 
@@ -28,21 +28,7 @@ const UNSIGNED: [&str; 3] = ["format", "callback", "api_sig"];
 /// Parameter names must be unique. The scheme, name and value concatenated
 /// with no delimiter, is Last.fm's, so distinct parameter sets can share a
 /// signature.
-///
-/// ```
-/// use scrobl::{protocol::sign, ApiSecret};
-///
-/// // The example from the authentication specification.
-/// let params = [
-///     ("method", "auth.getSession"),
-///     ("api_key", "xxxxxxxxxx"),
-///     ("token", "yyyyyy"),
-///     ("format", "json"),
-/// ];
-/// let signature = sign(params, &ApiSecret::new("ilovecher"));
-/// assert_eq!(signature, "b87d61da3cda91a8b6746c4aef55d6f8");
-/// ```
-pub fn sign<'a>(
+pub(crate) fn sign<'a>(
     params: impl IntoIterator<Item = (&'a str, &'a str)>,
     secret: &ApiSecret,
 ) -> String {

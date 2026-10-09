@@ -11,8 +11,8 @@ use md5::{Digest, Md5};
 use proptest::prelude::*;
 
 use super::*;
-use crate::protocol::Raw;
 use crate::protocol::testing::*;
+use crate::protocol::{Raw, methods};
 use crate::{Delivery, ErrorKind};
 
 /// Decoded name/value pairs of a form-encoded string, in wire order.
@@ -313,7 +313,9 @@ fn a_missing_secret_is_rejected() {
 
 #[test]
 fn a_missing_session_is_rejected() {
-    let credentials = Credentials::new(ApiKey::new("k")).with_secret(ApiSecret::new("s"));
+    let credentials = Credentials::new(ApiKey::new("k"))
+        .allow_writes()
+        .with_secret(ApiSecret::new("s"));
     let request = Request::new(&NOW_PLAYING)
         .param("artist", "a")
         .param("track", "t");
@@ -323,7 +325,7 @@ fn a_missing_session_is_rejected() {
 
 #[test]
 fn a_missing_secret_is_reported_before_a_missing_session() {
-    let credentials = Credentials::new(ApiKey::new("k"));
+    let credentials = Credentials::new(ApiKey::new("k")).allow_writes();
     let request = Request::new(&NOW_PLAYING)
         .param("artist", "a")
         .param("track", "t");
@@ -333,7 +335,9 @@ fn a_missing_secret_is_reported_before_a_missing_session() {
 
 #[test]
 fn a_session_alone_does_not_stand_in_for_the_secret() {
-    let credentials = Credentials::new(ApiKey::new("k")).with_session(SessionKey::new("s"));
+    let credentials = Credentials::new(ApiKey::new("k"))
+        .allow_writes()
+        .with_session(SessionKey::new("s"));
     let request = Request::new(&NOW_PLAYING)
         .param("artist", "a")
         .param("track", "t");
@@ -710,6 +714,7 @@ fn a_newline_in_a_parameter_name_stays_out_of_the_error_text() {
 #[test]
 fn errors_from_prepare_carry_no_credentials() {
     let missing_session = Credentials::new(ApiKey::new(SENTINEL_API_KEY))
+        .allow_writes()
         .with_secret(ApiSecret::new(SENTINEL_API_SECRET));
     let request = Request::new(&NOW_PLAYING)
         .param("artist", "a")
@@ -864,4 +869,159 @@ fn requests_are_equal_by_method_parameters_in_order_and_as_user() {
 fn a_clone_equals_its_original() {
     let request = Request::new(&SCROBBLE).indexed("artist", 0, "A").as_user();
     assert_eq!(request.clone(), request);
+}
+
+/// `spec` called with every parameter it requires.
+fn complete(spec: &'static MethodSpec) -> Request {
+    spec.params
+        .iter()
+        .filter(|param| param.requirement == Requirement::Required)
+        .fold(Request::new(spec), |request, param| {
+            if param.indexed {
+                request.indexed(param.name, 0, "x")
+            } else {
+                request.param(param.name, "x")
+            }
+        })
+}
+
+fn writes() -> impl Iterator<Item = &'static MethodSpec> {
+    methods::ALL.iter().copied().filter(|spec| spec.write)
+}
+
+#[test]
+fn a_write_is_refused_without_the_grant_whatever_else_is_held() {
+    let key = || Credentials::new(ApiKey::new(SENTINEL_API_KEY));
+    let held = [
+        ("key", key()),
+        (
+            "key and secret",
+            key().with_secret(ApiSecret::new(SENTINEL_API_SECRET)),
+        ),
+        (
+            "key and session",
+            key().with_session(SessionKey::new(SENTINEL_SESSION_KEY)),
+        ),
+        ("everything", read_only_credentials()),
+    ];
+    let mut refused = 0;
+    for spec in writes() {
+        // Complete, empty, and with a parameter that is otherwise an error:
+        // the refusal comes before every other check.
+        let requests = [
+            ("complete", complete(spec)),
+            ("empty", Request::new(spec)),
+            ("as user", complete(spec).as_user()),
+            ("reserved", complete(spec).param("sk", SENTINEL_SESSION_KEY)),
+        ];
+        for (held, credentials) in &held {
+            for (shape, request) in &requests {
+                let label = format!("{}, {held}, {shape}", spec.name);
+                for result in [
+                    prepare(credentials, request),
+                    prepare_with_root("http://127.0.0.1:9/2.0/", credentials, request),
+                ] {
+                    let error = result.expect_err(&label);
+                    assert_eq!(error.kind(), ErrorKind::ReadOnly, "{label}");
+                    assert_eq!(error.method(), Some(spec.name), "{label}");
+                    assert_eq!(error.delivery(), Some(Delivery::NotSent), "{label}");
+                    assert_eq!(error.retry(), crate::Retry::No, "{label}");
+                    assert_no_sentinel(&format!("{error} {error:?} {error:#?}"));
+                }
+            }
+        }
+        refused += 1;
+    }
+    assert_eq!(refused, 10);
+}
+
+#[test]
+fn the_grant_lets_every_write_through() {
+    for spec in writes() {
+        let http = prepare(&credentials(), &complete(spec)).expect(spec.name);
+        let body = body_of(&http);
+        assert_eq!(get(&body, "method"), Some(spec.name));
+        assert_eq!(get(&body, "sk"), Some(SENTINEL_SESSION_KEY));
+        assert!(get(&body, "api_sig").is_some(), "{}", spec.name);
+    }
+}
+
+#[test]
+fn the_grant_survives_adding_a_secret_a_session_and_a_clone() {
+    let granted = Credentials::new(ApiKey::new("k"))
+        .allow_writes()
+        .with_secret(ApiSecret::new("s"))
+        .with_session(SessionKey::new("sk"));
+    assert!(prepare(&granted.clone(), &complete(&methods::TRACK_LOVE)).is_ok());
+
+    let refused = read_only_credentials().clone();
+    let error = prepare(&refused, &complete(&methods::TRACK_LOVE)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ReadOnly);
+}
+
+#[test]
+fn reads_and_authentication_need_no_grant() {
+    let mut allowed = 0;
+    for spec in methods::ALL.iter().copied().filter(|spec| !spec.write) {
+        for request in [complete(spec), complete(spec).as_user()] {
+            let http = prepare(&read_only_credentials(), &request).expect(spec.name);
+            // A read as the user is signed with the session, and is still a read.
+            let sent = match http.verb() {
+                Verb::Get => query_of(&http),
+                Verb::Post => body_of(&http),
+            };
+            assert_eq!(get(&sent, "method"), Some(spec.name));
+        }
+        allowed += 1;
+    }
+    assert_eq!(allowed, 47);
+    for auth in ["auth.getToken", "auth.getSession", "auth.getMobileSession"] {
+        assert!(!methods::by_name(auth).unwrap().write, "{auth}");
+    }
+}
+
+#[test]
+fn credentials_debug_says_whether_writes_are_allowed_and_nothing_secret() {
+    let text = format!("{:?}", read_only_credentials());
+    assert!(text.contains("writes: false"), "{text}");
+    assert_no_sentinel(&text);
+    assert!(format!("{:?}", credentials()).contains("writes: true"));
+}
+
+proptest! {
+    // synthetic
+    #[test]
+    fn without_the_grant_nothing_prepared_is_a_write(
+        method in 0..methods::ALL.len(),
+        as_user in any::<bool>(),
+        with_secret in any::<bool>(),
+        with_session in any::<bool>(),
+        complete_first in any::<bool>(),
+        params in proptest::collection::btree_map(
+            "[a-zA-Z][a-zA-Z0-9_]{0,10}(\\[[0-9]\\])?",
+            "\\PC{0,24}",
+            0..6,
+        ),
+    ) {
+        let spec = methods::ALL[method];
+        let mut credentials = Credentials::new(ApiKey::new("k"));
+        if with_secret {
+            credentials = credentials.with_secret(ApiSecret::new("s"));
+        }
+        if with_session {
+            credentials = credentials.with_session(SessionKey::new("sk"));
+        }
+        let mut request = if complete_first { complete(spec) } else { Request::new(spec) };
+        if as_user {
+            request = request.as_user();
+        }
+        for (name, value) in &params {
+            request = request.param(name, value.as_str());
+        }
+        match prepare(&credentials, &request) {
+            Ok(_) => prop_assert!(!spec.write, "{} was prepared", spec.name),
+            Err(error) if spec.write => prop_assert_eq!(error.kind(), ErrorKind::ReadOnly),
+            Err(error) => prop_assert_eq!(error.kind(), ErrorKind::InvalidRequest),
+        }
+    }
 }
