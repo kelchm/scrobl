@@ -71,7 +71,7 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `user.getInfo` | GET | API key | — | — | _user_ | — | inventoried |
 | `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | — | inventoried |
 | `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | — | inventoried |
-| `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::RecentTracksPage` | fixture-verified |
+| `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::RecentTracksPage` | live-verified |
 | `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | — | inventoried |
 | `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | — | inventoried |
 | `user.getTopTags` | GET | API key | — | limit | user, _limit_ | — | inventoried |

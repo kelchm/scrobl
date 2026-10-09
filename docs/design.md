@@ -321,13 +321,23 @@ Levels:
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
+What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API key only and the owner's public history (`tests/live.rs` repeats it on request):
+
+- A page decodes, and `@attr` echoes the user, page and `perPage` asked for.
+- A week of 29 scrobbles passes every scan rule as one page of 200 and as five pages of 7, with the same count.
+- The bounds are `[from, to)`: for a scrobble at `t`, `[t, t+1)` holds it, `[t+1, ..)` does not, and `[from, t)` leaves it out.
+- An empty window answers `total` 0 and `totalPages` 0.
+- An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
+
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method.
+
 Order of typing, most costly to get wrong first:
 
 1. The authentication replies. A session key in a reply is modelled as `SessionKey`, so it is redacted like one the caller supplied.
 2. The scrobble reply, with the checks described under Errors. A wrong model here loses data silently.
 3. The read models. Those are written with shared helpers over the `de` primitives; a wrong one never blocks a caller, because the exact response is always there.
 
-A live acceptance pass, under explicit owner approval and with the owner's own captures as fixtures, comes before the remaining models are written: nothing in this repository has yet been checked against the live service.
+A live acceptance pass, under explicit owner approval and with the owner's own captures as fixtures, comes before each remaining model is promoted.
 
 ## Rust version
 

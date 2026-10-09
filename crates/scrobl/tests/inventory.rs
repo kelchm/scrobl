@@ -27,7 +27,7 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 const LEVELS: &[(&str, &str, &str)] = &[(
     "user.getRecentTracks",
     "`model::RecentTracksPage`",
-    "fixture-verified",
+    "live-verified",
 )];
 
 const BEGIN: &str = "<!-- BEGIN GENERATED -->";

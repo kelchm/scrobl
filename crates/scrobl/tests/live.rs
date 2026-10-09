@@ -95,12 +95,28 @@ async fn recent_tracks_against_the_live_service() {
     let user = env("SCROBL_LIVE_USER");
     let client = client(&key);
 
-    // A window that ended an hour ago cannot gain a scrobble while it is read.
+    // The week that ends at the user's latest scrobble, or an hour ago if
+    // that is earlier: a window in the past cannot gain a scrobble while it
+    // is read.
+    let latest = client
+        .user(&user)
+        .recent_tracks()
+        .limit(1)
+        .send()
+        .await
+        .unwrap();
+    capture("latest", latest.raw());
+    println!("history: {} scrobbles", latest.attr().total());
+    let latest = latest
+        .scrobbles()
+        .first()
+        .expect("the user has no scrobbles")
+        .timestamp();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let to = now - 3600;
+    let to = (latest + 1).min(now - 3600);
     let week = Window::new(to - 7 * 86_400, to).unwrap();
 
     // One page decodes, and the service echoes what was asked.
@@ -119,14 +135,15 @@ async fn recent_tracks_against_the_live_service() {
     let newest = first
         .scrobbles()
         .first()
-        .expect("the user scrobbled nothing in the last week: pick a busier user")
+        .expect("the window before the latest scrobble is empty")
         .timestamp();
     assert!(week.contains(newest));
 
-    // The whole week at the largest page size and at a small one: the scan's
+    // The whole week at the largest page size and at a small one, which
+    // takes several pages: the scan's
     // rules hold on real pages, and the two readings agree.
     let large = scan(&client, &user, week, 200, "week-200").await;
-    let small = scan(&client, &user, week, 50, "week-50").await;
+    let small = scan(&client, &user, week, 7, "week-7").await;
     assert_eq!(large, small, "the same window at two page sizes");
 
     // The bounds are `[from, to)`: `from` is inclusive and `to` exclusive.
