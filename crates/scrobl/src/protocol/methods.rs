@@ -4,6 +4,9 @@
 //! checked against `fixtures/official/method-parameters.json` by the
 //! `inventory` test. Differences between a page and the table are listed in
 //! `docs/endpoints.md`.
+//!
+//! `track.ban`, `track.unban`, `user.getArtistTracks` and
+//! `user.getNewReleases` are not in the index at that date and are left out.
 
 use super::method::{Auth, MethodSpec, Paging, ParamSpec, Requirement, Verb};
 

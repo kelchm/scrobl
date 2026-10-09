@@ -92,7 +92,7 @@ impl RecentTracksPage {
                 .with_method(raw.spec())
                 .with_response(raw.status(), raw.body()));
         }
-        let root = raw.json_value_strict()?;
+        let root = raw.json_strict()?;
         parse(root).map_err(|e| {
             e.with_method(raw.spec())
                 .with_response(raw.status(), raw.body())

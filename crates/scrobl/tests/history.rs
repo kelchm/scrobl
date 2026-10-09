@@ -1940,6 +1940,42 @@ fn recent_tracks_rejects_a_limit_outside_the_documented_range() {
 }
 
 #[test]
+fn recent_tracks_rejects_a_bound_that_looks_like_milliseconds() {
+    const LIMIT: u64 = 100_000_000_000;
+    // 2023-11-14 in milliseconds, on either side and in every constructor.
+    let millis = 1_700_000_000_000;
+    let too_large = [
+        Window::since(millis),
+        Window::before(millis),
+        Window::new(1_700_000_000, millis).unwrap(),
+        Window::new(millis, millis + 1).unwrap(),
+        Window::since(LIMIT),
+        Window::before(u64::MAX),
+    ];
+    for window in too_large {
+        let query = RecentTracks::new("rj").window(window);
+        let error = query.request().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest, "{window:?}");
+        assert!(error.to_string().contains("milliseconds"), "{error}");
+        assert_eq!(
+            query.scan().unwrap_err().kind(),
+            ErrorKind::InvalidRequest,
+            "{window:?}"
+        );
+    }
+    for window in [
+        Window::ALL,
+        Window::since(0),
+        Window::before(LIMIT - 1),
+        Window::new(1_700_000_000, 1_700_086_400).unwrap(),
+    ] {
+        let query = RecentTracks::new("rj").window(window);
+        assert!(query.request().is_ok(), "{window:?}");
+        assert!(query.scan().is_ok(), "{window:?}");
+    }
+}
+
+#[test]
 fn recent_tracks_as_user_reaches_the_request() {
     let request = RecentTracks::new("rj").as_user().request().unwrap();
     assert!(format!("{request:?}").contains("as_user: true"));

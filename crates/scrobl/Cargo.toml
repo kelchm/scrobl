@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "The full Last.fm API in Rust: reads, authentication and scrobbling."
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 repository.workspace = true
 publish.workspace = true
 

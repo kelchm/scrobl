@@ -183,8 +183,8 @@ impl ClientBuilder {
     /// it says so, and ignores proxy environment variables. Not part of the
     /// supported API.
     ///
-    /// Only a loopback root is accepted (`127.0.0.0/8`, `::1` or
-    /// `localhost`, with no user information, query or fragment), so the hook
+    /// Only a literal loopback root is accepted (`127.0.0.0/8` or `::1`,
+    /// with no user information, query or fragment), so the hook
     /// cannot switch off HTTPS or send a key to another host. Anything else
     /// fails at [`build`](Self::build).
     #[doc(hidden)]
@@ -257,7 +257,7 @@ impl ClientBuilder {
 }
 
 /// A root is only for tests, so it must be this machine: a literal loopback
-/// address or `localhost`. The messages say what is wrong, never what was
+/// address, not a name a resolver could point elsewhere. The messages say what is wrong, never what was
 /// given.
 fn check_base_url(url: &str) -> Result<(), Error> {
     let url =
@@ -277,16 +277,14 @@ fn check_base_url(url: &str) -> Result<(), Error> {
     // The parser has already made a numeric host canonical, and writes an
     // IPv6 one in brackets.
     let loopback = url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
     });
     if !loopback {
         return Err(Error::config(
-            "the base URL must be a loopback address or localhost",
+            "the base URL must be a literal loopback address",
         ));
     }
     Ok(())

@@ -4,6 +4,8 @@ A Rust client for the full Last.fm API: reads, authentication and scrobbling.
 
 Early development. Not affiliated with or endorsed by Last.fm.
 
+What works today: a raw, signed call to any of the 57 methods, and a typed, checked read of a user's scrobble history. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Nothing has been run against the live service yet.
+
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
 
@@ -55,6 +57,13 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features
 cargo test --all-features
 cargo test --no-default-features
+cargo llvm-cov --all-features --fail-under-lines 95
 ```
 
 Tests never call Last.fm. They use fixtures and a local fake server.
+
+The minimum supported Rust version is 1.88, and CI runs the tests on it.
+
+## License
+
+[MIT](LICENSE). Recorded fixtures from other projects keep their own licences, listed in [`crates/scrobl/fixtures/README.md`](crates/scrobl/fixtures/README.md).
