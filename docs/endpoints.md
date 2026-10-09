@@ -1,6 +1,6 @@
 # Endpoints
 
-Every method in the official Last.fm API index, with the verb, credentials, paging and parameters its documentation gives, and the level scrobl has reached for it. The levels (`inventoried`, `request-verified`, `fixture-verified`, `live-verified`) are defined under Coverage in [`design.md`](design.md), and this table is the release claim: a method is only as verified as its row says.
+Every method in the official Last.fm API index, with the verb, credentials, paging and parameters its documentation gives, and the level scrobl has reached for it. The levels (`inventoried`, `request-verified`, `typed-derived`, `fixture-verified`, `live-verified`) are defined under Coverage in [`design.md`](design.md), and this table is the release claim: a method is only as verified as its row says.
 
 The rows come from the method table in `crates/scrobl/src/protocol/methods.rs` and are checked against a snapshot of the official method pages dated 2026-10-05 (`crates/scrobl/fixtures/official/method-parameters.json`). Run `SCROBL_BLESS=1 cargo test --test inventory` to regenerate the block below; do not edit it by hand.
 

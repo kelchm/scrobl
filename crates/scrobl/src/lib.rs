@@ -9,4 +9,9 @@
 //! - The async client, behind the default `client` feature, executes those
 //!   requests with `reqwest` on the caller's Tokio runtime.
 
+mod error;
 pub mod protocol;
+mod secret;
+
+pub use error::{ApiErrorCode, Delivery, Error, ErrorKind, Retry};
+pub use secret::{ApiKey, ApiSecret, SessionKey};

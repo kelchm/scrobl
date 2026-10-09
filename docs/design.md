@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: proposed, 2026-10-08. Sections marked **open** wait on an owner decision; everything else is the contract the first implementation pass builds to. Code blocks are API sketches, not finished signatures.
+Status: 2026-10-08. Transport and coverage are decided; license and minimum Rust are still open. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -59,6 +59,7 @@ Rules:
 
 - `prepare` adds `method`, `api_key` and `format=json`, then `sk` and `api_sig` when the method's `Auth` needs them. It fails with `ErrorKind::InvalidRequest` when a required credential is missing, when the caller sets a reserved name (`method`, `api_key`, `api_sig`, `sk`, `format`, `callback`), or when a parameter name repeats.
 - The signature is the MD5 hex digest of every sent parameter except `format` and `callback`, as `name` then `value`, ordered by the UTF-8 bytes of the name, followed by the secret. Byte ordering puts `artist[10]` before `artist[1]`, which is what the service expects.
+- `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
 - `Raw` is the status, a small set of headers and the exact body bytes. Typed views are decoded from it and never replace it.
@@ -128,7 +129,7 @@ Every attempt, including a retry, takes a pacing slot. A slot is reserved under 
 
 Cancellation: dropping a future abandons the request. Nothing shared is left half-updated; a reserved pacing slot is simply spent. For a write, a dropped future means the delivery is unknown.
 
-**Open:** whether a blocking `ureq` adapter ships alongside. Recommendation: no. See [decisions](#open-decisions).
+There is no blocking adapter. A synchronous caller, such as the backup application, drives this client on a current-thread Tokio runtime.
 
 ## Errors
 
@@ -237,7 +238,11 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Coverage
 
-**Open:** whether every method needs a typed model for v1. Recommendation: no. Every method reaches *request-verified* (correct verb, credentials and parameters, raw response, error handling). A typed model is added only where a recorded response exists to check it against, starting with history, authentication, scrobble, now-playing and love. `endpoints.md` records the level each method has reached, and that table is the release claim.
+Every method gets a typed model for v1. Recorded responses exist for only a few methods, so most models are first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+
+- `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
+- The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
+- A derived model is promoted only when an approved live read confirms it.
 
 Levels:
 
@@ -245,6 +250,7 @@ Levels:
 |---|---|
 | `inventoried` | In the table with its documented verb, credentials and parameters |
 | `request-verified` | Request construction tested against the official parameter snapshot; raw response and errors handled |
+| `typed-derived` | A typed model written from documentation, tested against derived fixtures only |
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
@@ -258,12 +264,12 @@ Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
 
 No fixture comes from the owner's account and no test calls Last.fm. Credentials in fixtures are obvious sentinels.
 
-## Open decisions
+## Decisions
 
-| Decision | Recommendation |
+| Decision | State |
 |---|---|
-| Transport | One async `reqwest` client. No `ureq` adapter and no public transport trait until a consumer needs one. |
-| Coverage | Request-verified for all 57 methods; typed models where a recorded response exists. |
-| License | `MIT OR Apache-2.0`. |
-| MSRV | Declare 1.90, the Tauri 2 floor, and check it in CI. No stronger promise before publication. |
-| Visibility | Stay private until v1 passes its gates. |
+| Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
+| Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
+| License | Open; likely MIT. Until it is chosen there is no `LICENSE` file and the workspace is `publish = false`. |
+| Minimum Rust | Open. 1.90, the Tauri 2 floor, is declared provisionally and checked in CI. |
+| Visibility | Decided: private until v1 passes its gates. |
