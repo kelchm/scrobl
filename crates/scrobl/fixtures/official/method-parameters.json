@@ -1,0 +1,558 @@
+{
+  "snapshot": "2026-10-05",
+  "source": "https://www.last.fm/api",
+  "methods": [
+    {
+      "name": "album.addTags",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "album", "label": "(Required)"},
+        {"name": "tags", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "album.getInfo",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "album", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "username", "label": "(Optional)"},
+        {"name": "lang", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "album.getTags",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "album", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "user", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "album.getTopTags",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "album", "label": "(Required (unless mbid)]"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "album.removeTag",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "album", "label": "(Required)"},
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "album.search",
+      "params": [
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "album", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.addTags",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "tags", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getCorrection",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getInfo",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "lang", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "username", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getSimilar",
+      "params": [
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getTags",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "user", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getTopAlbums",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getTopTags",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.getTopTracks",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.removeTag",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "artist.search",
+      "params": [
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "artist", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "auth.getMobileSession",
+      "params": [
+        {"name": "password", "label": "(Required)"},
+        {"name": "username", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "auth.getSession",
+      "params": [
+        {"name": "token", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "auth.getToken",
+      "params": [
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "chart.getTopArtists",
+      "params": [
+        {"name": "page", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "chart.getTopTags",
+      "params": [
+        {"name": "page", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "chart.getTopTracks",
+      "params": [
+        {"name": "page", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "geo.getTopArtists",
+      "params": [
+        {"name": "country", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "geo.getTopTracks",
+      "params": [
+        {"name": "country", "label": "(Required)"},
+        {"name": "location", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "library.getArtists",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getInfo",
+      "params": [
+        {"name": "lang", "label": "(Optional)"},
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getSimilar",
+      "params": [
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getTopAlbums",
+      "params": [
+        {"name": "tag", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getTopArtists",
+      "params": [
+        {"name": "tag", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getTopTags",
+      "params": [
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getTopTracks",
+      "params": [
+        {"name": "tag", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "tag.getWeeklyChartList",
+      "params": [
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.addTags",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "track", "label": "(Required)"},
+        {"name": "tags", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.getCorrection",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "track", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.getInfo",
+      "params": [
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "track", "label": "(Required (unless mbid)]"},
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "username", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.getSimilar",
+      "params": [
+        {"name": "track", "label": "(Required (unless mbid)]"},
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.getTags",
+      "params": [
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "track", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "user", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.getTopTags",
+      "params": [
+        {"name": "track", "label": "(Required (unless mbid)]"},
+        {"name": "artist", "label": "(Required (unless mbid)]"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "autocorrect[0|1]", "normalized": "autocorrect", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.love",
+      "params": [
+        {"name": "track", "label": "(Required)"},
+        {"name": "artist", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.removeTag",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "track", "label": "(Required)"},
+        {"name": "tag", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.scrobble",
+      "params": [
+        {"name": "artist[i]", "normalized": "artist", "label": "(Required)"},
+        {"name": "track[i]", "normalized": "track", "label": "(Required)"},
+        {"name": "timestamp[i]", "normalized": "timestamp", "label": "(Required)"},
+        {"name": "album[i]", "normalized": "album", "label": "(Optional)"},
+        {"name": "context[i]", "normalized": "context", "label": "(Optional)"},
+        {"name": "streamId[i]", "normalized": "streamId", "label": "(Optional)"},
+        {"name": "chosenByUser[i]", "normalized": "chosenByUser", "label": "(Optional)"},
+        {"name": "trackNumber[i]", "normalized": "trackNumber", "label": "(Optional)"},
+        {"name": "mbid[i]", "normalized": "mbid", "label": "(Optional)"},
+        {"name": "albumArtist[i]", "normalized": "albumArtist", "label": "(Optional)"},
+        {"name": "duration[i]", "normalized": "duration", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.search",
+      "params": [
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "track", "label": "(Required)"},
+        {"name": "artist", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.unlove",
+      "params": [
+        {"name": "track", "label": "(Required)"},
+        {"name": "artist", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "track.updateNowPlaying",
+      "params": [
+        {"name": "artist", "label": "(Required)"},
+        {"name": "track", "label": "(Required)"},
+        {"name": "album", "label": "(Optional)"},
+        {"name": "trackNumber", "label": "(Optional)"},
+        {"name": "context", "label": "(Optional)"},
+        {"name": "mbid", "label": "(Optional)"},
+        {"name": "duration", "label": "(Optional)"},
+        {"name": "albumArtist", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"},
+        {"name": "api_sig", "label": "(Required)"},
+        {"name": "sk", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getFriends",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "recenttracks", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getInfo",
+      "params": [
+        {"name": "user", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getLovedTracks",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getPersonalTags",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "tag", "label": "(Required)"},
+        {"name": "taggingtype[artist|album|track]", "normalized": "taggingtype", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getRecentTracks",
+      "params": [
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "user", "label": "(Required)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "from", "label": "(Optional)"},
+        {"name": "extended (0|1)", "normalized": "extended", "label": "(Optional)"},
+        {"name": "to", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getTopAlbums",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "period", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getTopArtists",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "period", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getTopTags",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getTopTracks",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "period", "label": "(Optional)"},
+        {"name": "limit", "label": "(Optional)"},
+        {"name": "page", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getWeeklyAlbumChart",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "from", "label": "(Optional)"},
+        {"name": "to", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getWeeklyArtistChart",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "from", "label": "(Optional)"},
+        {"name": "to", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getWeeklyChartList",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    },
+    {
+      "name": "user.getWeeklyTrackChart",
+      "params": [
+        {"name": "user", "label": "(Required)"},
+        {"name": "from", "label": "(Optional)"},
+        {"name": "to", "label": "(Optional)"},
+        {"name": "api_key", "label": "(Required)"}
+      ]
+    }
+  ]
+}

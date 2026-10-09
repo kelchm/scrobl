@@ -5,6 +5,7 @@ A Rust client for the full Last.fm API: reads, authentication and scrobbling.
 Early development. Not affiliated with or endorsed by Last.fm.
 
 - [Design](docs/design.md)
+- [Endpoints](docs/endpoints.md): every method and how far it is verified
 
 ## Development
 
