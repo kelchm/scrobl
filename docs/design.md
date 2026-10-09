@@ -351,4 +351,4 @@ No fixture comes from the owner's account and no test calls Last.fm. Credentials
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
 | License | Decided: MIT. The workspace stays `publish = false` until the owner releases. |
 | Minimum Rust | Decided: 1.88, tested in CI. See Rust version. |
-| Visibility | Decided: private until v1 passes its gates. |
+| Visibility | Decided: the repository is public. Nothing is published to crates.io yet. |
