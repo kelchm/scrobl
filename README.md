@@ -84,4 +84,4 @@ The minimum supported Rust version is 1.88, and CI runs the tests on it.
 
 ## License
 
-[MIT](LICENSE). Recorded fixtures from other projects keep their own licences, listed in [`crates/scrobl/fixtures/README.md`](crates/scrobl/fixtures/README.md).
+[MIT](LICENSE). No fixture is copied from another project. Where each fixture came from is listed in [`crates/scrobl/fixtures/README.md`](crates/scrobl/fixtures/README.md).

@@ -124,7 +124,7 @@ The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It ne
 
 The client drives it as `Scan` (below). A page the scan has yielded is provisional until `finish` succeeds, because a later page or `finish` itself can still fail a rule; a consumer stages what it writes and marks it complete only then. `next_page` sends the outstanding request through the same paced, retried `call` as any read and hands the result to `accept`. An error from the transport or the API leaves the page outstanding, so calling `next_page` again sends the identical request. An error from `accept` kills the scan: later calls fail with `Inconsistent` and send nothing, and never read as a finished scan. The core offers no request once a scan is dead, which on its own would look like completion, so `Scan` remembers the failure and reports it. The request handed to `call` and then to `accept` is exactly the one `next_request` returned, since `accept` refuses a response to any other.
 
-The `[from, to)` rule comes from one recorded third-party exchange, not a documented guarantee. That is why it is checked on every page rather than assumed.
+The `[from, to)` rule comes from the live service as seen on 2026-10-08, not from a documented guarantee. That is why it is checked on every page rather than assumed.
 
 #### What a completed scan does not prove
 
@@ -308,7 +308,7 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Coverage
 
-Every method gets a typed model for v1. One recorded response exists so far, for `user.getRecentTracks`, which is also the only method with a typed model, so most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. Recorded responses exist so far only for `user.getRecentTracks`, which is also the only method with a typed model, so most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
@@ -350,11 +350,11 @@ The minimum is Rust 1.88, the lowest version that works: the code uses let chain
 
 Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
 
-- **recorded**: a real exchange captured by someone else, with source repository, commit, path and license. Only what a test needs is kept.
+- **recorded**: a real exchange captured by the repository owner from their own account, with the request, the date and the HTTP status. The body is kept byte for byte.
 - **derived**: written from official documentation or a recorded fixture, with the source named.
 - **synthetic**: invented, including everything the fake server generates.
 
-No fixture comes from the owner's account and no test calls Last.fm. Credentials in fixtures are obvious sentinels.
+The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture, and no test calls Last.fm.
 
 ## Decisions
 
