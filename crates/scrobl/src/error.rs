@@ -16,6 +16,7 @@ const MAX_DETAIL: usize = 256;
 /// The one write method that must never be repeated, because a later
 /// "now playing" is simply a newer one.
 const UPDATE_NOW_PLAYING: &str = "track.updateNowPlaying";
+const GET_SESSION: &str = "auth.getSession";
 
 /// Cuts `s` to at most `max` bytes without splitting a character.
 pub(crate) fn truncate_utf8(s: &str, max: usize) -> &str {
@@ -241,6 +242,10 @@ impl Error {
     /// that certainly sent nothing is [`Retry::Later`]. Anything whose
     /// [`delivery`](Self::delivery) is [`Delivery::Unknown`] is
     /// [`Retry::No`], and `track.updateNowPlaying` is always [`Retry::No`].
+    ///
+    /// `auth.getSession` spends its token, so a timeout or a transport
+    /// failure after the request may have left is [`Retry::No`] for it too:
+    /// a repeat could only fail, and would hide what happened to the first.
     pub fn retry(&self) -> Retry {
         let inner = &*self.inner;
         let write = inner.spec.is_some_and(|spec| spec.write());
@@ -251,6 +256,14 @@ impl Error {
             return Retry::No;
         }
         if write && self.delivery() == Some(Delivery::Unknown) {
+            return Retry::No;
+        }
+        let possibly_received = match inner.kind {
+            ErrorKind::Timeout => true,
+            ErrorKind::Transport => inner.possibly_sent,
+            _ => false,
+        };
+        if possibly_received && inner.spec.is_some_and(|spec| spec.name() == GET_SESSION) {
             return Retry::No;
         }
         match inner.kind {

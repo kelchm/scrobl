@@ -869,6 +869,37 @@ async fn gate5_transport_failures_of_a_read_are_retried() {
 }
 
 #[tokio::test]
+async fn gate5_get_session_is_sent_once_when_it_may_have_arrived() {
+    // The token is spent by the first request that arrives.
+    let session = || Request::new(&methods::AUTH_GET_SESSION).param("token", "t");
+    bounded(async {
+        for (label, behaviour) in [
+            ("truncated body", Behaviour::TruncatedBody),
+            ("hang-up", Behaviour::Close),
+        ] {
+            let server = serve(dataset(), [behaviour]).await;
+            let error = client(&server).call(&session()).await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Transport, "{label}");
+            assert_eq!(server.request_count(), 1, "{label}");
+        }
+        let server = serve(dataset(), [Behaviour::StallBeforeResponse]).await;
+        let client = builder(&server)
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let error = client.call(&session()).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert_eq!(server.request_count(), 1, "timeout");
+
+        // An answer that says "try later" means the token was not spent.
+        let server = serve(dataset(), [Behaviour::html(500)]).await;
+        let _ = self::client(&server).call(&session()).await;
+        assert_eq!(server.request_count(), 2, "HTTP 500");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn gate5_waits_double_and_a_rate_limit_waits_five_times_as_long() {
     bounded(async {
         let delay = Duration::from_millis(40);

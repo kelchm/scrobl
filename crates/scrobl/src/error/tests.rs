@@ -298,6 +298,31 @@ fn update_now_playing_is_never_retried() {
 }
 
 #[test]
+fn get_session_is_not_retried_once_it_may_have_been_received() {
+    let spec = &crate::protocol::methods::AUTH_GET_SESSION;
+    let mut refused = Vec::new();
+    for row in ROWS {
+        let error = (row.make)(spec);
+        let possibly_received = match error.kind() {
+            ErrorKind::Timeout => true,
+            ErrorKind::Transport => row.delivery == Unknown,
+            _ => false,
+        };
+        if possibly_received {
+            assert_eq!(error.retry(), No, "{}", row.label);
+            assert_eq!(row.read, Later, "{}: a read would be retried", row.label);
+            refused.push(row.label);
+        } else {
+            assert_eq!(error.retry(), row.read, "{}", row.label);
+        }
+        // Another signed read keeps the ordinary advice.
+        let token = &crate::protocol::methods::AUTH_GET_TOKEN;
+        assert_eq!((row.make)(token).retry(), row.read, "{}", row.label);
+    }
+    assert_eq!(refused.len(), 2, "{refused:?}");
+}
+
+#[test]
 fn delivery_is_none_for_a_read() {
     for row in ROWS {
         assert_eq!((row.make)(&READ).delivery(), None, "{}", row.label);
