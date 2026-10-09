@@ -6,9 +6,11 @@ use std::fmt;
 use bytes::Bytes;
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde_json::Value;
 use serde_json::error::Category;
 
 use super::Request;
+use crate::de::StrictError;
 use crate::error::{ApiErrorCode, Error, truncate_utf8};
 use crate::protocol::MethodSpec;
 
@@ -76,13 +78,15 @@ impl fmt::Debug for HttpResponse {
     }
 }
 
-/// A successful response: the status, a few headers and the exact body bytes.
+/// A successful response: the status, a few headers, the exact body bytes
+/// and the [`Request`] it answers.
 ///
 /// Typed views are decoded from it and never replace it. Its `Debug` output
-/// leaves the body out, because some responses carry a session key.
+/// leaves the body and the request's parameters out, because some responses
+/// carry a session key.
 #[derive(Clone)]
 pub struct Raw {
-    spec: &'static MethodSpec,
+    request: Request,
     status: u16,
     headers: Vec<(&'static str, String)>,
     body: Bytes,
@@ -110,7 +114,19 @@ impl Raw {
 
     /// The Last.fm method the response is for.
     pub fn method(&self) -> &'static str {
-        self.spec.name
+        self.request.method()
+    }
+
+    /// The request this response answers, as it was given to [`decode`].
+    /// A consumer that pairs responses with requests compares it to the
+    /// one it sent. Its `Debug` hides credential values, which `Raw`'s own
+    /// does not print at all.
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+
+    pub(crate) fn spec(&self) -> &'static MethodSpec {
+        self.request.spec()
     }
 
     /// Deserializes the body.
@@ -120,7 +136,26 @@ impl Raw {
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
         serde_json::from_slice(&self.body).map_err(|e| {
             Error::decode(&describe(&e))
-                .with_method(self.spec)
+                .with_method(self.spec())
+                .with_response(self.status, &self.body)
+        })
+    }
+}
+
+impl Raw {
+    /// The body as a [`Value`], failing on an object that repeats a member
+    /// name at any depth. [`json`](Self::json) would keep the last of the two
+    /// and say nothing. Neither error repeats text from the body.
+    pub(crate) fn json_value_strict(&self) -> Result<Value, Error> {
+        crate::de::strict_value(&self.body).map_err(|e| {
+            let problem = match e {
+                StrictError::Duplicate { line, column } => {
+                    format!("an object repeats a member name, at line {line} column {column}")
+                }
+                StrictError::Json(e) => describe(&e),
+            };
+            Error::decode(&problem)
+                .with_method(self.spec())
                 .with_response(self.status, &self.body)
         })
     }
@@ -129,7 +164,7 @@ impl Raw {
 impl fmt::Debug for Raw {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Raw")
-            .field("method", &self.spec.name)
+            .field("method", &self.method())
             .field("status", &self.status)
             .field("headers", &self.headers)
             .field("body_len", &self.body.len())
@@ -149,7 +184,8 @@ fn describe(e: &serde_json::Error) -> String {
     }
 }
 
-/// Reads the response to `request`.
+/// Reads the response to `request`. A [`Raw`] keeps a copy of `request`, so
+/// that whoever holds the response can check what it answers.
 ///
 /// Never panics, whatever the bytes.
 ///
@@ -215,7 +251,7 @@ pub fn decode(request: &Request, response: HttpResponse) -> Result<Raw, Error> {
             &body,
         )),
         Some(Probe::Plain) if success => Ok(Raw {
-            spec,
+            request: request.clone(),
             status,
             headers,
             body,

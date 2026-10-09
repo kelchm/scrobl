@@ -818,3 +818,50 @@ fn a_plain_read_ignores_a_session_it_was_not_asked_to_use() {
     assert_eq!(get(&params, "sk"), None);
     assert_eq!(get(&params, "api_sig"), None);
 }
+
+#[test]
+fn get_reads_the_first_parameter_set_under_a_name() {
+    let request = Request::new(&READ)
+        .param("user", "rj")
+        .param("limit", 5)
+        .param("user", "second")
+        .indexed("artist", 0, "A");
+    assert_eq!(request.get("user"), Some("rj"));
+    assert_eq!(request.get("limit"), Some("5"));
+    assert_eq!(request.get("artist[0]"), Some("A"));
+    assert_eq!(request.get("artist"), None);
+    assert_eq!(request.get("absent"), None);
+    assert_eq!(request.get("User"), None, "names are matched exactly");
+}
+
+#[test]
+fn requests_are_equal_by_method_parameters_in_order_and_as_user() {
+    let base = || Request::new(&READ).param("user", "rj").param("limit", 5);
+    assert_eq!(base(), base());
+    assert_ne!(base(), base().param("extra", 1));
+    assert_ne!(
+        base(),
+        Request::new(&READ).param("limit", 5).param("user", "rj")
+    );
+    assert_ne!(
+        base(),
+        Request::new(&READ).param("user", "rj").param("limit", 6)
+    );
+    assert_ne!(
+        base(),
+        Request::new(&READ).param("user", "RJ").param("limit", 5)
+    );
+    assert_ne!(base(), base().as_user());
+    assert_eq!(base().as_user(), base().as_user());
+    // Same parameters, another method.
+    let other = Request::new(&SIGNED_GET)
+        .param("user", "rj")
+        .param("limit", 5);
+    assert_ne!(base(), other);
+}
+
+#[test]
+fn a_clone_equals_its_original() {
+    let request = Request::new(&SCROBBLE).indexed("artist", 0, "A").as_user();
+    assert_eq!(request.clone(), request);
+}

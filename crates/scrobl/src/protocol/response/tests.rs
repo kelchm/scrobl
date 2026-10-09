@@ -569,3 +569,15 @@ proptest! {
         prop_assert_eq!(error.http_status(), Some(status));
     }
 }
+
+#[test]
+fn a_raw_carries_the_request_it_answers() {
+    let request = Request::new(&SIGNED_GET).param("token", SENTINEL_TOKEN);
+    let raw = decode(&request, response(200, br#"{"ok": true}"#)).unwrap();
+    assert_eq!(raw.request(), &request);
+    assert_eq!(raw.request().get("token"), Some(SENTINEL_TOKEN));
+    assert_eq!(raw.method(), request.method());
+    // The request is kept for comparison, not for display.
+    assert!(!format!("{raw:?}").contains(SENTINEL_TOKEN));
+    assert!(!format!("{:?}", raw.clone()).contains(SENTINEL_TOKEN));
+}

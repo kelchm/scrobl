@@ -335,14 +335,12 @@ impl Error {
 
     /// A field was missing or malformed. `path` names it, for example
     /// `recenttracks.@attr.total`; `problem` must not contain response text.
-    #[allow(dead_code)] // Raised by the typed views.
     pub(crate) fn decode_field(path: &str, problem: &str) -> Self {
         Self::decode(&format!("field `{path}`: {problem}"))
     }
 
     /// A response broke a consistency rule. `rule` must not contain
     /// response text.
-    #[allow(dead_code)] // Raised by the history scan.
     pub(crate) fn inconsistent(rule: &str) -> Self {
         Self::from_kind(ErrorKind::Inconsistent).with_detail(rule)
     }

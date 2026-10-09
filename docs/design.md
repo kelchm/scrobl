@@ -26,7 +26,7 @@ crates/scrobl/
       response.rs      HttpResponse -> Raw, error envelope at every status
     de.rs              tolerant scalar decoding (number-or-string, one-or-many)
     model/             typed views, one module per API package
-    history.rs         WindowScan: the validated recent-tracks scan, I/O-free
+    history.rs         Window, RecentTracks, WindowScan: the validated recent-tracks scan, I/O-free
     client/            feature "client": reqwest executor, pacing, retries
   tests/               integration tests, fake Last.fm server
   fixtures/            labelled recorded / derived / synthetic
@@ -62,7 +62,7 @@ Rules:
 - `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
-- `Raw` is the status, a small set of headers and the exact body bytes. Typed views are decoded from it and never replace it.
+- `Raw` is the status, a small set of headers, the exact body bytes and the `Request` it answers. Typed views are decoded from it and never replace it. `Request` compares by method, parameters in order and the `as_user` flag, so a consumer can tell whether a response answers the request it holds.
 - `HttpRequest`'s `Debug` and every error redact `api_key`, `api_sig`, `sk`, `token` and `password` values. No error carries a URL.
 
 There is no public transport trait. A caller with another HTTP client uses `prepare` and `decode` directly.
@@ -72,7 +72,7 @@ There is no public transport trait. A caller with another HTTP client uses `prep
 Typed models are decoded from `Raw` on request. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable:
 
 ```rust
-let page: RecentTracksPage = raw.decode()?;
+let page = RecentTracksPage::decode(&raw)?;
 for scrobble in page.scrobbles() {
     scrobble.timestamp();        // seconds since the epoch, always present for a scrobble
     scrobble.track().name();
@@ -84,14 +84,17 @@ page.now_playing();              // Option<&NowPlaying>, never mixed into scrobb
 page.attr();                     // user, page, per_page, total_pages, total
 ```
 
-Decoding rules: counts and timestamps accept a JSON number or a numeric string, and nothing else. A field that can be one object or an array of them decodes to a list either way. A malformed value is an error naming the field; it is never dropped or defaulted. A history row with neither a valid `date.uts` nor the now-playing flag is an error, not a skipped row.
+Decoding rules: counts and timestamps accept a JSON number or a numeric string, and nothing else. A field that can be one object or an array of them decodes to a list either way. A malformed value is an error naming the field, such as `recenttracks.track[3].date.uts`; it is never dropped or defaulted. A history row with neither a valid `date.uts` nor the now-playing flag is an error, not a skipped row. A row flagged now-playing is never a scrobble, whether or not it carries a date; a row whose flag is false is an ordinary historical row. `track` may be an array or a single object, and for an empty page absent, `[]` or `""`, but those three only when the page's own `@attr` allows no rows (`total` is 0, or `page` is beyond `totalPages`); a missing or misspelled `track` on a page that promises rows is an error, as is anything else. An `artist` that carries both `name` and `#text` must carry the same string in each, and each one present must be a string. An object that repeats a member name, at any depth, is a decode error rather than a silent last-one-wins; the error gives a line and column and never the name. `loved()` reflects the field as returned, which is present only on extended pages. `Debug` on a model leaves out the response text.
 
 ### History scan
 
 `WindowScan` is the validated read of one time window of `user.getRecentTracks`. It is an I/O-free state machine, so every pagination rule is tested without a socket; the client drives it.
 
 ```rust
-let mut scan = WindowScan::new(user, Window::new(from, to)).extended(true);
+let mut scan = RecentTracks::new(user)
+    .window(Window::new(from, to)?)
+    .extended(true)
+    .scan()?;                          // validates; the scan cannot be changed afterwards
 while let Some(request) = scan.next_request() {
     let raw = /* execute */;
     let page = scan.accept(raw)?;      // validates, then yields the page
@@ -99,19 +102,33 @@ while let Some(request) = scan.next_request() {
 let summary = scan.finish()?;          // total scrobbles, pages, the window
 ```
 
-It pages by page number under bounds that never change, with `limit=200` on every request. It never uses a timestamp as a cursor and never removes duplicates, so same-second and identical scrobbles survive. Each page must satisfy all of the following, and any failure is `ErrorKind::Inconsistent` naming the rule, after which the scan yields nothing further:
+A scan is made only by `RecentTracks::scan`, from the builder's user, window, `extended`, `as_user` and `limit`. It has no setters, so a running scan cannot change: every request it issues is equal to the others apart from `page`. It pages by page number under bounds that never change, with the same `limit` on every request: the builder's `limit`, or 200 when unset, and never more than 200, the documented maximum. `scan` fails with `ErrorKind::InvalidRequest` when `limit` is outside 1 to 200 or when `page` was set, since a scan chooses its own pages. `RecentTracks::request` builds one such request on its own and rejects a `limit` outside 1 to 200 or a `page` of 0 the same way; nothing is clamped. It never uses a timestamp as a cursor and never removes duplicates, so same-second and identical scrobbles survive.
+
+`accept` first checks that the response answers the outstanding request, by comparing `Raw::request` with it. A response to any other request, for another window, page, user, limit or `extended`, is `ErrorKind::Inconsistent` ("the response answers a different request") and is refused without being decoded. Each page must then satisfy all of the following, and any failure is `ErrorKind::Inconsistent` naming the rule, after which the scan yields nothing further:
 
 1. `@attr.user` equals the requested user, ignoring case.
 2. `@attr.page` equals the requested page and `@attr.perPage` equals the requested limit.
-3. `@attr.total` and `@attr.totalPages` are present and identical on every page of the scan, and `totalPages` equals `ceil(total / perPage)`.
+3. `@attr.total` and `@attr.totalPages` are present and identical on every page of the scan, and `totalPages` equals `ceil(total / perPage)`; when `total` is 0 it may be 0 or 1.
 4. The number of scrobbles on the page is exactly what the totals imply: `perPage` on every page but the last, the remainder on the last. A now-playing row is not a scrobble and is not counted.
 5. Every scrobble timestamp lies in `[from, to)`: `from` inclusive, `to` exclusive.
 6. Timestamps never increase, within a page or from one page to the next.
 7. At `finish`, the scrobbles seen equal `total`.
 
-The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It never issues a request with altered bounds. A scan without an upper bound is allowed but will fail rule 3 if the user scrobbles while it runs; callers that need a complete read fix `to` first.
+The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It never issues a request with altered bounds. `next_request` returns the same request until a page is accepted, so a transport failure can be retried without skipping or repeating a page. A response that does not reach `accept` (an API error envelope, a non-JSON body) does not poison the scan, and an empty window is a successful scan with `total` 0, which an error is not. A scan without an upper bound is allowed. It sees scrobbles that arrive while it runs, which usually changes `total` and fails rule 3, but not always (see below); callers who want a more stable read fix `to` first.
 
 The `[from, to)` rule comes from one recorded third-party exchange, not a documented guarantee. That is why it is checked on every page rather than assumed.
+
+#### What a completed scan does not prove
+
+Success means every page satisfied the rules against the service's own totals at the time that page was read. It does not mean the rows are what the window held at any one moment. Plainly:
+
+- A scrobble arriving and another being deleted between two page reads leaves `total` unchanged and can shift a row across a page boundary, giving one duplicate and one omission. A fixed `to` keeps arrivals at the head out of the window, but not backdated additions or deletions inside it.
+- If the service changes the order of same-second rows between page reads, a row can repeat and another go missing with no rule broken.
+- A page repeated under a new page number is caught by rule 6 only if its timestamps differ from the previous page's last. Listens can be identical, so equal rows cannot be rejected.
+- A coherent wrong answer cannot be detected from the response alone: another user's rows under the right `@attr.user`, or rows left out with the totals reduced to match.
+- Fixed bounds are not snapshot isolation.
+
+An application that needs more reads the window again and compares the two reads. The library never deduplicates. The test suite pins the first three cases as documented behaviour, so a change in detection is a visible decision.
 
 ### Client
 
@@ -179,8 +196,9 @@ let client = scrobl::Client::builder(api_key)
 
 // One closed window, read completely or not at all.
 let mut scan = client.user("rj").recent_tracks()
+    .window(Window::new(from, to)?)
     .extended(true)
-    .scan(Window::new(from, to));
+    .scan()?;
 
 while let Some(page) = scan.next_page().await? {
     archive.write(page.raw().body())?;       // the exact bytes Last.fm sent
@@ -190,7 +208,7 @@ let summary = scan.finish()?;                // fails unless every rule held
 
 // A count probe: one request, the window's total.
 let total = client.user("rj").recent_tracks()
-    .window(Window::new(from, to))
+    .window(Window::new(from, to)?)
     .limit(1)
     .send().await?
     .attr().total();
@@ -209,7 +227,7 @@ The backup application runs this on a current-thread Tokio runtime. Storage, sch
 #[tauri::command]
 async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Result<Vec<Row>, UiError> {
     let page = client.user(&user).recent_tracks().limit(50).send().await?;
-    Ok(page.scrobbles().map(Row::from).collect())
+    Ok(page.scrobbles().iter().map(Row::from).collect())
 }
 ```
 
