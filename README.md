@@ -57,6 +57,7 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features
 cargo test --all-features
 cargo test --no-default-features
+cargo llvm-cov --all-features --fail-under-lines 95
 ```
 
 Tests never call Last.fm. They use fixtures and a local fake server.

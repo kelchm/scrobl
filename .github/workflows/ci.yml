@@ -32,6 +32,15 @@ jobs:
       - run: cargo doc --locked --no-deps --no-default-features
       - run: cargo deny check advisories licenses
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      # The floor sits just under what the suite measures, so a change that
+      # adds untested code fails here. Raise it as coverage rises.
+      - run: cargo llvm-cov --locked --all-features --fail-under-lines 95
+
   msrv:
     runs-on: ubuntu-latest
     steps:
