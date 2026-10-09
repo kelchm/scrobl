@@ -4,7 +4,7 @@ A Rust client for the full Last.fm API: reads, authentication and scrobbling.
 
 Early development. Not affiliated with or endorsed by Last.fm.
 
-What works today: a raw, signed call to any of the 57 methods, and a typed, checked read of a user's scrobble history. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Nothing has been run against the live service yet.
+What works today: a raw, signed call to any of the 57 methods, and a typed, checked read of a user's scrobble history. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
 
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified

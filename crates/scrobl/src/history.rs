@@ -20,8 +20,9 @@ const SPEC: &MethodSpec = &methods::USER_GET_RECENT_TRACKS;
 /// A half-open range of Unix seconds: `from` is inclusive and `to` is
 /// exclusive. Either bound can be absent.
 ///
-/// The service documents neither bound's inclusivity. The rule comes from
-/// one recorded exchange, and [`WindowScan`] checks it on every page.
+/// The service documents neither bound's inclusivity. The rule was seen on
+/// the live service on 2026-10-08 (the `live` test repeats the check), and
+/// [`WindowScan`] checks it on every page.
 ///
 /// A `to` of 0 is an empty window. The service may read `to=0` as "no
 /// bound"; a scan would then see rows outside the window and fail.
