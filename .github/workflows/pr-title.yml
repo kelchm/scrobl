@@ -1,0 +1,26 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The title becomes the squashed commit on main. See AGENTS.md.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|test|refactor|perf|build|ci|chore)!?: [a-z0-9`].*[^.]$'
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern"; then
+            echo "::error::The title must be 'type: summary' in lower case with no full stop. See AGENTS.md."
+            exit 1
+          fi
+          if [ "${#TITLE}" -gt 72 ]; then
+            echo "::error::The title is ${#TITLE} characters; the limit is 72."
+            exit 1
+          fi

@@ -104,6 +104,8 @@ cargo llvm-cov --all-features --fail-under-lines 95
 
 Tests never call Last.fm. They use fixtures and a local fake server.
 
+How changes are made, for people and for agents, is in [`AGENTS.md`](AGENTS.md).
+
 The minimum supported Rust version is 1.88, and CI runs the tests on it.
 
 ## License

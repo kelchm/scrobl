@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: build
     groups:
       cargo:
         patterns: ["*"]
@@ -11,6 +13,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
     groups:
       actions:
         patterns: ["*"]
