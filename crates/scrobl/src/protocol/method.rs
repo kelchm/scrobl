@@ -48,30 +48,72 @@ pub enum Paging {
 /// `api_key`, `api_sig`, `sk`, `method` and `format` are implied by
 /// [`Auth`] and are never listed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct ParamSpec {
+    pub(super) name: &'static str,
+    pub(super) requirement: Requirement,
+    pub(super) indexed: bool,
+}
+
+impl ParamSpec {
     /// The parameter name as sent, without any batch index.
-    pub name: &'static str,
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
     /// Whether the documentation requires it.
-    pub requirement: Requirement,
+    pub const fn requirement(&self) -> Requirement {
+        self.requirement
+    }
+
     /// Whether the name takes a batch index, as in `artist[3]`.
-    pub indexed: bool,
+    pub const fn indexed(&self) -> bool {
+        self.indexed
+    }
 }
 
 /// One Last.fm API method.
+///
+/// Specs come only from [`methods`](super::methods). A spec cannot be built
+/// or changed outside this crate, so a method's verb, credentials and
+/// `write` flag are always the table's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct MethodSpec {
+    pub(super) name: &'static str,
+    pub(super) verb: Verb,
+    pub(super) auth: Auth,
+    pub(super) write: bool,
+    pub(super) paging: Paging,
+    pub(super) params: &'static [ParamSpec],
+}
+
+impl MethodSpec {
     /// The method name as sent, such as `user.getRecentTracks`.
-    pub name: &'static str,
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
     /// The HTTP verb.
-    pub verb: Verb,
+    pub const fn verb(&self) -> Verb {
+        self.verb
+    }
+
     /// The credentials the method needs.
-    pub auth: Auth,
+    pub const fn auth(&self) -> Auth {
+        self.auth
+    }
+
     /// Whether the method changes anything on the account.
-    pub write: bool,
+    pub const fn write(&self) -> bool {
+        self.write
+    }
+
     /// How results are paged.
-    pub paging: Paging,
+    pub const fn paging(&self) -> Paging {
+        self.paging
+    }
+
     /// The documented parameters.
-    pub params: &'static [ParamSpec],
+    pub const fn params(&self) -> &'static [ParamSpec] {
+        self.params
+    }
 }

@@ -47,6 +47,21 @@ impl Credentials {
             .chain(self.session.iter().map(SessionKey::expose))
     }
 
+    /// The name of the first credential held that is empty or only
+    /// whitespace, for a message that must not repeat the value.
+    #[cfg(feature = "client")]
+    pub(crate) fn blank(&self) -> Option<&'static str> {
+        if self.api_key.is_blank() {
+            Some("API key")
+        } else if self.secret.as_ref().is_some_and(ApiSecret::is_blank) {
+            Some("API secret")
+        } else if self.session.as_ref().is_some_and(SessionKey::is_blank) {
+            Some("session key")
+        } else {
+            None
+        }
+    }
+
     /// Credentials with an API key only, enough for plain reads.
     pub fn new(api_key: ApiKey) -> Self {
         Self {

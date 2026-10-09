@@ -87,7 +87,7 @@ impl RecentTracksPage {
     /// `recenttracks.@attr.total` or `recenttracks.track[3].date.uts`, and
     /// never repeats response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        if raw.method() != methods::USER_GET_RECENT_TRACKS.name {
+        if raw.method() != methods::USER_GET_RECENT_TRACKS.name() {
             return Err(Error::decode("the response is for a different method")
                 .with_method(raw.spec())
                 .with_response(raw.status(), raw.body()));

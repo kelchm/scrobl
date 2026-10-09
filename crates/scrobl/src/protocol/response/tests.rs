@@ -287,6 +287,11 @@ fn headers_are_limited_to_an_allow_list() {
         .with_header("Content-Type", "application/json")
         .with_header("RETRY-AFTER", "30")
         .with_header("date", "Thu, 08 Oct 2026 10:00:00 GMT")
+        .with_header("Cache-Control", "max-age=60")
+        .with_header("EXPIRES", "Thu, 08 Oct 2026 10:01:00 GMT")
+        .with_header("etag", "\"abc\"")
+        .with_header("Last-Modified", "Thu, 08 Oct 2026 09:00:00 GMT")
+        .with_header("Age", "5")
         .with_header("Set-Cookie", "session=SENTINEL_SESSION_KEY_0001")
         .with_header("Authorization", "Bearer SENTINEL_TOKEN_0001")
         .with_header("X-Anything", "x");
@@ -296,10 +301,24 @@ fn headers_are_limited_to_an_allow_list() {
     assert_eq!(raw.header("Content-Type"), Some("application/json"));
     assert_eq!(raw.header("retry-after"), Some("30"));
     assert_eq!(raw.header("DATE"), Some("Thu, 08 Oct 2026 10:00:00 GMT"));
+    assert_eq!(raw.header("cache-control"), Some("max-age=60"));
+    assert_eq!(raw.header("expires"), Some("Thu, 08 Oct 2026 10:01:00 GMT"));
+    assert_eq!(raw.header("ETag"), Some("\"abc\""));
+    assert_eq!(
+        raw.header("last-modified"),
+        Some("Thu, 08 Oct 2026 09:00:00 GMT")
+    );
+    assert_eq!(raw.header("age"), Some("5"));
     assert_eq!(raw.header("set-cookie"), None);
     assert_eq!(raw.header("authorization"), None);
     assert_eq!(raw.header("x-anything"), None);
-    assert_no_sentinel(&format!("{raw:?}"));
+    let shown = format!("{raw:?}");
+    assert_no_sentinel(&shown);
+    // Names only: not a value of any kept header.
+    for value in ["max-age=60", "abc", "10:01:00"] {
+        assert!(!shown.contains(value), "{shown}");
+    }
+    assert!(shown.contains("cache-control") && shown.contains("etag"));
 }
 
 #[test]
@@ -321,6 +340,14 @@ fn a_long_header_value_is_cut_on_a_character_boundary() {
     let value = value.header("content-type").unwrap();
     assert_eq!(value.len(), 256);
     assert!(value.chars().all(|c| c == 'é'));
+}
+
+#[test]
+fn a_long_cache_header_value_is_cut_too() {
+    let long = "x".repeat(1000);
+    let http = HttpResponse::new(200, OK_BODY).with_header("Cache-Control", &long);
+    let raw = decode(&read(), http).unwrap();
+    assert_eq!(raw.header("cache-control").map(str::len), Some(256));
 }
 
 #[test]

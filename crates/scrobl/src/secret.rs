@@ -29,6 +29,12 @@ macro_rules! secret {
             pub fn expose(&self) -> &str {
                 &self.0
             }
+
+            /// Whether it is empty or only whitespace, without showing it.
+            #[cfg(feature = "client")]
+            pub(crate) fn is_blank(&self) -> bool {
+                self.0.trim().is_empty()
+            }
         }
 
         impl std::fmt::Debug for $name {
@@ -64,6 +70,18 @@ mod tests {
         assert_eq!(ApiKey::new("k").expose(), "k");
         assert_eq!(ApiSecret::new(String::from("s")).expose(), "s");
         assert_eq!(SessionKey::new("sk").expose(), "sk");
+    }
+
+    #[cfg(feature = "client")]
+    #[test]
+    fn a_secret_that_is_empty_or_only_whitespace_is_blank() {
+        for blank in ["", " ", "\t\n ", "\u{a0}"] {
+            assert!(ApiKey::new(blank).is_blank(), "{blank:?}");
+            assert!(ApiSecret::new(blank).is_blank());
+            assert!(SessionKey::new(blank).is_blank());
+        }
+        assert!(!ApiKey::new("k").is_blank());
+        assert!(!ApiKey::new(" k ").is_blank());
     }
 
     #[test]

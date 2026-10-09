@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::*;
 
 const RECORDED: &[u8] =
-    include_bytes!("../../fixtures/recorded/lastfm-0.10.0-recent-tracks-extended-trimmed.json");
+    include_bytes!("../../fixtures/recorded/kelchm-recent-tracks-extended-page-1.json");
 
 fn parse(text: &str) -> Value {
     serde_json::from_str(text).unwrap()

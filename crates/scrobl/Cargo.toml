@@ -1,17 +1,29 @@
 [package]
 name = "scrobl"
 version = "0.0.0"
-description = "The full Last.fm API in Rust: reads, authentication and scrobbling."
+description = "The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs. Unofficial."
+# The project README, which cargo copies into the package.
+readme = "../../README.md"
+keywords = ["lastfm", "last-fm", "scrobble", "music", "api"]
+categories = ["api-bindings", "web-programming::http-client"]
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = ["client"]
 # The async HTTP client. Without it the crate is the I/O-free protocol core.
 client = ["dep:reqwest", "dep:tokio"]
+
+[[example]]
+name = "recent_tracks"
+required-features = ["client"]
 
 [dependencies]
 bytes = "1.12.1"

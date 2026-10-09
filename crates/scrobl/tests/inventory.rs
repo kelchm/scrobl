@@ -104,9 +104,9 @@ fn table_names_match_snapshot() {
     assert_eq!(snapshot.len(), 57, "snapshot method count");
     assert_eq!(methods::ALL.len(), 57, "table method count");
     for (index, (spec, page)) in methods::ALL.iter().zip(&snapshot).enumerate() {
-        assert_eq!(spec.name, page.name, "method #{index}: name");
+        assert_eq!(spec.name(), page.name, "method #{index}: name");
     }
-    let unique: HashSet<_> = methods::ALL.iter().map(|m| m.name).collect();
+    let unique: HashSet<_> = methods::ALL.iter().map(|m| m.name()).collect();
     assert_eq!(
         unique.len(),
         methods::ALL.len(),
@@ -122,22 +122,22 @@ fn table_matches_snapshot() {
 
         let documented: Vec<_> = page.own_params().collect();
         assert_eq!(
-            spec.params.len(),
+            spec.params().len(),
             documented.len(),
             "{method}: params: table has {:?}, snapshot has {:?}",
-            spec.params.iter().map(|p| p.name).collect::<Vec<_>>(),
+            spec.params().iter().map(|p| p.name()).collect::<Vec<_>>(),
             documented.iter().map(|p| &p.name).collect::<Vec<_>>(),
         );
-        for (index, (param, doc)) in spec.params.iter().zip(&documented).enumerate() {
-            assert_eq!(param.name, doc.name, "{method}: params[{index}].name");
+        for (index, (param, doc)) in spec.params().iter().zip(&documented).enumerate() {
+            assert_eq!(param.name(), doc.name, "{method}: params[{index}].name");
             assert_eq!(
-                param.requirement,
+                param.requirement(),
                 doc.requirement(method),
                 "{method}: {}: requirement",
                 doc.name
             );
             assert_eq!(
-                param.indexed,
+                param.indexed(),
                 doc.indexed(),
                 "{method}: {}: indexed",
                 doc.name
@@ -151,16 +151,16 @@ fn table_matches_snapshot() {
         } else {
             Auth::ApiKey
         };
-        assert_eq!(spec.auth, expected_auth, "{method}: auth");
+        assert_eq!(spec.auth(), expected_auth, "{method}: auth");
 
-        let expected_verb = if spec.write || method == "auth.getMobileSession" {
+        let expected_verb = if spec.write() || method == "auth.getMobileSession" {
             Verb::Post
         } else {
             Verb::Get
         };
-        assert_eq!(spec.verb, expected_verb, "{method}: verb");
+        assert_eq!(spec.verb(), expected_verb, "{method}: verb");
         assert!(
-            !spec.write || spec.auth == Auth::Session,
+            !spec.write() || spec.auth() == Auth::Session,
             "{method}: write needs a session"
         );
 
@@ -170,7 +170,7 @@ fn table_matches_snapshot() {
             (false, false) => Paging::None,
             (true, false) => panic!("{method}: documents page without limit"),
         };
-        assert_eq!(spec.paging, expected_paging, "{method}: paging");
+        assert_eq!(spec.paging(), expected_paging, "{method}: paging");
     }
 }
 
@@ -178,20 +178,20 @@ fn table_matches_snapshot() {
 fn class_counts() {
     let count = |keep: fn(&MethodSpec) -> bool| methods::ALL.iter().filter(|m| keep(m)).count();
     assert_eq!(
-        count(|m| m.auth == Auth::ApiKey && !m.write),
+        count(|m| m.auth() == Auth::ApiKey && !m.write()),
         44,
         "key-only reads"
     );
     assert_eq!(
-        count(|m| m.auth == Auth::Session && m.write),
+        count(|m| m.auth() == Auth::Session && m.write()),
         10,
         "session writes"
     );
-    assert_eq!(count(|m| m.auth == Auth::Session), 10, "session methods");
+    assert_eq!(count(|m| m.auth() == Auth::Session), 10, "session methods");
     let signed: Vec<_> = methods::ALL
         .iter()
-        .filter(|m| m.auth == Auth::Signed)
-        .map(|m| m.name)
+        .filter(|m| m.auth() == Auth::Signed)
+        .map(|m| m.name())
         .collect();
     assert_eq!(
         signed,
@@ -204,12 +204,16 @@ fn class_counts() {
 fn by_name_ignores_ascii_case() {
     for spec in methods::ALL {
         for name in [
-            spec.name.to_owned(),
-            spec.name.to_ascii_lowercase(),
-            spec.name.to_ascii_uppercase(),
+            spec.name().to_owned(),
+            spec.name().to_ascii_lowercase(),
+            spec.name().to_ascii_uppercase(),
         ] {
             let found = methods::by_name(&name);
-            assert_eq!(found.map(|m| m.name), Some(spec.name), "by_name({name:?})");
+            assert_eq!(
+                found.map(|m| m.name()),
+                Some(spec.name()),
+                "by_name({name:?})"
+            );
         }
     }
     assert!(methods::by_name("user.getNothing").is_none());
@@ -242,19 +246,19 @@ fn paging(paging: Paging) -> &'static str {
 }
 
 fn parameters(spec: &MethodSpec) -> String {
-    if spec.params.is_empty() {
+    if spec.params().is_empty() {
         return "—".to_owned();
     }
     let cells: Vec<_> = spec
-        .params
+        .params()
         .iter()
         .map(|p| {
-            let name = if p.indexed {
-                format!("{}[i]", p.name)
+            let name = if p.indexed() {
+                format!("{}[i]", p.name())
             } else {
-                p.name.to_owned()
+                p.name().to_owned()
             };
-            match p.requirement {
+            match p.requirement() {
                 Requirement::Required => name,
                 Requirement::Conditional => format!("{name}\\*"),
                 Requirement::Optional => format!("_{name}_"),
@@ -272,24 +276,24 @@ fn generated_table() -> String {
     out.push_str("|---|---|---|---|---|---|---|---|\n");
     let mut package = "";
     for spec in methods::ALL {
-        let (this_package, _) = spec.name.split_once('.').unwrap();
+        let (this_package, _) = spec.name().split_once('.').unwrap();
         if this_package != package {
             package = this_package;
             writeln!(out, "| **{package}** | | | | | | | |").unwrap();
         }
-        let (model, status) = level(spec.name);
+        let (model, status) = level(spec.name());
         writeln!(
             out,
             "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
-            spec.name,
-            if spec.verb == Verb::Post {
+            spec.name(),
+            if spec.verb() == Verb::Post {
                 "POST"
             } else {
                 "GET"
             },
-            credentials(spec.auth),
-            if spec.write { "yes" } else { "—" },
-            paging(spec.paging),
+            credentials(spec.auth()),
+            if spec.write() { "yes" } else { "—" },
+            paging(spec.paging()),
             parameters(spec),
             model,
             status,
@@ -301,8 +305,13 @@ fn generated_table() -> String {
 
 #[test]
 fn endpoints_doc_is_in_sync() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/endpoints.md");
-    let doc = std::fs::read_to_string(path).unwrap();
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    // No repository around a packaged crate, so no document to check.
+    if !std::path::Path::new(root).join("Cargo.toml").exists() {
+        return;
+    }
+    let path = format!("{root}/docs/endpoints.md");
+    let doc = std::fs::read_to_string(&path).unwrap();
     let start = doc.find(BEGIN).expect("missing BEGIN GENERATED marker") + BEGIN.len();
     let end = doc.find(END).expect("missing END GENERATED marker");
     assert!(start <= end, "generated markers are out of order");
@@ -310,7 +319,7 @@ fn endpoints_doc_is_in_sync() {
     let block = format!("\n\n{}\n", generated_table());
     if std::env::var_os("SCROBL_BLESS").is_some_and(|v| v == "1") {
         let blessed = format!("{}{block}{}", &doc[..start], &doc[end..]);
-        std::fs::write(path, blessed).unwrap();
+        std::fs::write(&path, blessed).unwrap();
         return;
     }
     let current = &doc[start..end];
