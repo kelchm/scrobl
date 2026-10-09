@@ -253,6 +253,14 @@ const ROWS: &[Row] = &[
         delivery: NotSent,
     },
     Row {
+        label: "read-only",
+        make: Error::read_only,
+        read: No,
+        write: No,
+        now_playing: No,
+        delivery: NotSent,
+    },
+    Row {
         label: "config",
         make: |s| Error::config("x").with_method(s),
         read: No,
@@ -416,6 +424,10 @@ fn display_is_one_line_and_names_the_kind() {
     assert_eq!(
         Error::timeout().with_method(&READ).to_string(),
         "the request timed out for user.getInfo"
+    );
+    assert_eq!(
+        Error::read_only(&LOVE).to_string(),
+        "refused a write for track.love: writes are not allowed; use a `Writer`, or `Credentials::allow_writes`"
     );
     assert_eq!(
         Error::body_too_large(8_388_608).to_string(),

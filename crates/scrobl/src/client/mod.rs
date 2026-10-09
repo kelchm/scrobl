@@ -9,7 +9,8 @@
 //! sends no `Accept-Encoding` and decodes no compression, whatever other
 //! crates in the program have switched on in `reqwest`, so [`Raw::body`] is
 //! exactly the bytes the service sent. Use [`Client::user`] for typed history access and
-//! [`Client::call`] for any of the 57 methods as a raw [`Raw`] response.
+//! [`Client::call`] for any method that reads or authenticates, as a raw
+//! [`Raw`] response. A `Client` never changes the account; a [`Writer`] does.
 //!
 //! ```no_run
 //! use scrobl::history::Window;
@@ -66,6 +67,20 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Reading and writing
+//!
+//! Last.fm has no read-only keys and no scopes: a session key that can read
+//! a user's hidden history can also scrobble, love and tag for them. So the
+//! library keeps the two apart itself. A [`Client`] refuses the ten methods
+//! that change the account, with [`ErrorKind::ReadOnly`](crate::ErrorKind),
+//! before anything is signed, paced or sent. A [`Writer`], made only by
+//! [`ClientBuilder::build_writer`], sends them. A writer dereferences to a
+//! client, so code handed a `&Client` cannot write whichever it was given.
+//!
+//! This guards against a bug or a careless call. It is not a security
+//! boundary: the service enforces none of it, and code that holds the API
+//! secret and a session key can sign a request without this crate.
 //!
 //! # Runtime
 //!
@@ -279,7 +294,12 @@ const BACKOFF_FACTOR: u32 = 5;
 /// The most body space reserved before any body byte has arrived.
 const FIRST_RESERVE: usize = 64 * 1024;
 
-/// An async client for the Last.fm API.
+/// An async client for the Last.fm API. It reads and authenticates, and
+/// never changes the account; [`Writer`] does that.
+///
+/// A client refuses the ten methods that change the account whatever
+/// credentials it holds, because holding a session key is not a wish to
+/// write: reading a hidden history needs one.
 ///
 /// Build one with [`Client::builder`], keep it for the life of the program
 /// and clone it freely: a clone shares the connection pool and the pacing
@@ -321,7 +341,9 @@ impl Client {
         }
     }
 
-    /// Makes a call to any Last.fm method and returns the exact response.
+    /// Makes a call to a Last.fm method and returns the exact response. Any
+    /// method that reads or authenticates can be called; one that changes
+    /// the account is refused, and [`Writer::call`] makes it.
     ///
     /// Build the [`Request`] with [`protocol::methods`]; the client adds
     /// `method`, `api_key`, `format`, and `sk` and `api_sig` where the
@@ -330,7 +352,7 @@ impl Client {
     /// One attempt waits for its turn to be paced, sends the request, reads the body up
     /// to the cap and decodes it with [`protocol::decode`]. A read that
     /// fails in a way that is worth repeating is attempted again, up to the
-    /// configured number of attempts. A write is attempted once. See the
+    /// configured number of attempts. See the
     /// [module documentation](self) for the details.
     ///
     /// ```no_run
@@ -346,18 +368,18 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) when the request
+    /// [`ErrorKind::ReadOnly`](crate::ErrorKind) when the method changes the
+    /// account: nothing is signed or sent, and the call does not wait to be
+    /// paced. [`ErrorKind::InvalidRequest`](crate::ErrorKind) when the request
     /// cannot be built (nothing is sent). Otherwise the error of the last
     /// attempt: [`Transport`](crate::ErrorKind), [`Timeout`](crate::ErrorKind),
     /// [`BodyTooLarge`](crate::ErrorKind), [`Http`](crate::ErrorKind),
-    /// [`Api`](crate::ErrorKind) or [`Decode`](crate::ErrorKind). For a
-    /// write, [`Error::delivery`] says whether it can have happened.
+    /// [`Api`](crate::ErrorKind) or [`Decode`](crate::ErrorKind).
     ///
     /// # Cancel safety
     ///
     /// Dropping the future abandons the attempt and leaves the client
-    /// untouched. **For a write, a dropped future means the delivery is
-    /// unknown**: the request may already have been sent and acted on.
+    /// untouched.
     pub async fn call(&self, request: &Request) -> Result<Raw, Error> {
         let shared = &self.shared;
         let http = match &shared.root {
@@ -480,6 +502,97 @@ impl Client {
             }
         }
         protocol::decode(request, reply)
+    }
+}
+
+/// A [`Client`] that may also change the account: scrobble, set now
+/// playing, love and unlove, and tag.
+///
+/// [`ClientBuilder::build_writer`] is the only way to get one, so a program
+/// that never calls it cannot write. A writer dereferences to a [`Client`]:
+/// every read is available on it, and it can be passed wherever a `&Client`
+/// is wanted. What receives it as a `&Client` cannot write.
+///
+/// ```no_run
+/// use scrobl::protocol::{Request, methods};
+/// use scrobl::{ApiKey, ApiSecret, Client, SessionKey};
+///
+/// # async fn demo() -> Result<(), scrobl::Error> {
+/// let writer = Client::builder(ApiKey::new("your-api-key"))
+///     .secret(ApiSecret::new("your-api-secret"))
+///     .session(SessionKey::new("a-session-key"))
+///     .build_writer()?;
+///
+/// let love = Request::new(&methods::TRACK_LOVE)
+///     .param("track", "Believe")
+///     .param("artist", "Cher");
+/// writer.call(&love).await?;
+///
+/// // A read, through the client inside.
+/// let page = writer.user("rj").recent_tracks().limit(1).send().await?;
+/// # let _ = page;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A clone shares the connection pool and the pacing clock with the writer
+/// and with the client inside it.
+#[derive(Clone)]
+pub struct Writer {
+    /// What the writer dereferences to. Never holds the grant.
+    reader: Client,
+    /// The same client with credentials that allow writes.
+    granted: Client,
+}
+
+impl Writer {
+    pub(super) fn granting(reader: Client) -> Self {
+        let granted = Client {
+            shared: Arc::clone(&reader.shared),
+            credentials: Arc::new((*reader.credentials).clone().allow_writes()),
+        };
+        Self { reader, granted }
+    }
+
+    /// A writer that acts for the user of `session`. Like
+    /// [`Client::with_session`], it shares the connection pool and the
+    /// pacing clock, and this writer is unchanged.
+    #[must_use]
+    pub fn with_session(&self, session: SessionKey) -> Writer {
+        Self::granting(self.reader.with_session(session))
+    }
+
+    /// Makes a call to any Last.fm method, the ten that change the account
+    /// included, and returns the exact response.
+    ///
+    /// Everything [`Client::call`] says applies. A write is attempted once
+    /// and never repeated; when it fails, [`Error::delivery`] says whether it
+    /// can have happened.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::call`], except that a write is not refused.
+    ///
+    /// # Cancel safety
+    ///
+    /// **For a write, a dropped future means the delivery is unknown**: the
+    /// request may already have been sent and acted on.
+    pub async fn call(&self, request: &Request) -> Result<Raw, Error> {
+        self.granted.call(request).await
+    }
+}
+
+impl std::ops::Deref for Writer {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.reader
+    }
+}
+
+impl fmt::Debug for Writer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Writer").field(&self.granted).finish()
     }
 }
 

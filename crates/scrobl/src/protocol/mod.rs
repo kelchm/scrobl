@@ -14,4 +14,3 @@ pub use method::{Auth, MethodSpec, Paging, ParamSpec, Requirement, Verb};
 pub use request::prepare_with_root;
 pub use request::{Credentials, HttpRequest, ParamValue, Request, prepare};
 pub use response::{HttpResponse, Raw, decode};
-pub use sign::sign;

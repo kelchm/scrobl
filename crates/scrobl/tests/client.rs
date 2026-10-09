@@ -33,10 +33,10 @@ use proptest::prelude::*;
 use scrobl::client::{RecentTracksQuery, Scan, User};
 use scrobl::history::{ScanPage, ScanSummary, Window};
 use scrobl::model::RecentTracksPage;
-use scrobl::protocol::{Request, methods};
+use scrobl::protocol::{Request, Requirement, methods};
 use scrobl::{
     ApiErrorCode, ApiKey, ApiSecret, Client, ClientBuilder, Delivery, Error, ErrorKind, Response,
-    Retry, SessionKey,
+    Retry, SessionKey, Writer,
 };
 use support::server::{Behaviour, FakeLastfm, Recorded, dead_base_url};
 use support::*;
@@ -81,6 +81,10 @@ fn builder(server: &FakeLastfm) -> ClientBuilder {
 
 fn client(server: &FakeLastfm) -> Client {
     builder(server).build().unwrap()
+}
+
+fn writer(server: &FakeLastfm) -> Writer {
+    builder(server).build_writer().unwrap()
 }
 
 async fn serve(dataset: Dataset, script: impl IntoIterator<Item = Behaviour>) -> FakeLastfm {
@@ -238,7 +242,7 @@ async fn gate1_a_get_carries_everything_in_the_query_and_nothing_in_a_body() {
 async fn gate1_a_post_carries_everything_in_a_form_body_and_nothing_in_the_query() {
     bounded(async {
         let server = serve(dataset(), []).await;
-        client(&server).call(&love()).await.unwrap();
+        writer(&server).call(&love()).await.unwrap();
 
         let request = &server.requests()[0];
         assert_eq!(request.verb, "POST");
@@ -286,10 +290,10 @@ async fn gate1_no_cookie_is_sent_even_when_the_server_sets_one() {
             )],
         )
         .await;
-        let client = client(&server);
-        client.call(&read()).await.unwrap();
-        client.call(&read()).await.unwrap();
-        client.call(&love()).await.unwrap();
+        let writer = writer(&server);
+        writer.call(&read()).await.unwrap();
+        writer.call(&read()).await.unwrap();
+        writer.call(&love()).await.unwrap();
 
         let requests = server.requests();
         assert_eq!(requests.len(), 3);
@@ -316,13 +320,13 @@ async fn gate1_the_client_never_asks_for_an_encoded_response() {
             )],
         )
         .await;
-        let client = client(&server);
+        let writer = writer(&server);
         // A body that claims to be gzip and is not: it comes back untouched.
-        let raw = client.call(&read()).await.unwrap();
+        let raw = writer.call(&read()).await.unwrap();
         assert!(raw.body() == b"{}", "the body was decoded");
         assert_eq!(server.request_count(), 1, "the first answer was refused");
-        client.call(&read()).await.unwrap();
-        client.call(&love()).await.unwrap();
+        writer.call(&read()).await.unwrap();
+        writer.call(&love()).await.unwrap();
 
         let requests = server.requests();
         assert_eq!(requests.len(), 3);
@@ -363,25 +367,25 @@ async fn gate1_a_session_client_signs_for_its_own_session_and_shares_the_pacing_
 async fn gate1_a_request_that_cannot_be_built_sends_nothing() {
     bounded(async {
         let server = serve(dataset(), []).await;
-        let client = Client::builder(ApiKey::new(KEY))
+        let writer = Client::builder(ApiKey::new(KEY))
             .base_url(server.base_url())
-            .build()
+            .build_writer()
             .unwrap();
 
         // A missing required parameter, a missing session and a missing
         // secret.
-        let read = client
+        let read = writer
             .call(&Request::new(&methods::USER_GET_RECENT_TRACKS))
             .await
             .unwrap_err();
         assert_eq!(read.kind(), ErrorKind::InvalidRequest);
         assert_eq!(read.delivery(), None);
 
-        let write = client.call(&love()).await.unwrap_err();
+        let write = writer.call(&love()).await.unwrap_err();
         assert_eq!(write.kind(), ErrorKind::InvalidRequest);
         assert_eq!(write.delivery(), Some(Delivery::NotSent));
 
-        let bad = client
+        let bad = writer
             .user(USER)
             .recent_tracks()
             .limit(201)
@@ -457,14 +461,14 @@ async fn call_observed_late(request: Request) -> (Result<scrobl::protocol::Raw, 
         }],
     )
     .await;
-    let client = builder(&server)
+    let writer = builder(&server)
         .timeout(timeout)
         .read_attempts(1)
-        .build()
+        .build_writer()
         .unwrap();
 
     let started = tokio::time::Instant::now();
-    let mut call = Box::pin(client.call(&request));
+    let mut call = Box::pin(writer.call(&request));
     tokio::select! {
         _ = &mut call => panic!("the call finished before the server answered"),
         () = server.wait_for_requests(1) => {}
@@ -528,11 +532,11 @@ async fn gate2_a_handshake_that_never_completes_times_out_at_the_connect_timeout
         let (root, holder) = mute_tls_root().await;
         let connect_timeout = Duration::from_millis(300);
         let total = Duration::from_secs(20);
-        let client = builder_for(&root)
+        let writer = builder_for(&root)
             .connect_timeout(connect_timeout)
             .timeout(total)
             .read_attempts(1)
-            .build()
+            .build_writer()
             .unwrap();
 
         for (label, request, delivery) in [
@@ -540,7 +544,7 @@ async fn gate2_a_handshake_that_never_completes_times_out_at_the_connect_timeout
             ("write", love(), Some(Delivery::Unknown)),
         ] {
             let started = tokio::time::Instant::now();
-            let error = client.call(&request).await.unwrap_err();
+            let error = writer.call(&request).await.unwrap_err();
             let took = started.elapsed();
 
             assert_eq!(error.kind(), ErrorKind::Timeout, "{label}");
@@ -559,15 +563,15 @@ async fn gate2_a_handshake_that_never_completes_times_out_at_the_connect_timeout
 #[tokio::test]
 async fn gate2_a_dead_port_is_a_transport_failure_that_certainly_sent_nothing() {
     bounded(async {
-        let client = builder_for(&dead_base_url()).build().unwrap();
+        let writer = builder_for(&dead_base_url()).build_writer().unwrap();
 
-        let write = client.call(&love()).await.unwrap_err();
+        let write = writer.call(&love()).await.unwrap_err();
         assert_eq!(write.kind(), ErrorKind::Transport);
         assert_eq!(write.delivery(), Some(Delivery::NotSent));
         assert_eq!(write.http_status(), None);
         assert_clean("dead port, write", &write);
 
-        let read = client.call(&read()).await.unwrap_err();
+        let read = writer.call(&read()).await.unwrap_err();
         assert_eq!(read.kind(), ErrorKind::Transport);
         assert_eq!(read.delivery(), None);
         assert_eq!(read.retry(), Retry::Later);
@@ -707,10 +711,10 @@ async fn gate4_a_redirect_is_an_http_error_and_the_target_gets_nothing() {
         let server = serve(dataset(), [])
             .await
             .then(Behaviour::redirect(&location));
-        let client = client(&server);
+        let writer = writer(&server);
 
         for (label, request) in [("read", read_as_user()), ("write", love())] {
-            let error = client.call(&request).await.unwrap_err();
+            let error = writer.call(&request).await.unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Http, "{label}");
             assert_eq!(error.http_status(), Some(302), "{label}");
             assert_eq!(error.retry(), Retry::No, "{label}");
@@ -742,11 +746,11 @@ async fn gate4_301_303_307_and_308_are_not_followed_either() {
                 .collect::<Vec<_>>(),
         )
         .await;
-        let client = client(&server);
+        let writer = writer(&server);
 
         for status in statuses {
             for (label, request) in [("read", read_as_user()), ("write", love())] {
-                let error = client.call(&request).await.unwrap_err();
+                let error = writer.call(&request).await.unwrap_err();
                 assert_eq!(error.kind(), ErrorKind::Http, "{status} {label}");
                 assert_eq!(error.http_status(), Some(status), "{status} {label}");
                 assert_eq!(error.retry(), Retry::No, "{status} {label}");
@@ -938,12 +942,12 @@ async fn gate6_a_write_is_sent_once_whatever_goes_wrong() {
         ];
         for (label, behaviour, kind) in cases {
             let server = serve(dataset(), [behaviour]).await;
-            let client = builder(&server)
+            let writer = builder(&server)
                 .timeout(Duration::from_millis(150))
-                .build()
+                .build_writer()
                 .unwrap();
 
-            let error = client.call(&love()).await.unwrap_err();
+            let error = writer.call(&love()).await.unwrap_err();
             assert_eq!(error.kind(), kind, "{label}");
             assert_eq!(error.delivery(), Some(Delivery::Unknown), "{label}");
             assert_eq!(error.retry(), Retry::No, "{label}");
@@ -967,7 +971,7 @@ async fn gate6_an_error_envelope_is_a_rejection_and_is_not_retried_either() {
             (9, Retry::AfterReauthentication),
         ] {
             let server = serve(dataset(), [Behaviour::api_error(code)]).await;
-            let error = client(&server).call(&love()).await.unwrap_err();
+            let error = writer(&server).call(&love()).await.unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Api, "code {code}");
             assert_eq!(error.delivery(), Some(Delivery::Rejected), "code {code}");
             assert_eq!(error.retry(), retry, "code {code}");
@@ -987,11 +991,11 @@ async fn gate6_a_write_that_certainly_sent_nothing_is_still_not_retried() {
         // The error advises `Retry::Later`, but the client does not act on
         // advice for a write. A retry would first wait out the 30 s delay,
         // which the 10 s limit below would catch.
-        let client = builder_for(&dead_base_url())
+        let writer = builder_for(&dead_base_url())
             .retry_delay(Duration::from_secs(30))
-            .build()
+            .build_writer()
             .unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(10), client.call(&love())).await;
+        let result = tokio::time::timeout(Duration::from_secs(10), writer.call(&love())).await;
         let error = result.expect("the write was retried").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Transport);
         assert_eq!(error.delivery(), Some(Delivery::NotSent));
@@ -1004,7 +1008,7 @@ async fn gate6_a_write_that_certainly_sent_nothing_is_still_not_retried() {
 async fn gate6_a_write_answered_normally_succeeds_once() {
     bounded(async {
         let server = serve(dataset(), []).await;
-        let raw = client(&server).call(&love()).await.unwrap();
+        let raw = writer(&server).call(&love()).await.unwrap();
         assert_eq!(raw.body(), b"{}");
         assert_eq!(server.request_count(), 1);
     })
@@ -1641,7 +1645,7 @@ async fn gate10_no_error_class_shows_a_credential_or_a_url() {
         let mut errors: Vec<(&str, Error)> = Vec::new();
 
         // Dead port.
-        let dead = builder_for(&dead_base_url()).build().unwrap();
+        let dead = builder_for(&dead_base_url()).build_writer().unwrap();
         errors.push((
             "dead port, read",
             dead.call(&read_as_user()).await.unwrap_err(),
@@ -1681,15 +1685,15 @@ async fn gate10_no_error_class_shows_a_credential_or_a_url() {
         ];
         for (label, behaviour) in cases {
             let server = serve(dataset(), []).await.then(behaviour);
-            let client = builder(&server)
+            let writer = builder(&server)
                 .timeout(Duration::from_millis(100))
                 .max_response_bytes(1024)
                 .read_attempts(2)
-                .build()
+                .build_writer()
                 .unwrap();
-            errors.push((label, client.call(&read_as_user()).await.unwrap_err()));
+            errors.push((label, writer.call(&read_as_user()).await.unwrap_err()));
             if label != "too large (announced)" && label != "too large (chunked)" {
-                errors.push((label, client.call(&love()).await.unwrap_err()));
+                errors.push((label, writer.call(&love()).await.unwrap_err()));
             }
         }
 
@@ -1915,10 +1919,10 @@ async fn gate11_a_dropped_call_leaves_the_client_and_its_clones_working_and_pace
 async fn gate11_a_dropped_write_is_not_resent_and_the_client_goes_on() {
     bounded(async {
         let server = serve(dataset(), [Behaviour::StallBeforeResponse]).await;
-        let client = client(&server);
+        let writer = writer(&server);
 
-        abandon_once_sent(&server, 1, client.call(&love())).await;
-        client.call(&read()).await.unwrap();
+        abandon_once_sent(&server, 1, writer.call(&love())).await;
+        writer.call(&read()).await.unwrap();
 
         let requests = server.requests();
         assert_eq!(requests.len(), 2, "the dropped write was resent");
@@ -1968,6 +1972,7 @@ fn assert_sync<T: Sync>() {}
 #[test]
 fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<Client>();
+    assert_shareable::<Writer>();
     assert_shareable::<User>();
     assert_shareable::<RecentTracksQuery>();
     assert_shareable::<ClientBuilder>();
@@ -1981,6 +1986,11 @@ fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
         assert_send(&client.call(request));
         assert_send(&client.user("u").recent_tracks().send());
         assert_send(&scan.next_page());
+        #[allow(dead_code)]
+        fn writes(writer: &Writer, request: &Request) {
+            assert_send(&writer.call(request));
+            assert_send(&writer.user("u").recent_tracks().send());
+        }
         // And owned by a task, as a Tauri command holds them.
         assert_send(&async move {
             let client = client.clone();
@@ -2137,16 +2147,16 @@ async fn gate14_a_read_then_a_read_reuses_the_connection() {
 async fn gate14_a_write_after_the_server_closed_an_idle_connection_arrives_exactly_once() {
     bounded(async {
         let server = serve(dataset(), []).await.keep_alive();
-        let client = client(&server);
+        let writer = writer(&server);
 
-        client.call(&read()).await.unwrap();
+        writer.call(&read()).await.unwrap();
         let_the_pool_settle().await;
         server.hang_up_idle();
         // There is no signal for "the client has seen the hang-up": it is a
         // socket event in the client's own runtime. This is the one wait.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let raw = client.call(&love()).await.unwrap();
+        let raw = writer.call(&love()).await.unwrap();
         assert_eq!(raw.body(), b"{}");
 
         let requests = server.requests();
@@ -2215,4 +2225,191 @@ async fn gate14_a_chunked_body_too_large_on_a_kept_alive_connection_is_the_same(
         assert_eq!(server.requests()[1].number, 1);
     })
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// Gate 15: a client never writes, and a writer is the only thing that does.
+
+/// The ten methods that change the account, each with what it requires.
+fn every_write() -> Vec<Request> {
+    let writes: Vec<_> = methods::ALL
+        .iter()
+        .filter(|spec| spec.write())
+        .map(|spec| {
+            spec.params()
+                .iter()
+                .filter(|param| param.requirement() == Requirement::Required)
+                .fold(Request::new(spec), |request, param| {
+                    if param.indexed() {
+                        request.indexed(param.name(), 0, "1700000000")
+                    } else {
+                        request.param(param.name(), "Synthetic")
+                    }
+                })
+        })
+        .collect();
+    assert_eq!(writes.len(), 10);
+    writes
+}
+
+/// Asks `client` for every write, complete and bare, plainly and as the
+/// user, and checks each refusal.
+async fn assert_refuses_every_write(label: &str, client: &Client) {
+    for write in every_write() {
+        let bare = Request::new(methods::by_name(write.method()).unwrap());
+        for request in [write.clone(), write.clone().as_user(), bare] {
+            let error = client.call(&request).await.unwrap_err();
+            let method = write.method();
+            assert_eq!(error.kind(), ErrorKind::ReadOnly, "{label}: {method}");
+            assert_eq!(error.method(), Some(method), "{label}");
+            assert_eq!(
+                error.delivery(),
+                Some(Delivery::NotSent),
+                "{label}: {method}"
+            );
+            assert_eq!(error.retry(), Retry::No, "{label}: {method}");
+            assert_clean(label, &error);
+        }
+    }
+}
+
+#[tokio::test]
+async fn gate15_a_client_refuses_every_write_and_nothing_reaches_the_socket() {
+    bounded(async {
+        let server = serve(dataset(), []).await;
+        // An hour between requests: a refusal that waited for its turn to
+        // be paced would hang the test.
+        let paced = || builder(&server).min_interval(Duration::from_secs(3600));
+        let other = || SessionKey::new("SENTINEL_SESSION_KEY_OTHER");
+
+        // A client holding everything a write needs except permission.
+        let client = paced().build().unwrap();
+        assert_refuses_every_write("a client", &client).await;
+        assert_refuses_every_write("a clone", &client.clone()).await;
+        assert_refuses_every_write("another session", &client.with_session(other())).await;
+
+        // A client holding less is refused the same way, not for what it lacks.
+        let key_only = Client::builder(ApiKey::new(KEY))
+            .base_url(server.base_url())
+            .build()
+            .unwrap();
+        assert_refuses_every_write("key only", &key_only).await;
+
+        // Every way a writer can be seen as a client.
+        let writer = paced().build_writer().unwrap();
+        assert_refuses_every_write("a writer as a client", &writer).await;
+        assert_refuses_every_write("cloned out of a writer", &Client::clone(&writer)).await;
+        let session_on_the_client = Client::with_session(&writer, other());
+        assert_refuses_every_write("a session on a writer's client", &session_on_the_client).await;
+
+        assert_eq!(server.connections(), 0);
+        assert_eq!(server.request_count(), 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate15_a_refused_write_spends_no_pacing_and_leaves_reads_working() {
+    bounded(async {
+        let server = serve(dataset(), []).await;
+        let interval = Duration::from_millis(200);
+        let client = builder(&server).min_interval(interval).build().unwrap();
+
+        client.call(&read()).await.unwrap();
+        let started = tokio::time::Instant::now();
+        client.call(&love()).await.unwrap_err();
+        assert!(started.elapsed() < interval, "the refusal was paced");
+        // Reads as the user, and the authentication methods, are not writes.
+        let raw = client.call(&read_as_user()).await.unwrap();
+        assert!(!raw.body().is_empty());
+        let token = Request::new(&methods::AUTH_GET_TOKEN);
+        let _ = client.call(&token).await;
+
+        let requests = server.requests();
+        let sent: Vec<_> = requests
+            .iter()
+            .map(|r| r.param("method").unwrap())
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                "user.getRecentTracks",
+                "user.getRecentTracks",
+                "auth.getToken"
+            ]
+        );
+        assert_eq!(requests[1].query_param("sk"), Some(SESSION));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate15_a_writer_sends_each_write_once_with_the_session_it_was_given() {
+    bounded(async {
+        let server = serve(dataset(), []).await;
+        let writer = writer(&server);
+        let other = "SENTINEL_SESSION_KEY_OTHER";
+
+        let writes = every_write();
+        for write in &writes {
+            // The fake service answers only some methods; what matters here
+            // is what arrived.
+            let _ = writer.call(write).await;
+            let _ = writer
+                .with_session(SessionKey::new(other))
+                .call(write)
+                .await;
+        }
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 20);
+        for (pair, write) in requests.chunks(2).zip(&writes) {
+            for (request, session) in pair.iter().zip([SESSION, other]) {
+                assert_eq!(request.verb, "POST");
+                assert_eq!(
+                    request.form_param("method").as_deref(),
+                    Some(write.method())
+                );
+                assert_eq!(request.form_param("sk").as_deref(), Some(session));
+                assert!(request.form_param("api_sig").is_some());
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn gate15_a_writer_reads_through_its_client_and_shares_its_pacing() {
+    bounded(async {
+        let server = serve(dataset(), []).await;
+        let interval = Duration::from_millis(200);
+        let writer = builder(&server)
+            .min_interval(interval)
+            .build_writer()
+            .unwrap();
+
+        // A typed read by deref, a raw write, a raw read through the client.
+        let page = writer.user(USER).recent_tracks().send().await.unwrap();
+        assert_eq!(page.scrobbles().len(), 3);
+        writer.call(&love()).await.unwrap();
+        Client::call(&writer, &read()).await.unwrap();
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 3);
+        for pair in requests.windows(2) {
+            let gap = pair[1].arrived.duration_since(pair[0].arrived);
+            assert!(gap + SLACK >= interval, "arrived {gap:?} apart");
+        }
+    })
+    .await;
+}
+
+#[test]
+fn gate15_a_writer_shows_no_credential() {
+    let writer = builder_for("http://127.0.0.1:9").build_writer().unwrap();
+    let text = format!("{writer:?} {writer:#?}");
+    assert!(text.contains("Writer"), "{text}");
+    for secret in [KEY, SECRET, SESSION] {
+        assert!(!text.contains(secret), "{text}");
+    }
 }

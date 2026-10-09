@@ -4,7 +4,7 @@ The full Last.fm API in async Rust: every method callable, history read and chec
 
 Early development. Not affiliated with or endorsed by Last.fm.
 
-What works today: a raw, signed call to any of the 57 methods, and a typed, checked read of a user's scrobble history. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
+What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, and a typed, checked read of a user's scrobble history. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
 
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
@@ -56,11 +56,35 @@ async fn backup() -> Result<(), scrobl::Error> {
 }
 ```
 
-`Client::call` makes a raw call to any of the 57 methods. The client sends over HTTPS only, follows no redirect, keeps at least a second between requests by default (measured when each is admitted to the transport, however late the runtime polls it; the pacing is per client and its clones, and the second is this library's conservative choice, not a limit Last.fm documents), sends and decodes no compressed responses so the body is exactly what the service sent, retries reads that failed in a way worth repeating, never retries a write, and bounds how long it waits and how much of a response it keeps. A failed write says whether it can have happened (`Error::delivery`). The module documentation of `scrobl::client` has the details. Without the `client` feature the crate is the I/O-free protocol core, for use with any other HTTP client.
+`Client::call` makes a raw call to any method that reads or authenticates. The client sends over HTTPS only, follows no redirect, keeps at least a second between requests by default (measured when each is admitted to the transport, however late the runtime polls it; the pacing is per client and its clones, and the second is this library's conservative choice, not a limit Last.fm documents), sends and decodes no compressed responses so the body is exactly what the service sent, retries reads that failed in a way worth repeating, never retries a write, and bounds how long it waits and how much of a response it keeps. A failed write says whether it can have happened (`Error::delivery`). The module documentation of `scrobl::client` has the details. Without the `client` feature the crate is the I/O-free protocol core, for use with any other HTTP client.
 
 A scan yields pages before it can know the whole window is consistent, so what it has yielded is provisional until `finish()` succeeds. Stage what you write and mark it complete only then. The section "What a completed scan does not prove" in the documentation of `scrobl::history::WindowScan` says what success does and does not mean. Run `cargo doc --open` for it until the crate is published.
 
 An example that prints a user's ten most recent scrobbles is in `crates/scrobl/examples/recent_tracks.rs`. It calls the live service with your own API key.
+
+### Reading and writing
+
+A `Client` cannot change an account. Last.fm has no read-only keys or scopes, so a session key that can read a hidden history can also scrobble, love and tag; the library keeps the two apart itself. The ten methods that write are refused by a `Client`, before anything is signed or sent, and are sent only by a `Writer`:
+
+```rust
+use scrobl::protocol::{Request, methods};
+use scrobl::{ApiKey, ApiSecret, Client, SessionKey};
+
+async fn love() -> Result<(), scrobl::Error> {
+    let writer = Client::builder(ApiKey::new("your-api-key"))
+        .secret(ApiSecret::new("your-api-secret"))
+        .session(SessionKey::new("a-session-key"))
+        .build_writer()?; // the one place a program asks to write
+
+    let love = Request::new(&methods::TRACK_LOVE)
+        .param("track", "Believe")
+        .param("artist", "Cher");
+    writer.call(&love).await?;
+    Ok(())
+}
+```
+
+A `Writer` dereferences to a `Client`, so it reads too, and code given a `&Client` cannot write. This guards against a bug or a careless call; it is not a security boundary, because the service enforces none of it.
 
 ## Last.fm's terms
 

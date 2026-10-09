@@ -33,6 +33,32 @@ fn config_error(builder: super::ClientBuilder) -> Error {
 }
 
 #[test]
+fn a_writer_is_built_under_the_same_checks_as_a_client() {
+    let refused = [
+        Client::builder(ApiKey::new(" ")),
+        builder().secret(ApiSecret::new("")),
+        builder().session(SessionKey::new("\t")),
+        builder().user_agent(""),
+        builder().read_attempts(0),
+    ];
+    for builder in refused {
+        let error = builder.clone().build_writer().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Config);
+        assert_eq!(error.to_string(), config_error(builder).to_string());
+    }
+
+    let writer = builder()
+        .secret(ApiSecret::new("s"))
+        .session(SessionKey::new("sk"))
+        .build_writer()
+        .unwrap();
+    // The grant is on the writer and never on the client inside it.
+    assert!(format!("{:?}", writer.granted).contains("writes: true"));
+    assert!(format!("{:?}", *writer).contains("writes: false"));
+    assert!(format!("{writer:?}").contains("writes: true"));
+}
+
+#[test]
 fn defaults_are_the_documented_ones() {
     let client = builder().build().unwrap();
     let settings = &client.shared.settings;

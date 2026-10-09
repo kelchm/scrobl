@@ -51,6 +51,9 @@ pub enum ErrorKind {
     InvalidRequest,
     /// The client could not be built.
     Config,
+    /// The method changes the account and the client or credentials are
+    /// read-only. Nothing was signed or sent.
+    ReadOnly,
 }
 
 /// What a caller can usefully do about an error. This is advice and depends
@@ -270,8 +273,9 @@ impl Error {
     /// What a failed write did. `None` for a read, and for an error that is
     /// not about a method call, such as a configuration error.
     ///
-    /// [`Delivery::NotSent`] for an invalid request or a transport failure
-    /// that certainly sent nothing; [`Delivery::Rejected`] for an error
+    /// [`Delivery::NotSent`] for an invalid request, a write refused as
+    /// read-only or a transport failure that certainly sent nothing;
+    /// [`Delivery::Rejected`] for an error
     /// envelope; [`Delivery::Unknown`] for everything else, including a
     /// timeout and any failure after the request may have left.
     pub fn delivery(&self) -> Option<Delivery> {
@@ -280,7 +284,9 @@ impl Error {
             return None;
         }
         Some(match inner.kind {
-            ErrorKind::InvalidRequest | ErrorKind::Config => Delivery::NotSent,
+            ErrorKind::InvalidRequest | ErrorKind::Config | ErrorKind::ReadOnly => {
+                Delivery::NotSent
+            }
             ErrorKind::Transport if !inner.possibly_sent => Delivery::NotSent,
             ErrorKind::Api => Delivery::Rejected,
             _ => Delivery::Unknown,
@@ -378,6 +384,13 @@ impl Error {
             .with_detail(problem)
     }
 
+    /// A write was asked of credentials that do not allow writes.
+    pub(crate) fn read_only(spec: &'static MethodSpec) -> Self {
+        Self::from_kind(ErrorKind::ReadOnly)
+            .with_method(spec)
+            .with_detail("writes are not allowed; use a `Writer`, or `Credentials::allow_writes`")
+    }
+
     /// The client could not be built.
     #[cfg_attr(not(feature = "client"), allow(dead_code))] // Raised by the client.
     pub(crate) fn config(problem: &str) -> Self {
@@ -405,6 +418,7 @@ impl fmt::Display for Error {
             ErrorKind::BodyTooLarge => f.write_str("the response body was too large")?,
             ErrorKind::InvalidRequest => f.write_str("invalid request")?,
             ErrorKind::Config => f.write_str("invalid configuration")?,
+            ErrorKind::ReadOnly => f.write_str("refused a write")?,
         }
         if !method.is_empty() {
             write!(f, " for {method}")?;
