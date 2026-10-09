@@ -27,8 +27,10 @@ crates/scrobl/
     de.rs              tolerant scalar decoding (number-or-string, one-or-many)
     model/             typed views, one module per API package
     history.rs         Window, RecentTracks, WindowScan: the validated recent-tracks scan, I/O-free
-    client/            feature "client": reqwest executor, pacing, retries
-  tests/               integration tests, fake Last.fm server
+    response.rs        Response<T>: a typed value next to the exact response
+    client/            feature "client": reqwest executor, pacing, retries, typed history access
+  tests/               integration tests
+    support/           synthetic dataset (pure) and server.rs, the fake Last.fm on a real socket
   fixtures/            labelled recorded / derived / synthetic
 ```
 
@@ -116,6 +118,8 @@ A scan is made only by `RecentTracks::scan`, from the builder's user, window, `e
 
 The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It never issues a request with altered bounds. `next_request` returns the same request until a page is accepted, so a transport failure can be retried without skipping or repeating a page. A response that does not reach `accept` (an API error envelope, a non-JSON body) does not poison the scan, and an empty window is a successful scan with `total` 0, which an error is not. A scan without an upper bound is allowed. It sees scrobbles that arrive while it runs, which usually changes `total` and fails rule 3, but not always (see below); callers who want a more stable read fix `to` first.
 
+The client drives it as `Scan` (below). `next_page` sends the outstanding request through the same paced, retried `call` as any read and hands the result to `accept`. An error from the transport or the API leaves the page outstanding, so calling `next_page` again sends the identical request. An error from `accept` kills the scan: later calls fail with `Inconsistent` and send nothing, and never read as a finished scan. The core offers no request once a scan is dead, which on its own would look like completion, so `Scan` remembers the failure and reports it. The request handed to `call` and then to `accept` is exactly the one `next_request` returned, since `accept` refuses a response to any other.
+
 The `[from, to)` rule comes from one recorded third-party exchange, not a documented guarantee. That is why it is checked on every page rather than assumed.
 
 #### What a completed scan does not prove
@@ -132,19 +136,62 @@ An application that needs more reads the window again and compares the two reads
 
 ### Client
 
-One concrete async client over `reqwest`. Cheap to clone, `Send + Sync`, every future `Send`. It spawns nothing and owns no runtime.
+One concrete async client over `reqwest`. Cheap to clone (two `Arc`s), `Clone + Send + Sync + 'static`, every future `Send`. The crate spawns no task, starts no thread and owns no runtime; it runs on whatever Tokio runtime polls it, a current-thread one included, provided the runtime has its I/O and time drivers enabled (`enable_all`); without them the first call panics inside Tokio, which the client does not hide. `reqwest` itself spawns its connection tasks on that runtime, and resolving a host name uses the runtime's blocking pool. A client can be built outside a runtime.
 
 ```rust
-let client = scrobl::Client::builder(api_key)
-    .user_agent("example-backup/0.1 (+https://example.org)")
-    .build()?;
+impl Client {
+    pub fn builder(api_key: ApiKey) -> ClientBuilder;
+    pub fn with_session(&self, session: SessionKey) -> Client;   // shares the pool and the pacing clock
+    pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any of the 57 methods
+    pub fn user(&self, name: impl Into<String>) -> User;
+}
+
+impl ClientBuilder {   // each setting has a default; build() fails with ErrorKind::Config
+    pub fn secret(self, ApiSecret) -> Self;      pub fn session(self, SessionKey) -> Self;
+    pub fn user_agent(self, impl Into<String>) -> Self;   // default scrobl/<version>
+    pub fn connect_timeout(self, Duration) -> Self;       // 10 s
+    pub fn timeout(self, Duration) -> Self;               // 30 s, the longest the client waits for one attempt, last body byte included
+    pub fn max_response_bytes(self, usize) -> Self;       // 8 MiB
+    pub fn min_interval(self, Duration) -> Self;          // 1 s, zero turns pacing off, over 24 h is a Config error
+    pub fn read_attempts(self, u32) -> Self;              // 3, counting the first; 1 turns retries off
+    pub fn retry_delay(self, Duration) -> Self;           // 1 s
+    pub fn no_proxy(self) -> Self;                        // ignore HTTPS_PROXY and friends
+    pub fn build(self) -> Result<Client, Error>;
+}
+
+impl User { pub fn recent_tracks(&self) -> RecentTracksQuery; }
+impl RecentTracksQuery {
+    pub fn window(self, Window) -> Self;  pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;
+    pub fn extended(self, bool) -> Self;  pub fn as_user(self) -> Self;
+    pub async fn send(self) -> Result<Response<RecentTracksPage>, Error>;   // one page
+    pub fn scan(self) -> Result<Scan, Error>;   // the window and limit come from the query
+}
+impl Scan {
+    pub fn window(&self) -> Window;  pub fn page_size(&self) -> u32;
+    pub async fn next_page(&mut self) -> Result<Option<ScanPage>, Error>;
+    pub fn finish(self) -> Result<ScanSummary, Error>;
+}
+
+pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; .into_value() -> T; .into_parts() -> (T, Raw)
 ```
 
-Fixed behaviour: HTTPS only, no redirects, `reqwest`'s own retries off, rustls. Configurable with defaults: connect timeout 10 s, total request timeout 30 s, response body cap 8 MiB, at most one request start per second across all clones, read retry budget of 3 attempts. The user agent defaults to `scrobl/<version>`.
+`Response<T>` is how every typed call returns its result: the typed value next to the exact `Raw`, so the bytes can be archived and a field the model lacks stays reachable. `value` and `into_value` reach the typed value without `Deref`, for a method of `T` that a method of `Response` would shadow. `Debug` of `Response`, `Raw` and `HttpResponse` shows header names and never header values, which are text the network chose; `header()` still returns them.
 
-Every attempt, including a retry, takes a pacing slot. A slot is reserved under a lock and waited for outside it, so concurrent callers queue rather than each resetting the clock. Reads are retried only for transport failures before a response, HTTP 5xx or 429, and API codes 11, 16 and 29. Writes are never retried by the client.
+`scan` mirrors `RecentTracks::scan`: the query's window (`Window::ALL` when unset), `limit` as the constant page size (200 when unset), `extended` and `as_user` become the scan, and it cannot be changed afterwards. A `page` on the query, or a `limit` outside 1 to 200, is an `InvalidRequest` from `scan` itself, before anything is sent.
 
-Cancellation: dropping a future abandons the request. Nothing shared is left half-updated; a reserved pacing slot is simply spent. For a write, a dropped future means the delivery is unknown.
+Fixed behaviour: HTTPS only (the client refuses a plain-HTTP URL before connecting), no redirects, `reqwest`'s own retries off, no cookies, rustls, and no response decompression: every `reqwest` decoder (`gzip`, `brotli`, `deflate`, `zstd`) is switched off explicitly, because Cargo unifies features and another crate in the program could otherwise turn one on, making the client send `Accept-Encoding` and `Raw::body` something other than the bytes the service sent. The one hook that changes the root, `ClientBuilder::base_url` (hidden, for tests), accepts only a literal loopback address or `localhost` with no user information, query or fragment, so it cannot turn HTTPS-only off for a real host or send a key elsewhere; anything else is a `Config` error that does not repeat the URL, and `Debug` says only whether a root is set. A 3xx is returned to `decode` and becomes `ErrorKind::Http`; the target of a `Location` receives nothing. The proxy environment variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are honoured; through an HTTP proxy only a `CONNECT` naming the host and port is visible to the proxy and the key stays inside TLS. `ClientBuilder::no_proxy` opts out.
+
+One attempt is: wait for admission, send, read the body up to the cap, `decode`. The request is built once, before the first admission, so an invalid request waits for nothing and sends nothing.
+
+Pacing: every attempt, including a retry, is admitted at least one interval after the previous admission, across all clones. Admission is serialised and measured when it happens: a caller takes an async (`tokio::sync::Mutex`, first come first served) lock over the time of the last admission, sleeps whatever remains of the interval *while holding the lock*, reads the clock again, records that as the new last admission and releases. So the spacing holds however late a task is polled (a runtime stalled for several intervals delays the queued callers; it does not release them together), nothing is reserved ahead, and a caller dropped while queued or sleeping leaves no debt: the next one waits only for what remains since the last real admission. The arithmetic is on `Duration`s, an interval over 24 hours is a `Config` error, and a zero interval skips pacing entirely. "Start" means admission to the transport, measured in this process; connection setup can still make arrivals at the server bunch slightly.
+
+Retries: a read is attempted up to `read_attempts` times in total, and only when `Error::retry()` is `Later` or `AfterBackoff`: transport failures and timeouts at any point, HTTP 5xx, API codes 11 and 16 (`Later`), HTTP 429 and API code 29 (`AfterBackoff`). Before retry `n` it waits `retry_delay * 2^(n-1)`, five times that for `AfterBackoff`, and at least a numeric `Retry-After`, none longer than five minutes, on top of pacing. A body that is too large, a body that does not decode and every other status or code are not retried. **A write is never retried by the client**, whatever `retry()` advises; `delivery()` tells the caller what happened.
+
+Timeouts and the cap: `connect_timeout` bounds connecting, the TLS handshake included; `timeout` is the longest the client waits for one attempt, from the start to the last body byte, so a server that sends headers and then stalls is cut off. Either is `ErrorKind::Timeout`. The timeout limits waiting, not polling: `tokio::time::timeout` polls the exchange before its timer, so a response that has already arrived in full and decoded when the future is next polled is returned even if the deadline has passed. It is not discarded, because for a write that would turn a known outcome into `Delivery::Unknown`. Pacing waits and retry delays are outside the per-attempt timeout; an overall deadline is a `tokio::time::timeout` around the whole loop, and cancelling a scan that way leaves the same page outstanding. The body is read up to the cap: a `Content-Length` over it fails before any body is read, an unannounced or chunked body fails as soon as it passes the cap. The cap bounds the length of the body the client keeps and the buffer it asks for; the transport's own buffer for the chunk in hand is on top, bounded by its read buffer.
+
+Errors from this layer carry the method. A failure to connect is `Transport` and certainly sent nothing; a failure after the request may have left is `Transport` with a possibly-sent request. The URL is stripped, and the cause kept on the `source()` chain is a snapshot of the `Display` of each link, because the `Debug` of some errors underneath prints the address connected to. Each message is scrubbed before it is kept: every occurrence of the client's own API key, secret and session key (and their form-encoded spellings) and of the prepared request's query string and body becomes `<redacted>`, control characters are dropped, and the message is cut to 256 bytes last, so a cut cannot leave half a credential. Whatever a dependency prints, no credential the client holds appears on the chain; no error text contains a URL or response text.
+
+Cancellation: dropping a future abandons the attempt and closes its connection. Nothing shared is left half-updated, and a caller dropped while waiting for admission leaves nothing spent. For a write, a dropped future means the delivery is unknown. A dropped `next_page` leaves the scan where it was.
 
 There is no blocking adapter. A synchronous caller, such as the backup application, drives this client on a current-thread Tokio runtime.
 
@@ -175,13 +222,13 @@ impl Error {
 | `Timeout` | A deadline passed |
 | `BodyTooLarge` | The response exceeded the body cap |
 | `InvalidRequest` | The request could not be built; nothing was sent |
-| `Config` | The client could not be built |
+| `Config` | The client could not be built: an unusable user agent, a zero timeout, cap or attempt count, a pacing interval over 24 hours, a test root that is not loopback, or an HTTP client that failed to initialise |
 
 `ApiErrorCode` wraps the number and keeps unknown codes. Named constants exist for the documented ones, including `LOGIN_REQUIRED` (17) and `SUSPENDED_KEY` (26), which callers must be able to tell apart from an empty history.
 
-`Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, pre-response transport failures of a read), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`.
+`Retry` is advice, and depends on the method as well as the code: `No`, `Later` (transient: codes 11 and 16, HTTP 5xx, transport failures and timeouts of a read, and a transport failure that certainly sent a write's request), `AfterBackoff` (29, HTTP 429) and `AfterReauthentication` (9). `track.updateNowPlaying` is always `No`. The client acts on the advice for reads only.
 
-`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`.
+`Delivery` says what a failed write did: `NotSent`, `Rejected` (the service answered with an error envelope) or `Unknown` (sent, or possibly sent, with no readable answer). `delivery()` returns `Option<Delivery>` and is `None` for a read. An application persists `Unknown` and decides for itself; the library never replays it, and `retry()` is `No` whenever delivery is `Unknown`. Every timeout is `Unknown`, including one while connecting, which in fact sent nothing: the error does not say where the deadline fell, and wrongly assuming `NotSent` is the dangerous mistake. A TLS handshake that never completes is the observed case: the connect timeout fires, the error is `Timeout`, and for a write `delivery()` is `Unknown`.
 
 `Display` gives a one-line message that is safe to log. Truncated diagnostics cut on a UTF-8 boundary.
 

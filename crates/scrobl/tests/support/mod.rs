@@ -20,6 +20,8 @@
 //! The expected rows of a window are computed here with a comparison written
 //! out on the raw bounds, not with `Window::contains`, so the oracle and the
 //! code under test cannot be wrong together.
+//!
+//! [`server`] puts the same function behind a real socket.
 
 #![allow(
     dead_code,
@@ -29,6 +31,9 @@
     clippy::panic,
     clippy::indexing_slicing
 )]
+
+#[cfg(feature = "client")]
+pub mod server;
 
 use scrobl::history::Window;
 use scrobl::protocol::HttpRequest;
@@ -282,7 +287,12 @@ fn error_body(code: u32, message: &str) -> Vec<u8> {
 
 /// Answers one request: `(HTTP status, body)`.
 pub fn respond(dataset: &Dataset, request: &HttpRequest) -> (u16, Vec<u8>) {
-    let params = query(request);
+    respond_to(dataset, &query(request))
+}
+
+/// Answers a request given as its parameters, however they arrived: the
+/// query of a `GET` or the form body of a `POST`.
+pub fn respond_to(dataset: &Dataset, params: &[(String, String)]) -> (u16, Vec<u8>) {
     let get = |name: &str| {
         params
             .iter()

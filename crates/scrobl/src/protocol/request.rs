@@ -38,6 +38,15 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// The value of every credential held, so a client can scrub them from
+    /// text it did not write.
+    #[cfg(feature = "client")]
+    pub(crate) fn exposed(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.api_key.expose())
+            .chain(self.secret.iter().map(ApiSecret::expose))
+            .chain(self.session.iter().map(SessionKey::expose))
+    }
+
     /// Credentials with an API key only, enough for plain reads.
     pub fn new(api_key: ApiKey) -> Self {
         Self {

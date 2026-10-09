@@ -21,6 +21,10 @@ const KEPT_HEADERS: [&str; 3] = ["content-type", "retry-after", "date"];
 const MAX_HEADER_VALUE: usize = 256;
 
 /// A response as a transport received it: status, body and a few headers.
+///
+/// `Debug` shows the status, the body's length and the names of the headers
+/// kept. It never shows a header value, because a value is text the network
+/// chose.
 #[derive(Clone)]
 pub struct HttpResponse {
     status: u16,
@@ -39,7 +43,7 @@ impl HttpResponse {
     ///     .with_header("Set-Cookie", "dropped");
     /// assert_eq!(
     ///     format!("{response:?}"),
-    ///     r#"HttpResponse { status: 200, body_len: 11, headers: [("content-type", "application/json")] }"#
+    ///     r#"HttpResponse { status: 200, body_len: 11, headers: ["content-type"] }"#
     /// );
     /// ```
     pub fn new(status: u16, body: impl Into<Bytes>) -> Self {
@@ -73,17 +77,23 @@ impl fmt::Debug for HttpResponse {
         f.debug_struct("HttpResponse")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
-            .field("headers", &self.headers)
+            .field("headers", &header_names(&self.headers))
             .finish()
     }
+}
+
+/// The names of the headers kept, for `Debug`: values are network text.
+fn header_names(headers: &[(&'static str, String)]) -> Vec<&'static str> {
+    headers.iter().map(|(name, _)| *name).collect()
 }
 
 /// A successful response: the status, a few headers, the exact body bytes
 /// and the [`Request`] it answers.
 ///
 /// Typed views are decoded from it and never replace it. Its `Debug` output
-/// leaves the body and the request's parameters out, because some responses
-/// carry a session key.
+/// leaves the body, the request's parameters and the header values out,
+/// because some responses carry a session key and a header value is text the
+/// network chose. The values stay available through [`header`](Self::header).
 #[derive(Clone)]
 pub struct Raw {
     request: Request,
@@ -166,7 +176,7 @@ impl fmt::Debug for Raw {
         f.debug_struct("Raw")
             .field("method", &self.method())
             .field("status", &self.status)
-            .field("headers", &self.headers)
+            .field("headers", &header_names(&self.headers))
             .field("body_len", &self.body.len())
             .finish()
     }
