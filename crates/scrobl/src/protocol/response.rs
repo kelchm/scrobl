@@ -14,8 +14,19 @@ use crate::de::StrictError;
 use crate::error::{ApiErrorCode, Error, truncate_utf8};
 use crate::protocol::MethodSpec;
 
-/// The response headers that are kept. Others are dropped.
-const KEPT_HEADERS: [&str; 3] = ["content-type", "retry-after", "date"];
+/// The response headers that are kept. Others are dropped. The ones that
+/// say how long a response may be cached are here because Last.fm's API
+/// terms ask applications to cache according to them.
+const KEPT_HEADERS: [&str; 8] = [
+    "content-type",
+    "retry-after",
+    "date",
+    "cache-control",
+    "expires",
+    "etag",
+    "last-modified",
+    "age",
+];
 
 /// The longest header value that is kept.
 const MAX_HEADER_VALUE: usize = 256;
@@ -54,7 +65,8 @@ impl HttpResponse {
         }
     }
 
-    /// Records a header. Only `content-type`, `retry-after` and `date` are
+    /// Records a header. Only `content-type`, `retry-after`, `date`,
+    /// `cache-control`, `expires`, `etag`, `last-modified` and `age` are
     /// kept, matched without regard to case; any other header is ignored. A
     /// value longer than 256 bytes is cut.
     #[must_use]
@@ -113,8 +125,10 @@ impl Raw {
         &self.body
     }
 
-    /// A header value, matched without regard to case. Only `content-type`,
-    /// `retry-after` and `date` are available.
+    /// A header value, matched without regard to case. Only the headers
+    /// [`HttpResponse::with_header`] keeps are available, among them the ones
+    /// a cache goes by (`cache-control`, `expires`, `etag`, `last-modified`
+    /// and `age`).
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()

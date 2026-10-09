@@ -137,9 +137,10 @@ impl ClientBuilder {
     }
 
     /// The least time between the starts of two requests, across this client
-    /// and every clone of it. The default is one second, which is what
-    /// Last.fm asks of an application. Zero turns pacing off; more than 24
-    /// hours fails at [`build`](Self::build).
+    /// and every clone of it. The default is one second, this library's
+    /// conservative choice and not an allowance Last.fm documents. Separate
+    /// clients and processes do not share the pacing. Zero turns pacing off;
+    /// more than 24 hours fails at [`build`](Self::build).
     ///
     /// A start is the moment a request is let through to the transport,
     /// measured in this process; connection setup can still make requests
@@ -200,9 +201,9 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// [`ErrorKind::Config`](crate::ErrorKind) when a setting is not valid
-    /// (an empty or unusable user agent, a zero timeout, a zero body cap, zero
-    /// attempts or a pacing interval over 24 hours) or when the HTTP client
-    /// cannot be set up.
+    /// (an empty API key, secret or session key, an empty or unusable user
+    /// agent, a zero timeout, a zero body cap, zero attempts or a pacing
+    /// interval over 24 hours) or when the HTTP client cannot be set up.
     pub fn build(self) -> Result<Client, Error> {
         let Self {
             credentials,
@@ -210,6 +211,7 @@ impl ClientBuilder {
             base_url,
         } = self;
         check(&settings)?;
+        check_credentials(&credentials)?;
 
         let mut http = reqwest::Client::builder()
             .user_agent(settings.user_agent.as_str())
@@ -288,6 +290,13 @@ fn check_base_url(url: &str) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+fn check_credentials(credentials: &Credentials) -> Result<(), Error> {
+    match credentials.blank() {
+        Some(which) => Err(Error::config(&format!("the {which} is empty"))),
+        None => Ok(()),
+    }
 }
 
 fn check(settings: &Settings) -> Result<(), Error> {

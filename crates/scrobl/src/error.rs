@@ -218,7 +218,7 @@ impl Error {
 
     /// The Last.fm method the call was for, such as `user.getRecentTracks`.
     pub fn method(&self) -> Option<&'static str> {
-        self.inner.spec.map(|spec| spec.name)
+        self.inner.spec.map(|spec| spec.name())
     }
 
     /// The response body, capped at 64 KiB. Raw bytes from the network, and
@@ -240,10 +240,10 @@ impl Error {
     /// [`Retry::No`], and `track.updateNowPlaying` is always [`Retry::No`].
     pub fn retry(&self) -> Retry {
         let inner = &*self.inner;
-        let write = inner.spec.is_some_and(|spec| spec.write);
+        let write = inner.spec.is_some_and(|spec| spec.write());
         if inner
             .spec
-            .is_some_and(|spec| spec.name == UPDATE_NOW_PLAYING)
+            .is_some_and(|spec| spec.name() == UPDATE_NOW_PLAYING)
         {
             return Retry::No;
         }
@@ -276,7 +276,7 @@ impl Error {
     /// timeout and any failure after the request may have left.
     pub fn delivery(&self) -> Option<Delivery> {
         let inner = &*self.inner;
-        if !inner.spec?.write {
+        if !inner.spec?.write() {
             return None;
         }
         Some(match inner.kind {
@@ -388,7 +388,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let inner = &*self.inner;
-        let method = inner.spec.map_or("", |spec| spec.name);
+        let method = inner.spec.map_or("", |spec| spec.name());
         let status = inner.http_status;
         match inner.kind {
             ErrorKind::Api => {
@@ -425,7 +425,7 @@ impl fmt::Debug for Error {
         let mut out = f.debug_struct("Error");
         out.field("kind", &inner.kind);
         if let Some(spec) = inner.spec {
-            out.field("method", &spec.name);
+            out.field("method", &spec.name());
         }
         if let Some(status) = inner.http_status {
             out.field("http_status", &status);

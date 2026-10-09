@@ -1771,6 +1771,11 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
             ("Content-Type", "application/json; SENTINEL_CONTENT_TYPE"),
             ("Retry-After", "SENTINEL_RETRY_AFTER"),
             ("Date", "SENTINEL_DATE"),
+            ("Cache-Control", "max-age=SENTINEL_CACHE_CONTROL"),
+            ("Expires", "SENTINEL_EXPIRES"),
+            ("ETag", "SENTINEL_ETAG"),
+            ("Last-Modified", "SENTINEL_LAST_MODIFIED"),
+            ("Age", "SENTINEL_AGE"),
         ];
         let hostile = serve(Dataset::distinct(3), [])
             .await
@@ -1781,6 +1786,8 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
         // The values are kept, and available through `header`.
         assert_eq!(raw.header("retry-after"), Some("SENTINEL_RETRY_AFTER"));
         assert_eq!(raw.header("date"), Some("SENTINEL_DATE"));
+        assert_eq!(raw.header("etag"), Some("SENTINEL_ETAG"));
+        assert_eq!(raw.header("age"), Some("SENTINEL_AGE"));
 
         let page = client.user(USER).recent_tracks().send().await.unwrap();
         let mut scan = client
@@ -1794,7 +1801,9 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
         let http = scrobl::protocol::HttpResponse::new(200, "{}")
             .with_header("Content-Type", "SENTINEL_CONTENT_TYPE")
             .with_header("Retry-After", "SENTINEL_RETRY_AFTER")
-            .with_header("Date", "SENTINEL_DATE");
+            .with_header("Date", "SENTINEL_DATE")
+            .with_header("Cache-Control", "SENTINEL_CACHE_CONTROL")
+            .with_header("ETag", "SENTINEL_ETAG");
 
         let shown = [
             ("Raw", format!("{raw:?}\n{raw:#?}")),
@@ -1812,6 +1821,42 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
         // The header names are still visible, so a log says what was kept.
         assert!(format!("{raw:?}").contains("content-type"));
         assert!(format!("{http:?}").contains("retry-after"));
+        assert!(format!("{raw:?}").contains("cache-control"));
+        assert!(format!("{http:?}").contains("etag"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_headers_a_cache_goes_by_are_kept_and_capped_and_others_dropped() {
+    bounded(async {
+        let long = "x".repeat(1000);
+        let headers = [
+            ("Cache-Control", "max-age=60"),
+            ("Expires", "Thu, 08 Oct 2026 10:01:00 GMT"),
+            ("ETag", "\"abc\""),
+            ("Last-Modified", "Thu, 08 Oct 2026 10:00:00 GMT"),
+            ("Age", "5"),
+            ("Date", long.as_str()),
+            ("Set-Cookie", "session=abc"),
+            ("X-Anything", "x"),
+        ];
+        let server = serve(Dataset::distinct(3), [])
+            .await
+            .then(Behaviour::status_with(200, "{}", &headers));
+        let raw = client(&server).call(&read()).await.unwrap();
+
+        assert_eq!(raw.header("cache-control"), Some("max-age=60"));
+        assert_eq!(raw.header("Expires"), Some("Thu, 08 Oct 2026 10:01:00 GMT"));
+        assert_eq!(raw.header("etag"), Some("\"abc\""));
+        assert_eq!(
+            raw.header("last-modified"),
+            Some("Thu, 08 Oct 2026 10:00:00 GMT")
+        );
+        assert_eq!(raw.header("age"), Some("5"));
+        assert_eq!(raw.header("date").map(str::len), Some(256));
+        assert_eq!(raw.header("set-cookie"), None);
+        assert_eq!(raw.header("x-anything"), None);
     })
     .await;
 }

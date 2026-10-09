@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use super::pacing::Pacer;
 use super::{MAX_WAIT, parse_retry_after, push_chunk, retry_wait};
 use crate::error::ErrorKind;
-use crate::secret::ApiKey;
+use crate::secret::{ApiKey, ApiSecret, SessionKey};
 use crate::{Client, Error};
 
 const SENTINEL: &str = "SENTINEL_API_KEY_0001";
@@ -70,6 +70,25 @@ fn a_bad_user_agent_is_a_config_error() {
     }
     builder()
         .user_agent("my-app/1.0 (+https://example.org)")
+        .build()
+        .unwrap();
+}
+
+#[test]
+fn an_empty_credential_is_a_config_error_that_does_not_repeat_it() {
+    for blank in ["", " ", "\t \n"] {
+        let error = config_error(Client::builder(ApiKey::new(blank)));
+        assert!(error.to_string().contains("API key"), "{error}");
+
+        let error = config_error(builder().secret(ApiSecret::new(blank)));
+        assert!(error.to_string().contains("API secret"), "{error}");
+
+        let error = config_error(builder().session(SessionKey::new(blank)));
+        assert!(error.to_string().contains("session key"), "{error}");
+    }
+    builder()
+        .secret(ApiSecret::new("s"))
+        .session(SessionKey::new("sk"))
         .build()
         .unwrap();
 }

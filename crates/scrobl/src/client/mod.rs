@@ -20,7 +20,8 @@
 //!     .user_agent("example-backup/0.1 (+https://example.org)")
 //!     .build()?;
 //!
-//! // One closed window, read completely or not at all.
+//! // One closed window. Pages come as they are read, so what the loop has
+//! // seen is provisional until `finish` succeeds.
 //! let window = Window::new(1_700_000_000, 1_700_086_400)?;
 //! let mut scan = client
 //!     .user("rj")
@@ -35,11 +36,19 @@
 //! #       let _ = (scrobble, exact_bytes);
 //!     }
 //! }
+//! // Only now is what the loop yielded complete.
 //! let summary = scan.finish()?; // fails unless every rule of the scan held
 //! println!("{} scrobbles in {} pages", summary.total(), summary.pages());
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! Pages a scan has yielded are provisional until
+//! [`finish`](Scan::finish) succeeds: a later page, or `finish` itself, can
+//! still break a rule. A consumer should stage what it writes, in a
+//! temporary file or an open transaction, and mark it complete only after
+//! `finish` returns. Even then, see "What a completed scan does not prove"
+//! in the documentation of [`WindowScan`](crate::history::WindowScan).
 //!
 //! One page, for example to learn how many scrobbles a window holds:
 //!
@@ -79,10 +88,16 @@
 //!
 //! # Pacing
 //!
-//! Last.fm asks applications to make no more than about one request a
-//! second. The client keeps at least [`min_interval`] (one second by
-//! default) between the starts of two requests, across all its clones, and a
-//! retry is a request like any other.
+//! Last.fm's introduction warns against making several calls a second
+//! continuously, and documents no exact allowance. One second is this
+//! library's conservative default, not a rule Last.fm states. The client
+//! keeps at least [`min_interval`] (one second by default) between the
+//! starts of two requests, across all its clones, and a retry is a request
+//! like any other.
+//!
+//! The pacing is per `Client` and its clones. Separate clients, and separate
+//! processes, do not share it, so a program that builds several clients or
+//! runs several copies keeps no spacing between them.
 //!
 //! A start is an *admission*: the moment a caller is let through to the
 //! transport, measured by this process's clock when it happens. Callers are
@@ -240,7 +255,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{CONTENT_TYPE, DATE, HeaderMap, RETRY_AFTER};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 
 pub use builder::ClientBuilder;
@@ -296,7 +311,7 @@ impl Client {
     /// A client that acts for the user of `session`.
     ///
     /// Cheap: it shares this client's connection pool and pacing clock, so
-    /// one program serving several users still makes one request a second.
+    /// one program serving several users still paces its requests as one.
     /// This client is unchanged.
     #[must_use]
     pub fn with_session(&self, session: SessionKey) -> Client {
@@ -351,7 +366,7 @@ impl Client {
         }?;
 
         // The client never repeats a write.
-        let attempts = if request.spec().write {
+        let attempts = if request.spec().write() {
             1
         } else {
             shared.settings.read_attempts
@@ -456,8 +471,11 @@ impl Client {
         }
 
         let mut reply = HttpResponse::new(status, body);
-        for name in [CONTENT_TYPE, RETRY_AFTER, DATE] {
-            if let Some(value) = headers.get(&name).and_then(|v| v.to_str().ok()) {
+        // `with_header` keeps what the protocol layer allows and drops the
+        // rest, so the list lives there alone. `get` gives the first value of
+        // a header that repeats.
+        for name in headers.keys() {
+            if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
                 reply = reply.with_header(name.as_str(), value);
             }
         }

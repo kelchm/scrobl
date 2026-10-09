@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: 2026-10-08. Transport and coverage are decided; license and minimum Rust are still open. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
+Status: 2026-10-08. Transport, coverage, license (MIT) and minimum Rust (1.88) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -66,8 +66,10 @@ Rules:
 - `Request::as_user()` sends `sk` and `api_sig` with a method that does not require them, so a read is made as the session's user. This is how a hidden history would be read. The official pages describe the mode without documenting it, so it is unverified.
 - `Get` puts parameters in the query string; `Post` puts all of them, including `method`, in a form-encoded body. The root is always `https://ws.audioscrobbler.com/2.0/`. A different root can be set only for tests.
 - `decode` looks for the JSON error envelope (`{"error": N, "message": ".."}`) at every HTTP status before anything else. HTTP 200 carrying an error is an error. A non-2xx status without an envelope is `ErrorKind::Http`. A 2xx body that is not JSON is `ErrorKind::Decode`.
-- `Raw` is the status, a small set of headers, the exact body bytes and the `Request` it answers. Typed views are decoded from it and never replace it. `Request` compares by method, parameters in order and the `as_user` flag, so a consumer can tell whether a response answers the request it holds.
+- `Raw` is the status, a small set of headers (`content-type`, `retry-after`, `date`, and the ones a cache goes by: `cache-control`, `expires`, `etag`, `last-modified`, `age`), the exact body bytes and the `Request` it answers. Typed views are decoded from it and never replace it. `Request` compares by method, parameters in order and the `as_user` flag, so a consumer can tell whether a response answers the request it holds.
 - `HttpRequest`'s `Debug` and every error redact `api_key`, `api_sig`, `sk`, `token` and `password` values. No error carries a URL.
+
+- A `MethodSpec` has private fields and read-only getters, and the only ones that exist are the constants in `methods`, so a caller cannot build one or change a verb, credential requirement or `write` flag.
 
 There is no public transport trait. A caller with another HTTP client uses `prepare` and `decode` directly.
 
@@ -120,7 +122,7 @@ A scan is made only by `RecentTracks::scan`, from the builder's user, window, `e
 
 The scan ends after `totalPages` pages, or after page 1 when `total` is 0. It never issues a request with altered bounds. `next_request` returns the same request until a page is accepted, so a transport failure can be retried without skipping or repeating a page. A response that does not reach `accept` (an API error envelope, a non-JSON body) does not poison the scan, and an empty window is a successful scan with `total` 0, which an error is not. A scan without an upper bound is allowed. It sees scrobbles that arrive while it runs, which usually changes `total` and fails rule 3, but not always (see below); callers who want a more stable read fix `to` first.
 
-The client drives it as `Scan` (below). `next_page` sends the outstanding request through the same paced, retried `call` as any read and hands the result to `accept`. An error from the transport or the API leaves the page outstanding, so calling `next_page` again sends the identical request. An error from `accept` kills the scan: later calls fail with `Inconsistent` and send nothing, and never read as a finished scan. The core offers no request once a scan is dead, which on its own would look like completion, so `Scan` remembers the failure and reports it. The request handed to `call` and then to `accept` is exactly the one `next_request` returned, since `accept` refuses a response to any other.
+The client drives it as `Scan` (below). A page the scan has yielded is provisional until `finish` succeeds, because a later page or `finish` itself can still fail a rule; a consumer stages what it writes and marks it complete only then. `next_page` sends the outstanding request through the same paced, retried `call` as any read and hands the result to `accept`. An error from the transport or the API leaves the page outstanding, so calling `next_page` again sends the identical request. An error from `accept` kills the scan: later calls fail with `Inconsistent` and send nothing, and never read as a finished scan. The core offers no request once a scan is dead, which on its own would look like completion, so `Scan` remembers the failure and reports it. The request handed to `call` and then to `accept` is exactly the one `next_request` returned, since `accept` refuses a response to any other.
 
 The `[from, to)` rule comes from one recorded third-party exchange, not a documented guarantee. That is why it is checked on every page rather than assumed.
 
@@ -185,7 +187,7 @@ Fixed behaviour: HTTPS only (the client refuses a plain-HTTP URL before connecti
 
 One attempt is: wait for admission, send, read the body up to the cap, `decode`. The request is built once, before the first admission, so an invalid request waits for nothing and sends nothing.
 
-Pacing: every attempt, including a retry, is admitted at least one interval after the previous admission, across all clones. Admission is serialised and measured when it happens: a caller takes an async (`tokio::sync::Mutex`, first come first served) lock over the time of the last admission, sleeps whatever remains of the interval *while holding the lock*, reads the clock again, records that as the new last admission and releases. So the spacing holds however late a task is polled (a runtime stalled for several intervals delays the queued callers; it does not release them together), nothing is reserved ahead, and a caller dropped while queued or sleeping leaves no debt: the next one waits only for what remains since the last real admission. The arithmetic is on `Duration`s, an interval over 24 hours is a `Config` error, and a zero interval skips pacing entirely. "Start" means admission to the transport, measured in this process; connection setup can still make arrivals at the server bunch slightly.
+Pacing: every attempt, including a retry, is admitted at least one interval after the previous admission, across all clones. Admission is serialised and measured when it happens: a caller takes an async (`tokio::sync::Mutex`, first come first served) lock over the time of the last admission, sleeps whatever remains of the interval *while holding the lock*, reads the clock again, records that as the new last admission and releases. So the spacing holds however late a task is polled (a runtime stalled for several intervals delays the queued callers; it does not release them together), nothing is reserved ahead, and a caller dropped while queued or sleeping leaves no debt: the next one waits only for what remains since the last real admission. The arithmetic is on `Duration`s, an interval over 24 hours is a `Config` error, and a zero interval skips pacing entirely. "Start" means admission to the transport, measured in this process; connection setup can still make arrivals at the server bunch slightly. The one-second default is this library's conservative choice: Last.fm's introduction only warns against making several calls per second continuously, and documents no exact allowance. Pacing is per `Client` and its clones; separate clients and separate processes do not share it.
 
 Retries: a read is attempted up to `read_attempts` times in total, and only when `Error::retry()` is `Later` or `AfterBackoff`: transport failures and timeouts at any point, HTTP 5xx, API codes 11 and 16 (`Later`), HTTP 429 and API code 29 (`AfterBackoff`). Before retry `n` it waits `retry_delay * 2^(n-1)`, five times that for `AfterBackoff`, and at least a numeric `Retry-After`, none longer than five minutes, on top of pacing. A body that is too large, a body that does not decode and every other status or code are not retried. **A write is never retried by the client**, whatever `retry()` advises; `delivery()` tells the caller what happened.
 
@@ -224,7 +226,7 @@ impl Error {
 | `Timeout` | A deadline passed |
 | `BodyTooLarge` | The response exceeded the body cap |
 | `InvalidRequest` | The request could not be built; nothing was sent |
-| `Config` | The client could not be built: an unusable user agent, a zero timeout, cap or attempt count, a pacing interval over 24 hours, a test root that is not loopback, or an HTTP client that failed to initialise |
+| `Config` | The client could not be built: an empty API key, secret or session key, an unusable user agent, a zero timeout, cap or attempt count, a pacing interval over 24 hours, a test root that is not loopback, or an HTTP client that failed to initialise |
 
 `ApiErrorCode` wraps the number and keeps unknown codes. Named constants exist for the documented ones, including `LOGIN_REQUIRED` (17) and `SUSPENDED_KEY` (26), which callers must be able to tell apart from an empty history.
 
@@ -243,7 +245,8 @@ let client = scrobl::Client::builder(api_key)
     .user_agent("example-backup/0.1 (+https://example.org)")
     .build()?;
 
-// One closed window, read completely or not at all.
+// One closed window. Pages come as they are read, so they are provisional
+// until `finish()` succeeds: stage what you write, and mark it complete only then.
 let mut scan = client.user("rj").recent_tracks()
     .window(Window::new(from, to)?)
     .extended(true)
@@ -253,7 +256,7 @@ while let Some(page) = scan.next_page().await? {
     archive.write(page.raw().body())?;       // the exact bytes Last.fm sent
     for scrobble in page.scrobbles() { /* derived view */ }
 }
-let summary = scan.finish()?;                // fails unless every rule held
+let summary = scan.finish()?;                // fails unless every rule held; now the staged pages are complete
 
 // A count probe: one request, the window's total.
 let total = client.user("rj").recent_tracks()

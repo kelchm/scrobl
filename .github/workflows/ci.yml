@@ -34,6 +34,10 @@ jobs:
       - run: cargo doc --locked --no-deps --all-features
       - run: cargo doc --locked --no-deps --no-default-features
       - run: cargo deny check advisories licenses
+      # What would be published must build and pass its own tests, away from
+      # the repository around it.
+      - run: cargo package --locked -p scrobl
+      - run: cargo test --locked --manifest-path target/package/scrobl-*/Cargo.toml
 
   coverage:
     runs-on: ubuntu-latest
