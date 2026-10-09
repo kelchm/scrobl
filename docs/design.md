@@ -331,7 +331,7 @@ A live acceptance pass, under explicit owner approval and with the owner's own c
 
 ## Rust version
 
-The minimum is Rust 1.88, the lowest version that works: the code uses let chains, stable since 1.88, and the locked dependency tree needs 1.88 too. CI runs the whole test suite on it, with and without the client. The Tauri 2 consumer needs less (1.77.2), so the library sets the floor. Raising it is allowed in a minor release, only when the code or a dependency needs it, and never past a version less than six months old.
+The minimum is Rust 1.88, the lowest version that works: the code uses let chains, stable since 1.88, and the locked dependency tree needs 1.88 too. CI runs the whole test suite on it, with and without the client. Tauri 2 itself declares 1.90, so the music app will need more than the library does; the library does not adopt that, because the backup application and other users have no reason to be held to it. Raising it is allowed in a minor release, only when the code or a dependency needs it, and never past a version less than six months old.
 
 ## Fixtures
 
