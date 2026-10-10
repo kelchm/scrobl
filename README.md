@@ -103,9 +103,9 @@ The first sync reads the whole history, thirty days of listening at a time and a
 
 The file holds every response exactly as Last.fm sent it (`pages`) and one row per scrobble decoded from them (`scrobbles`, the table to query). Scrobbles are never merged, so two plays in the same second are two rows.
 
-Every sync also reads the tracks the user has loved and replaces the copy in the file (`loved`, with the responses in `loved_pages`). That list is what is loved now, each track with the time it was loved; a track that was unloved since the last sync is gone from it.
+Every sync ends by reading the tracks the user has loved and replacing the copy in the file (`loved`, with the responses in `loved_pages`). That list is what is loved now, each track with the time it was loved; a track that was unloved since the last sync is gone from it. If that read fails, the sync exits with status 1 and the history it stored is kept.
 
-Each sync ends by comparing the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ. They differ when scrobbles were added to or removed from a period after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it.
+Each sync compares the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ and nothing else failed. They differ when scrobbles were added to or removed from a period after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it.
 
 ## Last.fm's terms
 

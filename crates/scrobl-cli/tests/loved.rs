@@ -176,3 +176,68 @@ async fn a_failed_call_is_a_lastfm_error_and_stores_nothing() {
     assert!(matches!(result, Err(Error::Lastfm(_))), "{result:?}");
     assert!(tracks(&store).is_empty());
 }
+
+#[tokio::test]
+async fn a_track_swapped_for_another_while_the_list_is_read_is_noticed() {
+    let scratch = Scratch::new();
+    let mut store = store(&scratch);
+    let dataset = Dataset::distinct(1).with_loved(4);
+    run(&dataset, &mut store, 2).await.1.unwrap();
+
+    // After the first page the oldest track is unloved and a new one is
+    // loved. The total is the same, and the second page starts with the
+    // last row of the first.
+    let faults = Faults {
+        swap_loved_from_page: Some(2),
+        ..Faults::default()
+    };
+    let (server, result) = run(&dataset.clone().with_faults(faults), &mut store, 2).await;
+
+    match result {
+        Err(error @ Error::Service(_)) => {
+            assert!(error.to_string().contains("changed while"), "{error}");
+        }
+        other => panic!("expected a service error, got {other:?}"),
+    }
+    assert_eq!(server.request_count(), 2);
+    assert_eq!(names(&store), ["Loved 4", "Loved 3", "Loved 2", "Loved 1"]);
+}
+
+#[tokio::test]
+async fn the_list_ends_where_its_rows_add_up_whatever_total_pages_says() {
+    for (loved_tracks, requests) in [(0, 1), (4, 2), (3, 2)] {
+        let scratch = Scratch::new();
+        let mut store = store(&scratch);
+        let faults = Faults {
+            loved_total_pages: Some(10_000),
+            ..Faults::default()
+        };
+        let dataset = Dataset::distinct(1)
+            .with_loved(loved_tracks)
+            .with_faults(faults);
+
+        let (server, result) = run(&dataset, &mut store, 2).await;
+
+        assert_eq!(result.unwrap(), loved_tracks as u64);
+        assert_eq!(server.request_count(), requests);
+        assert_eq!(tracks(&store).len(), loved_tracks);
+    }
+}
+
+#[tokio::test]
+async fn a_total_pages_that_is_too_small_does_not_end_the_list_early() {
+    let scratch = Scratch::new();
+    let mut store = store(&scratch);
+    // `totalPages` says 1, but the first page holds 2 of 4.
+    let faults = Faults {
+        loved_total_pages: Some(1),
+        ..Faults::default()
+    };
+    let dataset = Dataset::distinct(1).with_loved(4).with_faults(faults);
+
+    let (server, result) = run(&dataset, &mut store, 2).await;
+
+    assert_eq!(result.unwrap(), 4);
+    assert_eq!(server.request_count(), 2);
+    assert_eq!(tracks(&store).len(), 4);
+}

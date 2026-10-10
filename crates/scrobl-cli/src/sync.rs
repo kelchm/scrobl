@@ -20,6 +20,8 @@
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
 
+use std::collections::HashSet;
+
 use scrobl::history::{ScanPage, ScanSummary, Window};
 use scrobl::model::LovedTracksPage;
 use scrobl::{Client, Response};
@@ -235,9 +237,12 @@ async fn read(
 ///
 /// The list is read newest first, a page at a time, and nothing ties one
 /// page to the next: a track loved or unloved between two requests moves
-/// every later row. So every page must report the same total, and the pages
-/// must hold exactly that many tracks, or nothing is stored and the copy
-/// from the last sync stays as it was.
+/// every later row. So every page must report the same total, every page
+/// but the last must be full, the pages must hold exactly that many tracks,
+/// and no track may be listed twice, or nothing is stored and the copy from
+/// the last sync stays as it was. That catches a list that grew, shrank, or
+/// lost one track and gained another during the read. It cannot catch every
+/// change: only a list that fits one page is read at a single moment.
 ///
 /// # Errors
 ///
@@ -273,18 +278,38 @@ pub async fn loved(
         let changed = pages
             .first()
             .is_some_and(|first| first.attr().total() != total);
-        let last = u64::from(number) >= attr.total_pages();
+        let full = page.tracks().len() as u64 == u64::from(page_size);
         pages.push(page);
-        let read: usize = pages.iter().map(|page| page.tracks().len()).sum();
-        if changed || read as u64 > total || (last && read as u64 != total) {
+        let read = pages.iter().map(|page| page.tracks().len()).sum::<usize>() as u64;
+        // The end is where the rows add up to the total, whatever
+        // `totalPages` says. Every page before it must be full, so each
+        // request brings the end nearer and a short page is a list that
+        // shrank.
+        let done = read >= total;
+        if changed || read > total || (!done && !full) || (done && repeats(&pages)) {
             return Err(Error::Service(
                 "the loved tracks changed while they were being read; the next sync reads them \
                  again",
             ));
         }
-        if last {
+        if done {
             store.replace_loved(&pages, time::now())?;
             return Ok(total);
         }
     }
+}
+
+/// Whether a track is listed twice: the same artist and name, loved in the
+/// same second. A track loved while the list was being read pushes a row
+/// from one page onto the next, where it is read again, and the totals
+/// cannot show it when another track was unloved meanwhile.
+fn repeats(pages: &[Response<LovedTracksPage>]) -> bool {
+    let mut seen = HashSet::new();
+    pages.iter().flat_map(|page| page.tracks()).any(|loved| {
+        !seen.insert((
+            loved.loved_at(),
+            loved.artist().name(),
+            loved.track().name(),
+        ))
+    })
 }

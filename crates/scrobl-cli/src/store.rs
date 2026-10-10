@@ -32,8 +32,9 @@ use crate::Error;
 /// "scbl".
 const APPLICATION_ID: i64 = 0x7363_626c;
 
-/// The layout below: `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+/// The layout below: `PRAGMA user_version`. Version 1 had no tables for the
+/// loved tracks and, in its first form, a `loved` column on `scrobbles`.
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -75,7 +76,10 @@ CREATE TABLE scrobbles (
 ) STRICT;
 
 CREATE INDEX scrobbles_timestamp ON scrobbles (timestamp);
+";
 
+/// The tables of the loved tracks, which version 2 added.
+const LOVED_SCHEMA: &str = "
 CREATE TABLE loved_pages (
     page INTEGER PRIMARY KEY,
     body BLOB NOT NULL
@@ -94,6 +98,26 @@ CREATE TABLE loved (
 ) STRICT;
 ";
 
+/// Brings a version 1 file to version 2, in one transaction: the tables of
+/// the loved tracks are added, and the `loved` column, which the first
+/// version 1 files have on `scrobbles`, is dropped. What it held is still in
+/// the pages.
+fn upgrade_from_1(connection: &mut Connection) -> Result<(), Error> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_loved: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('scrobbles') WHERE name = 'loved')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_loved {
+        transaction.execute_batch("ALTER TABLE scrobbles DROP COLUMN loved")?;
+    }
+    transaction.execute_batch(LOVED_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 /// An open database.
 #[derive(Debug)]
 pub struct Store {
@@ -102,7 +126,7 @@ pub struct Store {
 
 impl Store {
     /// Opens the database at `path`, creating it if the file is missing or
-    /// empty.
+    /// empty, and bringing a file of the previous layout up to this one.
     ///
     /// # Errors
     ///
@@ -138,6 +162,7 @@ impl Store {
         if objects == 0 && application == 0 && version == 0 {
             let transaction = connection.transaction()?;
             transaction.execute_batch(SCHEMA)?;
+            transaction.execute_batch(LOVED_SCHEMA)?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -148,7 +173,9 @@ impl Store {
                 "the file is a database, but not one this tool made",
             ));
         }
-        if version != SCHEMA_VERSION {
+        if version == 1 {
+            upgrade_from_1(&mut connection)?;
+        } else if version != SCHEMA_VERSION {
             return Err(Error::Database(
                 "the database was written by another version of this tool",
             ));

@@ -137,6 +137,12 @@ pub struct Faults {
     /// From this page of the loved tracks on, one more track is loved: the
     /// list has a new newest row and `total` is one higher.
     pub love_from_page: Option<u32>,
+    /// From this page of the loved tracks on, the oldest track is unloved
+    /// and one more is loved: the rows move down by one and `total` is the
+    /// same.
+    pub swap_loved_from_page: Option<u32>,
+    /// What `totalPages` says for the loved tracks, whatever is true.
+    pub loved_total_pages: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -534,6 +540,17 @@ fn loved_tracks<'a>(dataset: &Dataset, get: &impl Fn(&str) -> Option<&'a str>) -
     {
         loved.insert(0, loved.first().map_or(BASE, |newest| newest + 100));
     }
+    // Names count from the oldest track that was ever in the list.
+    let mut unloved = 0;
+    if dataset
+        .faults
+        .swap_loved_from_page
+        .is_some_and(|p| page >= u64::from(p))
+    {
+        loved.insert(0, loved.first().map_or(BASE, |newest| newest + 100));
+        loved.pop();
+        unloved = 1;
+    }
 
     let size = limit.min(LOVED_CAP);
     let total = loved.len() as u64;
@@ -545,7 +562,7 @@ fn loved_tracks<'a>(dataset: &Dataset, get: &impl Fn(&str) -> Option<&'a str>) -
         .map(|(index, ts)| {
             // Numbered from the oldest, so a track keeps its name when a
             // newer one is loved.
-            let n = loved.len() - index;
+            let n = loved.len() - index + unloved;
             json!({
                 "artist": {
                     "url": "https://example.invalid/music/Artist",
@@ -576,7 +593,11 @@ fn loved_tracks<'a>(dataset: &Dataset, get: &impl Fn(&str) -> Option<&'a str>) -
             "user": echoed,
             "page": page.to_string(),
             "perPage": size.to_string(),
-            "totalPages": total.div_ceil(size).to_string(),
+            "totalPages": dataset
+                .faults
+                .loved_total_pages
+                .unwrap_or(total.div_ceil(size))
+                .to_string(),
             "total": total.to_string(),
         },
     }});

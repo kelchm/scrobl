@@ -98,11 +98,85 @@ fn a_database_of_another_version_is_refused() {
     Store::open(scratch.db())
         .unwrap()
         .connection()
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .unwrap();
 
     let message = database_error(Store::open(scratch.db()));
     assert!(message.contains("another version"));
+}
+
+/// The layout of version 1 as it was first written, with a `loved` column
+/// on `scrobbles` and no tables for the loved tracks.
+const VERSION_1: &str = "
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+CREATE TABLE windows (
+    id INTEGER PRIMARY KEY, from_ts INTEGER NOT NULL, to_ts INTEGER NOT NULL,
+    total INTEGER NOT NULL, pages INTEGER NOT NULL, page_size INTEGER NOT NULL,
+    read_at INTEGER NOT NULL, CHECK (from_ts >= 0 AND from_ts < to_ts)
+) STRICT;
+CREATE TABLE pages (
+    window_id INTEGER NOT NULL REFERENCES windows (id), page INTEGER NOT NULL,
+    body BLOB NOT NULL, PRIMARY KEY (window_id, page)
+) STRICT;
+CREATE TABLE scrobbles (
+    id INTEGER PRIMARY KEY, window_id INTEGER NOT NULL REFERENCES windows (id),
+    page INTEGER NOT NULL, position INTEGER NOT NULL, timestamp INTEGER NOT NULL,
+    artist TEXT NOT NULL, artist_mbid TEXT, track TEXT NOT NULL, track_mbid TEXT,
+    album TEXT, album_mbid TEXT, loved INTEGER, UNIQUE (window_id, page, position)
+) STRICT;
+CREATE INDEX scrobbles_timestamp ON scrobbles (timestamp);
+INSERT INTO meta VALUES ('user', 'rj_Synthetic');
+INSERT INTO windows VALUES (1, 0, 1700000100, 1, 1, 200, 1700000200);
+INSERT INTO pages VALUES (1, 1, x'7b7d');
+INSERT INTO scrobbles VALUES
+    (1, 1, 1, 0, 1700000010, 'Artist', NULL, 'Track', NULL, 'Album', NULL, 1);
+PRAGMA application_id = 0x7363626c;
+PRAGMA user_version = 1;
+";
+
+#[test]
+fn a_version_1_file_is_brought_up_to_date_and_keeps_its_history() {
+    // The first form had a `loved` column; the second had already lost it.
+    for layout in [
+        VERSION_1.to_owned(),
+        VERSION_1
+            .replace("album_mbid TEXT, loved INTEGER,", "album_mbid TEXT,")
+            .replace("'Album', NULL, 1);", "'Album', NULL);"),
+    ] {
+        let scratch = Scratch::new();
+        rusqlite::Connection::open(scratch.db())
+            .unwrap()
+            .execute_batch(&layout)
+            .unwrap();
+
+        let mut store = Store::open(scratch.db()).unwrap();
+
+        let version: i64 = store
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        let columns: Vec<String> = store
+            .connection()
+            .prepare("SELECT name FROM pragma_table_info('scrobbles')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(!columns.contains(&"loved".to_owned()));
+        assert_eq!(store.user().unwrap().as_deref(), Some(USER));
+        assert_eq!(store.scrobbles_before(1_700_000_100).unwrap(), 1);
+        assert_eq!(store.gaps(1_700_000_100).unwrap(), []);
+
+        // It takes the loved tracks, and a window, like a new file.
+        let dataset = Dataset::distinct(1).with_loved(3);
+        store.replace_loved(&loved_pages(&dataset, 2), 100).unwrap();
+        assert_eq!(count(&store, "loved"), 3);
+        drop(store);
+        // And opens again as it is.
+        assert_eq!(count(&Store::open(scratch.db()).unwrap(), "loved"), 3);
+    }
 }
 
 #[test]
