@@ -487,6 +487,10 @@ fn images() -> Value {
     ])
 }
 
+/// The artist `mbid` of every synthetic scrobble. As the service does, the
+/// fake sends it in the plain form and sends it empty with `extended=1`.
+pub const ARTIST_MBID: &str = "00000000-0000-4000-8000-0000000a2715";
+
 fn row_json(entry: &Entry, extended: bool) -> Value {
     let artist = if extended {
         json!({
@@ -496,7 +500,7 @@ fn row_json(entry: &Entry, extended: bool) -> Value {
             "image": images(),
         })
     } else {
-        json!({"mbid": "", "#text": "Synthetic Artist"})
+        json!({"mbid": ARTIST_MBID, "#text": "Synthetic Artist"})
     };
     let mut row = json!({
         "artist": artist,

@@ -26,7 +26,6 @@ fn scan(dataset: &Dataset, window: Window, page_size: u32) -> (ScanSummary, Vec<
     let mut scan = RecentTracks::new(USER)
         .window(window)
         .limit(page_size)
-        .extended(true)
         .scan()
         .unwrap();
     let mut pages = Vec::new();
@@ -319,7 +318,6 @@ fn pages_of_another_window_are_refused_even_when_the_counts_agree() {
     let mut their_scan = RecentTracks::new("someone-else")
         .window(Window::new(BASE, BASE + 81).unwrap())
         .limit(4)
-        .extended(true)
         .scan()
         .unwrap();
     let mut their_pages = Vec::new();

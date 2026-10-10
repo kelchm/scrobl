@@ -65,7 +65,6 @@ CREATE TABLE scrobbles (
     track_mbid  TEXT,
     album       TEXT,
     album_mbid  TEXT,
-    loved       INTEGER,
     UNIQUE (window_id, page, position)
 ) STRICT;
 
@@ -276,8 +275,8 @@ impl Store {
                 .prepare("INSERT INTO pages (window_id, page, body) VALUES (?1, ?2, ?3)")?;
             let mut insert_scrobble = transaction.prepare(
                 "INSERT INTO scrobbles (window_id, page, position, timestamp, artist,
-                     artist_mbid, track, track_mbid, album, album_mbid, loved)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     artist_mbid, track, track_mbid, album, album_mbid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )?;
             for page in pages {
                 insert_page.execute(params![window_id, page.number(), page.raw().body()])?;
@@ -293,7 +292,6 @@ impl Store {
                         scrobble.track().mbid(),
                         scrobble.album().title(),
                         scrobble.album().mbid(),
-                        scrobble.loved(),
                     ])?;
                 }
             }

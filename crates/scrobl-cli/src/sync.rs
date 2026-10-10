@@ -198,6 +198,10 @@ async fn probe(
 
 /// Reads `[from, to)` completely. The pages are held in memory until the
 /// scan has finished, because until then they are provisional.
+///
+/// The pages are asked for in the plain form. With `extended=1` Last.fm
+/// sends every artist's `mbid` empty, and what it adds in exchange is the
+/// loved flag, which is not a fact about one scrobble.
 async fn read(
     client: &Client,
     user: &str,
@@ -210,7 +214,6 @@ async fn read(
         .recent_tracks()
         .window(window(from, to)?)
         .limit(page_size)
-        .extended(true)
         .scan()?;
     let mut pages = Vec::new();
     while let Some(page) = scan.next_page().await? {
