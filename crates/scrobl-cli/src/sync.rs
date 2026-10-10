@@ -28,7 +28,8 @@ use crate::time;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Options {
-    /// The longest stretch of listening one window holds, in seconds.
+    /// The longest stretch of listening one window holds, in seconds. Zero
+    /// is taken as one.
     pub span: u64,
     /// The rows asked for on every page of a scan, 1 to 200.
     pub page_size: u32,
@@ -101,7 +102,7 @@ pub async fn sync(
     for (gap_from, gap_to) in store.gaps(cutoff)? {
         let mut to = gap_to;
         while to > gap_from {
-            let from = window_start(client, user, gap_from, to, options.span).await?;
+            let from = window_start(client, user, gap_from, to, options.span.max(1)).await?;
             let (summary, pages) = read(client, user, from, to, options.page_size).await?;
             store.commit_window(&summary, &pages, time::now())?;
             added += summary.total();
@@ -150,9 +151,12 @@ async fn window_start(
     if total == 0 {
         return Ok(gap_from);
     }
-    let newest = newest.ok_or(Error::Service(
-        "Last.fm counted scrobbles in a period but returned none",
-    ))?;
+    // Scrobbles were counted but none came back, as could happen if the
+    // service spent the one row asked for on what is playing now. Any lower
+    // bound is a correct one, so take the plain one.
+    let Some(newest) = newest else {
+        return Ok(gap_from.max(to - span));
+    };
     if newest < gap_from || newest >= to {
         return Err(Error::Service(
             "Last.fm returned a scrobble from outside the period asked for",
@@ -163,6 +167,9 @@ async fn window_start(
 
 /// One request: how many scrobbles `[from, to)` holds, and the timestamp of
 /// the newest.
+///
+/// The count decides how a sync ends, so the answer has to be the answer to
+/// this question: the user, the page and the page size asked for.
 async fn probe(
     client: &Client,
     user: &str,
@@ -176,11 +183,17 @@ async fn probe(
         .limit(1)
         .send()
         .await?;
+    let attr = page.attr();
+    if !attr.user().eq_ignore_ascii_case(user) || attr.page() != 1 || attr.per_page() != 1 {
+        return Err(Error::Service(
+            "Last.fm answered a count with a page that was not the one asked for",
+        ));
+    }
     let newest = page
         .scrobbles()
         .first()
         .map(|scrobble| scrobble.timestamp());
-    Ok((page.attr().total(), newest))
+    Ok((attr.total(), newest))
 }
 
 /// Reads `[from, to)` completely. The pages are held in memory until the

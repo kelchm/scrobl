@@ -2,12 +2,13 @@
 
 use std::process::ExitCode;
 
+use scrobl::ApiKey;
 use scrobl_cli::cli::{self, API_KEY_VARIABLE, Environment};
 use scrobl_cli::time;
 
 fn main() -> ExitCode {
     let environment = Environment {
-        api_key: std::env::var(API_KEY_VARIABLE).ok(),
+        api_key: std::env::var(API_KEY_VARIABLE).ok().map(ApiKey::new),
         now: time::now(),
     };
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());

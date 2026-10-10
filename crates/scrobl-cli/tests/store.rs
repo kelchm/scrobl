@@ -245,3 +245,133 @@ fn a_window_without_an_upper_bound_is_refused() {
     assert!(message.contains("upper bound"));
     assert_eq!(count(&store, "windows"), 0);
 }
+
+#[test]
+fn a_path_that_names_no_file_is_refused() {
+    // SQLite reads both as a database that is gone when it is closed.
+    for path in ["", ":memory:"] {
+        let message = database_error(Store::open(path));
+        assert!(message.contains("does not name a file"));
+    }
+}
+
+#[test]
+fn a_uri_is_a_file_name_and_not_a_database_in_memory() {
+    let scratch = Scratch::new();
+    let path = scratch.db().with_file_name("file:history?mode=memory");
+    Store::open(&path).unwrap().bind_user("rj").unwrap();
+
+    assert!(path.exists());
+    assert_eq!(
+        Store::open(&path).unwrap().user().unwrap().as_deref(),
+        Some("rj")
+    );
+}
+
+#[test]
+fn an_empty_database_that_another_program_marked_is_refused_and_left_alone() {
+    let scratch = Scratch::new();
+    let other = rusqlite::Connection::open(scratch.db()).unwrap();
+    other.pragma_update(None, "application_id", 12_345).unwrap();
+    other.pragma_update(None, "user_version", 9).unwrap();
+    drop(other);
+
+    database_error(Store::open(scratch.db()));
+
+    let other = rusqlite::Connection::open(scratch.db()).unwrap();
+    let marks: (i64, i64, i64) = (
+        other
+            .pragma_query_value(None, "application_id", |row| row.get(0))
+            .unwrap(),
+        other
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        other
+            .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
+            .unwrap(),
+    );
+    assert_eq!(marks, (12_345, 9, 0));
+}
+
+#[test]
+fn pages_of_another_window_are_refused_even_when_the_counts_agree() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let dataset = Dataset::distinct(10);
+    // Two windows of five scrobbles in two pages each.
+    let (summary, _) = scan(&dataset, Window::new(BASE, BASE + 51).unwrap(), 4);
+    let (_, other) = scan(&dataset, Window::new(BASE + 51, BASE + 200).unwrap(), 4);
+
+    let message = database_error(store.commit_window(&summary, &other, 0));
+    assert!(message.contains("not the ones"));
+
+    // The right pages in the wrong order, and one of them twice.
+    let (summary, pages) = scan(&dataset, Window::new(BASE, BASE + 81).unwrap(), 4);
+    let swapped = [pages[1].clone(), pages[0].clone()];
+    database_error(store.commit_window(&summary, &swapped, 0));
+    let repeated = [pages[0].clone(), pages[0].clone()];
+    database_error(store.commit_window(&summary, &repeated, 0));
+
+    // Pages another user's history would give for the same window.
+    let mut theirs = Dataset::distinct(10);
+    theirs.user = "someone-else".to_owned();
+    let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
+    let mut their_scan = RecentTracks::new("someone-else")
+        .window(Window::new(BASE, BASE + 81).unwrap())
+        .limit(4)
+        .extended(true)
+        .scan()
+        .unwrap();
+    let mut their_pages = Vec::new();
+    while let Some(request) = their_scan.next_request() {
+        let http = protocol::prepare(&credentials, &request).unwrap();
+        let (status, body) = support::respond(&theirs, &http);
+        let raw = protocol::decode(&request, HttpResponse::new(status, body)).unwrap();
+        their_pages.push(their_scan.accept(raw).unwrap());
+    }
+    database_error(store.commit_window(&summary, &their_pages, 0));
+
+    assert_eq!(count(&store, "windows"), 0);
+    assert_eq!(count(&store, "pages"), 0);
+    assert_eq!(count(&store, "scrobbles"), 0);
+}
+
+#[test]
+fn a_window_that_fails_part_way_leaves_nothing_behind() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    // The write fails on the second page, after a window, a page and four
+    // scrobbles have gone in.
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER stop AFTER INSERT ON scrobbles WHEN NEW.page = 2
+             BEGIN SELECT RAISE(ABORT, 'stopped by the test'); END",
+        )
+        .unwrap();
+    let (summary, pages) = scan(&Dataset::distinct(10), Window::before(BASE + 1_000), 4);
+
+    let result = store.commit_window(&summary, &pages, 0);
+
+    assert!(matches!(result, Err(Error::Sqlite(_))));
+    assert_eq!(count(&store, "windows"), 0);
+    assert_eq!(count(&store, "pages"), 0);
+    assert_eq!(count(&store, "scrobbles"), 0);
+    assert_eq!(store.gaps(BASE + 1_000).unwrap(), [(0, BASE + 1_000)]);
+}
+
+#[test]
+fn two_syncs_on_one_file_cannot_store_a_period_twice() {
+    let scratch = Scratch::new();
+    let mut first = Store::open(scratch.db()).unwrap();
+    let mut second = Store::open(scratch.db()).unwrap();
+    // Both saw the same gap and read the same window.
+    let (summary, pages) = scan(&Dataset::distinct(10), Window::before(BASE + 1_000), 4);
+
+    first.commit_window(&summary, &pages, 0).unwrap();
+    let message = database_error(second.commit_window(&summary, &pages, 0));
+
+    assert!(message.contains("overlaps"));
+    assert_eq!(count(&second, "windows"), 1);
+    assert_eq!(count(&second, "scrobbles"), 10);
+}

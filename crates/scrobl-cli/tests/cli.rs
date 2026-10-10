@@ -17,6 +17,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use common::*;
+use scrobl::ApiKey;
 use scrobl_cli::Error;
 use scrobl_cli::cli::{
     Command, EXIT_MISMATCH, Environment, SETTLE, SyncArgs, parse, run, sync_command,
@@ -41,7 +42,7 @@ fn usage_error(line: &[&str]) -> String {
 /// error.
 async fn tool(line: &[&str], api_key: Option<&str>) -> (u8, String, String) {
     let environment = Environment {
-        api_key: api_key.map(str::to_owned),
+        api_key: api_key.map(ApiKey::new),
         now: BASE,
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -122,6 +123,10 @@ fn a_wrong_command_line_says_what_is_wrong() {
     assert!(usage_error(&["serve"]).contains("unknown command"));
     assert!(usage_error(&["sync", "sync"]).contains("unknown command"));
     assert!(usage_error(&["sync"]).contains("scrobl --help"));
+    // An empty path names no file; SQLite would read it as a database to
+    // throw away.
+    assert!(usage_error(&["sync", "--db="]).contains("--db <file>"));
+    assert!(usage_error(&["sync", "--db", ""]).contains("--db <file>"));
 }
 
 #[cfg(unix)]
@@ -148,6 +153,33 @@ fn a_path_need_not_be_unicode_but_a_user_name_must() {
     ])
     .unwrap_err();
     assert!(error.to_string().contains("not valid Unicode"));
+
+    // Joined to its option, such a value would have to be rewritten to be
+    // read, and a rewritten path is another file.
+    for option in [&b"--db=h"[..], b"--user=h"] {
+        let mut joined = option.to_vec();
+        joined.push(0xff);
+        let error = parse([
+            OsString::from("sync"),
+            "--db".into(),
+            "x".into(),
+            OsString::from_vec(joined),
+        ])
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("not valid Unicode"));
+    }
+}
+
+#[test]
+fn the_environment_does_not_show_the_api_key() {
+    let environment = Environment {
+        api_key: Some(ApiKey::new("SENTINEL_API_KEY_0001")),
+        now: BASE,
+    };
+    let shown = format!("{environment:?} {environment:#?}");
+    assert!(!shown.contains("SENTINEL"));
+    assert!(shown.contains("now"));
 }
 
 #[tokio::test]

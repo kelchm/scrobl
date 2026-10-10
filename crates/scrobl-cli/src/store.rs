@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use scrobl::history::{ScanPage, ScanSummary};
 
 use crate::Error;
@@ -84,17 +84,36 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// [`Error::Database`] when the file is some other SQLite database or was
-    /// written by a newer version of this tool, and [`Error::Sqlite`] when it
-    /// cannot be opened or is not a database at all.
+    /// [`Error::Database`] when the path names no file (it is empty, or is
+    /// SQLite's `:memory:`), when the file is some other SQLite database or
+    /// was written by another version of this tool, and [`Error::Sqlite`]
+    /// when it cannot be opened or is not a database at all.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let mut connection = Connection::open(path)?;
+        let path = path.as_ref();
+        // SQLite reads both of these as a database that is thrown away when
+        // it is closed, which is the one thing a backup must not be.
+        if path.as_os_str().is_empty() || path.as_os_str() == ":memory:" {
+            return Err(Error::Database("the database path does not name a file"));
+        }
+        // Without the URI flag a path is only ever a path, so `file:` names
+        // a file and cannot ask for a database in memory.
+        let mut connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
 
         let objects: i64 =
             connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
-        if objects == 0 {
+        let application: i64 =
+            connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        // New means untouched: no tables and neither mark set. A file that
+        // another program has marked is that program's, even while empty.
+        if objects == 0 && application == 0 && version == 0 {
             let transaction = connection.transaction()?;
             transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -102,15 +121,11 @@ impl Store {
             transaction.commit()?;
             return Ok(Self { connection });
         }
-
-        let application: i64 =
-            connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
         if application != APPLICATION_ID {
             return Err(Error::Database(
                 "the file is a database, but not one this tool made",
             ));
         }
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version != SCHEMA_VERSION {
             return Err(Error::Database(
                 "the database was written by another version of this tool",
@@ -184,8 +199,10 @@ impl Store {
     ///
     /// `summary` is what [`Scan::finish`](scrobl::client::Scan::finish)
     /// returned for `pages`, which is the proof that every page passed the
-    /// scan's checks. A window with no lower bound is stored from 0. All of
-    /// it is written in one transaction.
+    /// scan's checks. The pages are checked against it before anything is
+    /// written: their number and order, the user and total each one reports,
+    /// and that every scrobble lies in the window. A window with no lower
+    /// bound is stored from 0. All of it is written in one transaction.
     ///
     /// # Errors
     ///
@@ -208,7 +225,20 @@ impl Store {
         };
         let page_size = pages.first().map_or(0, |page| page.attr().per_page());
         let scrobbles: usize = pages.iter().map(|page| page.scrobbles().len()).sum();
-        if pages.len() as u64 != u64::from(summary.pages()) || scrobbles as u64 != summary.total() {
+        let belong = pages.iter().zip(1..).all(|(page, number)| {
+            page.number() == number
+                && page.attr().total() == summary.total()
+                && page.attr().per_page() == page_size
+                && page.attr().user().eq_ignore_ascii_case(summary.user())
+                && page
+                    .scrobbles()
+                    .iter()
+                    .all(|scrobble| window.contains(scrobble.timestamp()))
+        });
+        if !belong
+            || pages.len() as u64 != u64::from(summary.pages())
+            || scrobbles as u64 != summary.total()
+        {
             return Err(Error::Database(
                 "the pages are not the ones the scan summary describes",
             ));

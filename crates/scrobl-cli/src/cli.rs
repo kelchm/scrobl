@@ -60,8 +60,8 @@ Environment:
 /// What the process was started with, apart from its arguments.
 #[derive(Debug, Clone, Default)]
 pub struct Environment {
-    /// The value of [`API_KEY_VARIABLE`], if set.
-    pub api_key: Option<String>,
+    /// The value of [`API_KEY_VARIABLE`], if set. `Debug` does not show it.
+    pub api_key: Option<ApiKey>,
     /// The clock, as Unix seconds.
     pub now: u64,
 }
@@ -98,10 +98,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
     let (mut command, mut db, mut user) = (None, None, None);
 
     while let Some(arg) = args.next() {
-        let text = arg.to_string_lossy();
+        // Only a value that stands on its own may be something other than
+        // Unicode; `--db=<value>` would have to be taken apart to be read.
+        let text = arg.to_str().ok_or_else(|| {
+            usage("an argument is not valid Unicode; give such a value on its own".to_owned())
+        })?;
         let (name, inline) = match text.split_once('=') {
             Some((name, value)) if name.starts_with("--") => (name, Some(value)),
-            _ => (&*text, None),
+            _ => (text, None),
         };
         match name {
             "-h" | "--help" => return Ok(Command::Help),
@@ -128,7 +132,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
     if command.is_none() {
         return Err(usage("no command was given".to_owned()));
     }
-    let db = db.ok_or_else(|| usage("`sync` needs `--db <file>`".to_owned()))?;
+    let db = db
+        .filter(|db| !db.is_empty())
+        .ok_or_else(|| usage("`sync` needs `--db <file>`".to_owned()))?;
     let user = user
         .map(|user| {
             user.into_string()
@@ -177,14 +183,12 @@ async fn try_run(
         Command::Sync(args) => {
             let key = environment
                 .api_key
-                .as_deref()
-                .filter(|key| !key.is_empty())
+                .clone()
+                .filter(|key| !key.expose().is_empty())
                 .ok_or_else(|| {
                     Error::Usage(format!("set {API_KEY_VARIABLE} to your Last.fm API key"))
                 })?;
-            let client = Client::builder(ApiKey::new(key))
-                .user_agent(USER_AGENT)
-                .build()?;
+            let client = Client::builder(key).user_agent(USER_AGENT).build()?;
             sync_command(
                 &args,
                 &client,

@@ -522,3 +522,143 @@ async fn a_failed_call_is_a_lastfm_error_with_its_cause() {
     assert!(error.source().is_some());
     assert_eq!(windows(&store), []);
 }
+
+#[tokio::test]
+async fn a_count_that_answers_for_another_user_is_refused() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 100;
+    let (_server, result, _) = run(
+        &Dataset::distinct(5),
+        &mut store,
+        cutoff,
+        Options::default(),
+    )
+    .await;
+    result.unwrap();
+
+    // Nothing is left to read, so the one request is the count, and its
+    // answer names someone else.
+    let dataset = Dataset::distinct(5).with_faults(Faults {
+        wrong_user_on_page: Some(1),
+        ..Faults::default()
+    });
+    let (server, result, _) = run(&dataset, &mut store, cutoff, Options::default()).await;
+
+    let Err(Error::Service(message)) = result else {
+        panic!("expected a service error");
+    };
+    assert!(message.contains("not the one asked for"));
+    assert_eq!(server.request_count(), 1);
+}
+
+/// A sync whose first answer, the question of where the newest scrobble
+/// is, has been replaced by `body`.
+async fn run_with_first_answer(
+    dataset: &Dataset,
+    store: &mut Store,
+    cutoff: u64,
+    body: String,
+) -> Result<Report, Error> {
+    let server = FakeLastfm::start(dataset.clone())
+        .await
+        .script([Behaviour::status(200, body)]);
+    sync(
+        &client(&server),
+        store,
+        USER,
+        cutoff,
+        options(100, 4),
+        |_| {},
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_wrong_answer_about_where_the_scrobbles_are_loses_nothing() {
+    let dataset = Dataset::distinct(50);
+    let cutoff = BASE + 1_000;
+    let attr = |total: u32| {
+        format!(
+            r#""@attr": {{"user": "{USER}", "page": "1", "perPage": "1",
+                "totalPages": "{total}", "total": "{total}"}}"#
+        )
+    };
+    // The service says the history is empty, which it is not; then that it
+    // holds scrobbles but shows only what is playing now.
+    let empty = format!(r#"{{"recenttracks": {{"track": [], {}}}}}"#, attr(0));
+    let playing = format!(
+        r##"{{"recenttracks": {{"track": {{"@attr": {{"nowplaying": "true"}},
+            "artist": {{"#text": "A", "mbid": ""}}, "name": "Playing", "mbid": "",
+            "album": {{"#text": "", "mbid": ""}}}}, {}}}}}"##,
+        attr(50)
+    );
+
+    for body in [empty, playing] {
+        let scratch = Scratch::new();
+        let mut store = Store::open(scratch.db()).unwrap();
+
+        let report = run_with_first_answer(&dataset, &mut store, cutoff, body)
+            .await
+            .unwrap();
+
+        assert!(report.matches());
+        assert_eq!(report.stored, 50);
+        assert_eq!(markers(&store), dataset.expected(Window::before(cutoff)));
+        assert_covers(&store, cutoff);
+    }
+}
+
+#[tokio::test]
+async fn a_cutoff_before_what_is_stored_reads_nothing_and_counts_up_to_it() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let dataset = Dataset::distinct(20);
+    let (_server, result, _) = run(&dataset, &mut store, BASE + 205, Options::default()).await;
+    result.unwrap();
+
+    // The clock has gone back: ten of the twenty scrobbles lie before it.
+    let (server, result, stored) = run(&dataset, &mut store, BASE + 101, Options::default()).await;
+
+    let report = result.unwrap();
+    assert_eq!((report.added, report.stored, report.reported), (0, 10, 10));
+    assert!(report.matches());
+    assert_eq!(stored, []);
+    assert_eq!(server.request_count(), 1);
+    assert_eq!(timestamps(&store).len(), 20);
+}
+
+#[tokio::test]
+async fn different_scrobbles_in_one_second_are_each_kept_once() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    // Seven scrobbles in one second, told apart only by their markers, over
+    // pages of two and windows that end on that second.
+    let mut times = vec![BASE + 50; 7];
+    times.extend([BASE + 10, BASE + 20, BASE + 90]);
+    let dataset = Dataset::from_timestamps(times).identical_rows();
+    let cutoff = BASE + 100;
+
+    let (_server, result, _) = run(&dataset, &mut store, cutoff, options(1, 2)).await;
+
+    assert!(result.unwrap().matches());
+    let mut kept = markers(&store);
+    kept.sort_unstable();
+    assert_eq!(kept, (0..10).collect::<Vec<_>>());
+    assert_covers(&store, cutoff);
+}
+
+#[tokio::test]
+async fn a_span_of_zero_still_ends() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let dataset = Dataset::distinct(3);
+    let cutoff = BASE + 35;
+
+    let (_server, result, stored) = run(&dataset, &mut store, cutoff, options(0, 200)).await;
+
+    assert!(result.unwrap().matches());
+    assert_covers(&store, cutoff);
+    let sizes: Vec<u64> = stored.iter().map(|window| window.scrobbles).collect();
+    assert_eq!(sizes, [1, 1, 1, 0]);
+}
