@@ -14,9 +14,10 @@
 mod common;
 
 use common::*;
-use scrobl::ApiKey;
 use scrobl::history::{RecentTracks, ScanPage, ScanSummary, Window};
-use scrobl::protocol::{self, Credentials, HttpResponse};
+use scrobl::model::LovedTracksPage;
+use scrobl::protocol::{self, Credentials, HttpResponse, Request, methods};
+use scrobl::{ApiKey, Response};
 use scrobl_cli::Error;
 use scrobl_cli::store::Store;
 
@@ -372,4 +373,171 @@ fn two_syncs_on_one_file_cannot_store_a_period_twice() {
     assert!(message.contains("overlaps"));
     assert_eq!(count(&second, "windows"), 1);
     assert_eq!(count(&second, "scrobbles"), 10);
+}
+
+/// Every page of `dataset`'s loved tracks, as the service would send them.
+fn loved_pages(dataset: &Dataset, page_size: u32) -> Vec<Response<LovedTracksPage>> {
+    let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
+    let mut pages = Vec::new();
+    loop {
+        let request = Request::new(&methods::USER_GET_LOVED_TRACKS)
+            .param("user", &dataset.user)
+            .param("limit", page_size)
+            .param("page", pages.len() + 1);
+        let http = protocol::prepare(&credentials, &request).unwrap();
+        let (status, body) = support::respond(dataset, &http);
+        let raw = protocol::decode(&request, HttpResponse::new(status, body)).unwrap();
+        let page = LovedTracksPage::decode(&raw).unwrap();
+        let last = pages.len() as u64 + 1 >= page.attr().total_pages();
+        pages.push(Response::new(page, raw));
+        if last {
+            return pages;
+        }
+    }
+}
+
+/// The loved tracks as stored: `(page, position, loved_at, track)`.
+fn loved_rows(store: &Store) -> Vec<(u64, u64, u64, String)> {
+    store
+        .connection()
+        .prepare("SELECT page, position, loved_at, track FROM loved ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+fn loved_read_at(store: &Store) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    store
+        .connection()
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'loved_read_at'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+}
+
+#[test]
+fn loved_tracks_are_stored_with_the_pages_they_came_on() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user(USER).unwrap();
+    let dataset = Dataset::distinct(1).with_loved(3);
+    let pages = loved_pages(&dataset, 2);
+
+    store.replace_loved(&pages, 1_800_000_000).unwrap();
+
+    assert_eq!(
+        loved_rows(&store),
+        [
+            (1, 0, BASE + 300, "Loved 3".to_owned()),
+            (1, 1, BASE + 200, "Loved 2".to_owned()),
+            (2, 0, BASE + 100, "Loved 1".to_owned()),
+        ]
+    );
+    let (artist, artist_mbid, track_mbid): (String, Option<String>, Option<String>) = store
+        .connection()
+        .query_row(
+            "SELECT artist, artist_mbid, track_mbid FROM loved LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(artist, "Synthetic Artist");
+    assert_eq!(artist_mbid.as_deref(), Some(support::ARTIST_MBID));
+    // An empty mbid is stored as NULL.
+    assert_eq!(track_mbid, None);
+
+    let bodies: Vec<Vec<u8>> = store
+        .connection()
+        .prepare("SELECT body FROM loved_pages ORDER BY page")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let sent: Vec<&[u8]> = pages.iter().map(|page| page.raw().body()).collect();
+    assert_eq!(bodies, sent);
+    assert_eq!(loved_read_at(&store).as_deref(), Some("1800000000"));
+}
+
+#[test]
+fn a_read_of_the_loved_tracks_replaces_the_one_before() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user(USER).unwrap();
+    let before = Dataset::distinct(1).with_loved(5);
+    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
+    assert_eq!(
+        (count(&store, "loved"), count(&store, "loved_pages")),
+        (5, 3)
+    );
+
+    // Three were unloved since.
+    let after = Dataset::distinct(1).with_loved(2);
+    store.replace_loved(&loved_pages(&after, 2), 200).unwrap();
+
+    assert_eq!(
+        (count(&store, "loved"), count(&store, "loved_pages")),
+        (2, 1)
+    );
+    assert_eq!(loved_read_at(&store).as_deref(), Some("200"));
+
+    // And none at all is a list too: one page with no rows.
+    let none = Dataset::distinct(1);
+    store.replace_loved(&loved_pages(&none, 2), 300).unwrap();
+    assert_eq!(
+        (count(&store, "loved"), count(&store, "loved_pages")),
+        (0, 1)
+    );
+}
+
+#[test]
+fn pages_that_are_not_one_whole_list_of_loved_tracks_are_refused() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let dataset = Dataset::distinct(1).with_loved(5);
+    let pages = loved_pages(&dataset, 2);
+
+    // A database that belongs to no one yet cannot say whose list this is.
+    database_error(store.replace_loved(&pages, 100));
+
+    store.bind_user(USER).unwrap();
+    store.replace_loved(&pages, 100).unwrap();
+
+    let mut swapped = pages.clone();
+    swapped.swap(0, 1);
+    let mut theirs = dataset.clone();
+    theirs.user = "someone-else".to_owned();
+    // Pages of two sizes, which is two reads.
+    let mut mixed = pages.clone();
+    mixed[2] = loved_pages(&dataset, 1).swap_remove(2);
+    // A list that grew between the first page and the rest.
+    let mut grown = pages.clone();
+    grown[0] = loved_pages(&Dataset::distinct(1).with_loved(6), 2).swap_remove(0);
+    for wrong in [
+        &[][..],
+        &pages[..2],
+        &pages[1..],
+        &swapped,
+        &loved_pages(&theirs, 2),
+        &mixed,
+        &grown,
+    ] {
+        let message = database_error(store.replace_loved(wrong, 200));
+        assert!(message.contains("loved tracks"), "{message}");
+    }
+
+    // Nothing of any of them was written.
+    assert_eq!(
+        (count(&store, "loved"), count(&store, "loved_pages")),
+        (5, 3)
+    );
+    assert_eq!(loved_read_at(&store).as_deref(), Some("100"));
 }

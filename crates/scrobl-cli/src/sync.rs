@@ -16,9 +16,13 @@
 //! cutoff and puts that next to what the database holds. The two differ when
 //! scrobbles were added to or removed from a period after it was read. This
 //! version reports that; it does not read a period twice.
+//!
+//! [`loved`] reads the tracks the user has loved, which is a list of its
+//! own and not part of the history, and replaces the copy in the database.
 
-use scrobl::Client;
 use scrobl::history::{ScanPage, ScanSummary, Window};
+use scrobl::model::LovedTracksPage;
+use scrobl::{Client, Response};
 
 use crate::Error;
 use crate::store::Store;
@@ -33,14 +37,18 @@ pub struct Options {
     pub span: u64,
     /// The rows asked for on every page of a scan, 1 to 200.
     pub page_size: u32,
+    /// The rows asked for on every page of loved tracks, 1 to 1000.
+    pub loved_page_size: u32,
 }
 
 impl Default for Options {
-    /// Windows of thirty days and pages of 200, the most the service gives.
+    /// Windows of thirty days, pages of 200 scrobbles, the most the service
+    /// gives, and pages of 1000 loved tracks.
     fn default() -> Self {
         Self {
             span: 30 * 86_400,
             page_size: 200,
+            loved_page_size: 1000,
         }
     }
 }
@@ -220,4 +228,63 @@ async fn read(
         pages.push(page);
     }
     Ok((scan.finish()?, pages))
+}
+
+/// Reads every track `user` has loved and replaces the database's copy
+/// with it. Returns how many there are.
+///
+/// The list is read newest first, a page at a time, and nothing ties one
+/// page to the next: a track loved or unloved between two requests moves
+/// every later row. So every page must report the same total, and the pages
+/// must hold exactly that many tracks, or nothing is stored and the copy
+/// from the last sync stays as it was.
+///
+/// # Errors
+///
+/// [`Error::Lastfm`] when a call fails; [`Error::Service`] when a page is
+/// not the one asked for or the list changed while it was read;
+/// [`Error::Database`] and [`Error::Sqlite`] from the store.
+pub async fn loved(
+    client: &Client,
+    store: &mut Store,
+    user: &str,
+    page_size: u32,
+) -> Result<u64, Error> {
+    let mut pages: Vec<Response<LovedTracksPage>> = Vec::new();
+    loop {
+        let number = pages.len() as u32 + 1;
+        let page = client
+            .user(user)
+            .loved_tracks()
+            .limit(page_size)
+            .page(number)
+            .send()
+            .await?;
+        let attr = page.attr();
+        if !attr.user().eq_ignore_ascii_case(user)
+            || attr.page() != u64::from(number)
+            || attr.per_page() != u64::from(page_size)
+        {
+            return Err(Error::Service(
+                "Last.fm answered with a page of loved tracks that was not the one asked for",
+            ));
+        }
+        let total = attr.total();
+        let changed = pages
+            .first()
+            .is_some_and(|first| first.attr().total() != total);
+        let last = u64::from(number) >= attr.total_pages();
+        pages.push(page);
+        let read: usize = pages.iter().map(|page| page.tracks().len()).sum();
+        if changed || read as u64 > total || (last && read as u64 != total) {
+            return Err(Error::Service(
+                "the loved tracks changed while they were being read; the next sync reads them \
+                 again",
+            ));
+        }
+        if last {
+            store.replace_loved(&pages, time::now())?;
+            return Ok(total);
+        }
+    }
 }
