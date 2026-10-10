@@ -9,6 +9,8 @@ What works today: a raw, signed call to any of the 57 methods, the ten that chan
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
 
+The repository also holds [`scrobl`, a command-line tool](#the-command-line-tool) built on the library, which keeps a local copy of a listening history.
+
 ## Usage
 
 The crate is not published yet, so depend on it from Git. The client runs on Tokio:
@@ -86,6 +88,23 @@ async fn love() -> Result<(), scrobl::Error> {
 
 A `Writer` dereferences to a `Client`, so it reads too, and code given a `&Client` cannot write. This guards against a bug or a careless call; it is not a security boundary, because the service enforces none of it.
 
+## The command-line tool
+
+`crates/scrobl-cli` builds a binary named `scrobl` that keeps one user's listening history in a SQLite file. It reads with a `Client`, so it cannot change the account, and it needs only an API key, which is enough for a history that is public.
+
+```sh
+cargo install --git https://github.com/kelchm/scrobl scrobl-cli
+export SCROBL_API_KEY=your-api-key
+scrobl sync --db history.db --user rj    # the first time
+scrobl sync --db history.db              # every time after
+```
+
+The first sync reads the whole history, thirty days of listening at a time and a second between requests, and stores each stretch once it has passed every check of the scan. It can be stopped at any point and run again: it carries on where it stopped. Later syncs read only what is new, up to half an hour before the present, because the last minutes of a history are still filling in.
+
+The file holds every response exactly as Last.fm sent it (`pages`) and one row per scrobble decoded from them (`scrobbles`, the table to query). Scrobbles are never merged, so two plays in the same second are two rows.
+
+Each sync ends by comparing the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ. They differ when scrobbles were added to or removed from a period after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it.
+
 ## Last.fm's terms
 
 Using the Last.fm API is subject to Last.fm's [API Terms of Service](https://www.last.fm/api/tos). The MIT licence below covers this library, not the data the API returns. You need your own API key, which you can [create here](https://www.last.fm/api/account/create), and you should send a User-Agent that identifies your application (`ClientBuilder::user_agent`). The terms ask applications to cache responses according to the response headers; `Raw` keeps the ones a cache goes by (`cache-control`, `expires`, `etag`, `last-modified` and `age`), along with `date`, `retry-after` and `content-type`. Read the terms for the limits that apply to you.
@@ -98,7 +117,7 @@ Tool versions are pinned in `mise.toml`.
 cargo fmt --all --check
 cargo clippy --all-targets --all-features
 cargo test --all-features
-cargo test --no-default-features
+cargo test --no-default-features -p scrobl
 cargo llvm-cov --all-features --fail-under-lines 95
 ```
 
