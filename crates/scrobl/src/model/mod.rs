@@ -10,4 +10,7 @@
 
 mod user;
 
-pub use user::{Album, Artist, NowPlaying, PageAttr, RecentTracksPage, Scrobble, Track};
+pub use user::{
+    Album, Artist, LovedTrack, LovedTracksPage, NowPlaying, PageAttr, RecentTracksPage, Scrobble,
+    Track,
+};

@@ -3,7 +3,8 @@
 use super::Client;
 use crate::error::Error;
 use crate::history::{RecentTracks, ScanPage, ScanSummary, Window, WindowScan};
-use crate::model::RecentTracksPage;
+use crate::model::{LovedTracksPage, RecentTracksPage};
+use crate::protocol::{Request, methods};
 use crate::response::Response;
 
 /// One user's history, to read with typed methods. Made by [`Client::user`].
@@ -36,6 +37,97 @@ impl User {
             extended: false,
             as_user: false,
         }
+    }
+
+    /// Starts a `user.getLovedTracks` query for this user.
+    pub fn loved_tracks(&self) -> LovedTracksQuery {
+        LovedTracksQuery {
+            client: self.client.clone(),
+            user: self.name.clone(),
+            limit: None,
+            page: None,
+        }
+    }
+}
+
+/// The largest `limit` a `user.getLovedTracks` query accepts. The method's
+/// documentation gives no maximum; this is the largest size the service has
+/// been seen to honour.
+const MAX_LOVED_LIMIT: u32 = 1000;
+
+/// A `user.getLovedTracks` query: the tracks a user has loved, newest
+/// first. Made by [`User::loved_tracks`].
+///
+/// [`send`](Self::send) reads one page. Nothing ties one page to the next:
+/// a track loved or unloved between two requests moves every later row, so
+/// a caller reading the whole list should compare each page's
+/// [`total`](crate::model::PageAttr::total) and start again when it changes.
+///
+/// ```no_run
+/// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+/// let page = client.user("rj").loved_tracks().limit(200).send().await?;
+/// for loved in page.tracks() {
+///     println!("{} at {}", loved.track().name(), loved.loved_at());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct LovedTracksQuery {
+    client: Client,
+    user: String,
+    limit: Option<u32>,
+    page: Option<u32>,
+}
+
+impl LovedTracksQuery {
+    /// Sets `limit`, the page size, from 1 to 1000. The service uses 50
+    /// when none is sent.
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Sets `page`, from 1.
+    pub fn page(mut self, page: u32) -> Self {
+        self.page = Some(page);
+        self
+    }
+
+    /// Reads one page. The exact response is on the result, next to the
+    /// typed page.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` outside
+    /// 1 to 1000 or a `page` of 0, before anything is sent; any error of
+    /// [`Client::call`]; and [`ErrorKind::Decode`](crate::ErrorKind) when the
+    /// page is not the expected shape.
+    pub async fn send(self) -> Result<Response<LovedTracksPage>, Error> {
+        let spec = &methods::USER_GET_LOVED_TRACKS;
+        if self
+            .limit
+            .is_some_and(|limit| !(1..=MAX_LOVED_LIMIT).contains(&limit))
+        {
+            return Err(Error::invalid_request(
+                spec,
+                "`limit` must be between 1 and 1000",
+            ));
+        }
+        if self.page == Some(0) {
+            return Err(Error::invalid_request(spec, "`page` starts at 1"));
+        }
+        let mut request = Request::new(spec).param("user", &self.user);
+        if let Some(limit) = self.limit {
+            request = request.param("limit", limit);
+        }
+        if let Some(page) = self.page {
+            request = request.param("page", page);
+        }
+        let raw = self.client.call(&request).await?;
+        let page = LovedTracksPage::decode(&raw)?;
+        Ok(Response::new(page, raw))
     }
 }
 

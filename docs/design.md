@@ -193,7 +193,14 @@ impl ClientBuilder {   // each setting has a default; build() fails with ErrorKi
     pub fn build_writer(self) -> Result<Writer, Error>;   // may also change the account
 }
 
-impl User { pub fn recent_tracks(&self) -> RecentTracksQuery; }
+impl User {
+    pub fn recent_tracks(&self) -> RecentTracksQuery;
+    pub fn loved_tracks(&self) -> LovedTracksQuery;
+}
+impl LovedTracksQuery {
+    pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;        // limit 1 to 1000
+    pub async fn send(self) -> Result<Response<LovedTracksPage>, Error>;    // one page, newest first
+}
 impl RecentTracksQuery {
     pub fn window(self, Window) -> Self;  pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;
     pub fn extended(self, bool) -> Self;  pub fn as_user(self) -> Self;
@@ -375,7 +382,7 @@ When the gaps are closed it asks Last.fm how many scrobbles lie before the cutof
 
 ## Coverage
 
-Every method gets a typed model for v1. Recorded responses exist so far only for `user.getRecentTracks`, which is also the only method with a typed model, so most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. Recorded responses exist so far only for `user.getRecentTracks`. Two methods have a typed model: that one, and `user.getLovedTracks`, whose model follows a response the owner recorded from their own account and is tested against a fixture with that structure and invented values. Most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
