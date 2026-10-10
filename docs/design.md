@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: 2026-10-08. Transport, coverage, license (MIT) and minimum Rust (1.88) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
+Status: 2026-10-10. Transport, coverage, license (MIT) and minimum Rust (1.88) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -12,7 +12,7 @@ Older documentation and other libraries also list `track.ban`, `track.unban`, `u
 
 ## Layout
 
-One Cargo workspace, one library crate. A second crate (the backup application) can be added under `crates/` later without moving anything.
+One Cargo workspace with two crates: the library, `scrobl`, and the [command-line tool](#command-line-tool), `scrobl-cli`. The tool depends on the library and never the other way round, so a program that uses the library builds none of the tool's dependencies. Nothing about SQLite or the command line belongs in the library; a change the tool asks of it has to be one another application would want too.
 
 ```
 crates/scrobl/
@@ -36,7 +36,18 @@ crates/scrobl/
   fixtures/            labelled recorded / derived / synthetic
 ```
 
-Features: `client` (default) enables the async client and pulls in `reqwest` and `tokio`. `--no-default-features` is the protocol core alone and must build and pass its tests.
+```
+crates/scrobl-cli/     the binary `scrobl`
+  src/
+    main.rs            the process: environment, runtime, exit code
+    cli.rs             arguments, output, exit codes
+    sync.rs            which windows to read, and in what order
+    store.rs           the SQLite file
+    time.rs            the clock, and seconds as text
+  tests/               the same fake Last.fm, included from the library's tests by path
+```
+
+Features: `client` (default) enables the async client and pulls in `reqwest` and `tokio`. `--no-default-features` is the protocol core alone and must build and pass its tests. That is checked with `-p scrobl`, because the tool needs the client and would switch the feature on for a build of the whole workspace.
 
 ## Layers
 
@@ -291,7 +302,7 @@ match error.api_code() {
 }
 ```
 
-A `Client` cannot write, so the backup application can hold a secret and a session key, to read a history its owner hides, without being able to change the account it backs up. It runs this on a current-thread Tokio runtime. Storage, scheduling, window selection and reconciliation are its own concern.
+A `Client` cannot write, so the backup application can hold a secret and a session key, to read a history its owner hides, without being able to change the account it backs up. It runs this on a current-thread Tokio runtime. Storage, scheduling, window selection and reconciliation are its own concern. The [command-line tool](#command-line-tool) is this application.
 
 ### Tauri music app
 
@@ -325,6 +336,37 @@ match report {
 ```
 
 A scrobble reply is checked against the request: one outcome per item, `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent; corrections are reported next to it.
+
+## Command-line tool
+
+`scrobl-cli` builds the binary `scrobl`. It keeps one user's history in one SQLite file, and is the first consumer of the library. Today it has one command, `scrobl sync --db <file> [--user <name>]`, and reads the API key from `SCROBL_API_KEY`, never from the command line.
+
+### The file
+
+| Table | Holds |
+|---|---|
+| `windows` | Each span `[from_ts, to_ts)` that was read completely, with the total the service reported, the page count and size, and when it was read |
+| `pages` | The body of every response of that read, byte for byte |
+| `scrobbles` | One row per scrobble decoded from the pages: timestamp, artist, track, album, their MusicBrainz ids and the loved flag |
+| `meta` | The user the file belongs to |
+
+The pages are the record and the scrobbles are derived from them, so the derived table can be rebuilt, or given new columns, without asking Last.fm again. A window is written in one transaction, and only from the `ScanSummary` of a scan that finished, which is what makes the library's "provisional until `finish`" rule hold on disk. Windows never overlap: the transaction that writes one checks, and a second sync on the same file fails there instead of storing a period twice. Rows are never merged or deduplicated. The file is marked with an `application_id` and a schema version in `user_version`; a file with neither is refused, not adopted.
+
+### A sync
+
+A sync fixes a cutoff when it starts, thirty minutes before the present, and makes the file cover `[0, cutoff)`. The margin is there because a scrobble is dated when its track started and sent when it ended, so the newest part of a history is still filling in.
+
+It asks the file which spans no window covers and reads each from its newest end backwards. A window holds at most thirty days of listening. Before each one it asks for the newest scrobble left in the span (one request with `limit=1`) and starts the window thirty days before that, so a long silence is one window and not one request per month. A span of thirty days or less is read without asking. The answer only places the window's lower bound: the scan that follows is checked in full whatever it said, and whatever lies below is still read.
+
+A sync that fails keeps every window it stored and loses only the one it was reading. The next sync finds the same gap and carries on. A later sync finds one gap, from the last cutoff to the new one.
+
+When the gaps are closed it asks Last.fm how many scrobbles lie before the cutoff and compares that with the file. Exit status: 0 when they agree, 3 when they differ, 1 for a failure, 2 for a wrong command line.
+
+### What it does not do yet
+
+- It never reads a period twice. A scrobble added to or removed from a period after it was read (an offline device that syncs days later, an edit on the website) shows as a difference in the counts and is not repaired. Equal counts do not prove equal rows, for the reasons under [What a completed scan does not prove](#what-a-completed-scan-does-not-prove).
+- It reads a public history only. A hidden one needs the signed read, which is unverified.
+- No server for agents, no export and no offline check of the file.
 
 ## Coverage
 
