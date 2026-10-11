@@ -454,3 +454,16 @@ async fn the_loved_tracks_of_another_users_database_are_not_asked_for() {
     assert_eq!(server.request_count(), 0);
     assert!(tracks(&other).is_empty());
 }
+
+#[tokio::test]
+async fn a_read_ties_a_new_database_to_its_user() {
+    let scratch = Scratch::new();
+    let mut new = Store::open(scratch.db()).unwrap();
+    assert_eq!(new.user().unwrap(), None);
+
+    let (_, result) = run(&Dataset::distinct(1).with_loved(3), &mut new, 2).await;
+
+    assert_eq!(result.unwrap(), 3);
+    assert_eq!(new.user().unwrap().as_deref(), Some(USER));
+    assert_eq!(tracks(&new).len(), 3);
+}
