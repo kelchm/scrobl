@@ -250,15 +250,19 @@ impl Store {
     /// returned for `pages`, which is the proof that every page passed the
     /// scan's checks. The pages are checked against it before anything is
     /// written: their number and order, the user and total each one reports,
-    /// and that every scrobble lies in the window. A window with no lower
-    /// bound is stored from 0. All of it is written in one transaction.
+    /// and that every scrobble lies in the window. That is not the scan's
+    /// checks over again: pages from another scan of the same window with
+    /// the same total would pass, so `pages` must be the ones `summary`
+    /// came with. A window with no lower bound is stored from 0. All of it
+    /// is written in one transaction.
     ///
     /// # Errors
     ///
     /// [`Error::Database`] when the window has no upper bound, when it
-    /// overlaps a window already stored (another run got there first), or
-    /// when `pages` are not the pages the summary describes. Nothing is
-    /// written in any of those cases.
+    /// overlaps a window already stored (another run got there first), when
+    /// `pages` are not the pages the summary describes, or when the scan was
+    /// not of the user the database belongs to, which has to be set first.
+    /// Nothing is written in any of those cases.
     pub fn commit_window(
         &mut self,
         summary: &ScanSummary,
@@ -290,6 +294,14 @@ impl Store {
         {
             return Err(Error::Database(
                 "the pages are not the ones the scan summary describes",
+            ));
+        }
+        if !self
+            .user()?
+            .is_some_and(|bound| bound.eq_ignore_ascii_case(summary.user()))
+        {
+            return Err(Error::Database(
+                "the scan is not of the user the database belongs to",
             ));
         }
 
