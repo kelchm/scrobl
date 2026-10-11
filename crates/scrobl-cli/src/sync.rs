@@ -239,10 +239,16 @@ async fn read(
 /// page to the next: a track loved or unloved between two requests moves
 /// every later row. So every page must report the same total, every page
 /// but the last must be full, the pages must hold exactly that many tracks,
-/// and no track may be listed twice, or nothing is stored and the copy from
-/// the last sync stays as it was. That catches a list that grew, shrank, or
-/// lost one track and gained another during the read. It cannot catch every
-/// change: only a list that fits one page is read at a single moment.
+/// and no track may be listed twice. A list of more than one page has its
+/// first page read again at the end, which must be as it was: a track that
+/// is loved goes to the top of the list. If any of that fails nothing is
+/// stored, and the copy from the last sync stays as it was.
+///
+/// That catches a list that grew, shrank, or lost one track and gained
+/// another during the read. It is not proof. Tracks loved in the same
+/// second have no order of their own, and enough changes inside one second
+/// can put the first page back as it was. Only a list that fits one page is
+/// read at a single moment.
 ///
 /// # Errors
 ///
@@ -257,24 +263,8 @@ pub async fn loved(
 ) -> Result<u64, Error> {
     let mut pages: Vec<Response<LovedTracksPage>> = Vec::new();
     loop {
-        let number = pages.len() as u32 + 1;
-        let page = client
-            .user(user)
-            .loved_tracks()
-            .limit(page_size)
-            .page(number)
-            .send()
-            .await?;
-        let attr = page.attr();
-        if !attr.user().eq_ignore_ascii_case(user)
-            || attr.page() != u64::from(number)
-            || attr.per_page() != u64::from(page_size)
-        {
-            return Err(Error::Service(
-                "Last.fm answered with a page of loved tracks that was not the one asked for",
-            ));
-        }
-        let total = attr.total();
+        let page = loved_page(client, user, page_size, pages.len() as u32 + 1).await?;
+        let total = page.attr().total();
         let changed = pages
             .first()
             .is_some_and(|first| first.attr().total() != total);
@@ -287,29 +277,73 @@ pub async fn loved(
         // shrank.
         let done = read >= total;
         if changed || read > total || (!done && !full) || (done && repeats(&pages)) {
-            return Err(Error::Service(
-                "the loved tracks changed while they were being read; the next sync reads them \
-                 again",
-            ));
+            return Err(CHANGED);
         }
-        if done {
-            store.replace_loved(&pages, time::now())?;
-            return Ok(total);
+        if !done {
+            continue;
         }
+        if let [first, _, ..] = pages.as_slice() {
+            let again = loved_page(client, user, page_size, 1).await?;
+            if again.attr().total() != total || !rows(&again).eq(rows(first)) {
+                return Err(CHANGED);
+            }
+        }
+        store.replace_loved(&pages, time::now())?;
+        return Ok(total);
     }
 }
 
-/// Whether a track is listed twice: the same artist and name, loved in the
-/// same second. A track loved while the list was being read pushes a row
-/// from one page onto the next, where it is read again, and the totals
-/// cannot show it when another track was unloved meanwhile.
-fn repeats(pages: &[Response<LovedTracksPage>]) -> bool {
-    let mut seen = HashSet::new();
-    pages.iter().flat_map(|page| page.tracks()).any(|loved| {
-        !seen.insert((
+/// The loved tracks did not hold still for the read.
+const CHANGED: Error = Error::Service(
+    "the loved tracks changed while they were being read; the next sync reads them again",
+);
+
+/// One page of the loved tracks, checked to be the page asked for.
+async fn loved_page(
+    client: &Client,
+    user: &str,
+    page_size: u32,
+    number: u32,
+) -> Result<Response<LovedTracksPage>, Error> {
+    let page = client
+        .user(user)
+        .loved_tracks()
+        .limit(page_size)
+        .page(number)
+        .send()
+        .await?;
+    let attr = page.attr();
+    if !attr.user().eq_ignore_ascii_case(user)
+        || attr.page() != u64::from(number)
+        || attr.per_page() != u64::from(page_size)
+    {
+        return Err(Error::Service(
+            "Last.fm answered with a page of loved tracks that was not the one asked for",
+        ));
+    }
+    Ok(page)
+}
+
+/// What a page lists, in its order: when, whose and which.
+fn rows(page: &LovedTracksPage) -> impl Iterator<Item = (u64, &str, &str)> {
+    page.tracks().iter().map(|loved| {
+        (
             loved.loved_at(),
             loved.artist().name(),
             loved.track().name(),
-        ))
+        )
     })
+}
+
+/// Whether a track is listed twice: the same artist and name, whenever each
+/// was loved. A track loved while the list was being read pushes a row from
+/// one page onto the next, where it is read again, and a track unloved and
+/// loved again comes back with a new time. The totals cannot show either
+/// when another track was unloved meanwhile.
+fn repeats(pages: &[Response<LovedTracksPage>]) -> bool {
+    let mut seen = HashSet::new();
+    pages
+        .iter()
+        .flat_map(|page| page.tracks())
+        .any(|loved| !seen.insert((loved.artist().name(), loved.track().name())))
 }
