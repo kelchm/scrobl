@@ -145,8 +145,9 @@ pub async fn sync(
 ///
 /// A cutoff is safe only if it lies in the past, because a window that ends
 /// after now is recorded as read while scrobbles can still arrive in it.
-/// This machine's clock cannot vouch for that on its own. The service's
-/// can: it is the clock that dates the scrobbles.
+/// This machine's clock cannot vouch for that on its own, so the service's
+/// is a second opinion. It is no more than that: the header says when the
+/// answer was made, by whichever server made it.
 ///
 /// # Errors
 ///

@@ -60,7 +60,9 @@ async fn sync_with(
     args: &SyncArgs,
     now: u64,
 ) -> (Result<u8, Error>, String, String, usize) {
-    sync_on(FakeLastfm::start(dataset).await, args, now).await
+    // The service's clock agrees with the tool's, so that no test goes by
+    // the time it really is.
+    sync_on(FakeLastfm::start(dataset).await.dated(now), args, now).await
 }
 
 /// `scrobl sync` against a server already set up, with the clock at `now`.
@@ -495,6 +497,29 @@ async fn without_last_fms_clock_nothing_is_read() {
             panic!("expected a service error, got {result:?}");
         };
         assert!(error.to_string().contains("what time it is"), "{error}");
+        assert_eq!(error.exit_code(), 1);
+        assert_eq!(out, "");
+        assert_eq!(requests, 1);
+        assert_eq!(covered_to(&args), None);
+    }
+}
+
+#[tokio::test]
+async fn a_date_at_the_epoch_ends_the_sync_and_stores_nothing() {
+    let scratch = Scratch::new();
+    let args = SyncArgs {
+        db: scratch.db(),
+        user: Some(USER.to_owned()),
+    };
+    // Earlier than the margin is long: there is nothing before it to read.
+    for served in [0, SETTLE] {
+        let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
+
+        let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
+
+        let Err(error @ Error::Service(_)) = result else {
+            panic!("expected a service error, got {result:?}");
+        };
         assert_eq!(error.exit_code(), 1);
         assert_eq!(out, "");
         assert_eq!(requests, 1);

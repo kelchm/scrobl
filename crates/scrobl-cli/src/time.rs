@@ -39,7 +39,8 @@ pub fn utc(seconds: u64) -> String {
 
 /// Reads the date of an HTTP `Date` header as Unix seconds:
 /// `Tue, 14 Nov 2023 22:13:20 GMT`, the one form HTTP allows a server to
-/// send. Anything else is `None`, a date before 1970 included.
+/// send. Anything else is `None`: a date before 1970, a day that does not
+/// exist, and a day of the week that is not that date's.
 ///
 /// ```
 /// use scrobl_cli::time::http_date;
@@ -51,6 +52,8 @@ pub fn http_date(text: &str) -> Option<u64> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
+    // From the day of the week 1970 began on.
+    const WEEKDAYS: [&str; 7] = ["Thu,", "Fri,", "Sat,", "Sun,", "Mon,", "Tue,", "Wed,"];
     let number = |digits: &str, length: usize| -> Option<u64> {
         (digits.len() == length && digits.bytes().all(|b| b.is_ascii_digit()))
             .then(|| digits.parse().ok())
@@ -66,7 +69,7 @@ pub fn http_date(text: &str) -> Option<u64> {
         parts.next()?,
         parts.next()?,
     );
-    if parts.next().is_some() || weekday.len() != 4 || !weekday.ends_with(',') || zone != "GMT" {
+    if parts.next().is_some() || zone != "GMT" {
         return None;
     }
     let day = number(day, 2)?;
@@ -104,6 +107,9 @@ pub fn http_date(text: &str) -> Option<u64> {
     let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     let days = era * 146_097 + day_of_era - 719_468;
+    if WEEKDAYS.iter().position(|name| *name == weekday)? as u64 != days % 7 {
+        return None;
+    }
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
@@ -151,6 +157,10 @@ mod tests {
             "Tue, 14 nov 2023 22:13:20 GMT",
             "Tue, +4 Nov 2023 22:13:20 GMT",
             "Tue, 14 Nov 99999 22:13:20 GMT",
+            "XYZ, 14 Nov 2023 22:13:20 GMT",
+            "\u{e9}x, 14 Nov 2023 22:13:20 GMT",
+            "tue, 14 Nov 2023 22:13:20 GMT",
+            "Wed, 14 Nov 2023 22:13:20 GMT",
         ] {
             assert_eq!(http_date(text), None, "{text:?}");
         }
