@@ -60,7 +60,15 @@ async fn sync_with(
     args: &SyncArgs,
     now: u64,
 ) -> (Result<u8, Error>, String, String, usize) {
-    let server = FakeLastfm::start(dataset).await;
+    sync_on(FakeLastfm::start(dataset).await, args, now).await
+}
+
+/// `scrobl sync` against a server already set up, with the clock at `now`.
+async fn sync_on(
+    server: FakeLastfm,
+    args: &SyncArgs,
+    now: u64,
+) -> (Result<u8, Error>, String, String, usize) {
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let result = sync_command(
         args,
@@ -77,6 +85,15 @@ async fn sync_with(
         String::from_utf8(err).unwrap(),
         server.request_count(),
     )
+}
+
+/// Where the stored history ends: the upper bound of the newest window.
+fn covered_to(args: &SyncArgs) -> Option<u64> {
+    scrobl_cli::store::Store::open(&args.db)
+        .unwrap()
+        .connection()
+        .query_row("SELECT max(to_ts) FROM windows", [], |row| row.get(0))
+        .unwrap()
 }
 
 #[test]
@@ -378,4 +395,109 @@ async fn loved_tracks_that_cannot_be_read_fail_the_sync_and_keep_the_history() {
     );
     let store = scrobl_cli::store::Store::open(scratch.db()).unwrap();
     assert_eq!(store.scrobbles_before(BASE + 10_000).unwrap(), 20);
+}
+
+#[tokio::test]
+async fn a_clock_that_runs_ahead_does_not_put_the_future_on_record() {
+    let scratch = Scratch::new();
+    let args = SyncArgs {
+        db: scratch.db(),
+        user: Some(USER.to_owned()),
+    };
+    // Last.fm says it is `served`; this machine says it is five hours later.
+    let served = BASE + 10_000;
+    let ahead = served + 10 * SETTLE;
+    let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
+
+    let (result, out, err, _) = sync_on(server, &args, ahead).await;
+
+    assert_eq!(result.unwrap(), 0);
+    assert!(
+        out.starts_with("20 scrobbles up to 2023-11-15T00:30:00Z, "),
+        "{out}"
+    );
+    assert!(
+        err.starts_with(
+            "This machine's clock is ahead of Last.fm's (2023-11-15T06:00:00Z against \
+             2023-11-15T01:00:00Z); reading up to Last.fm's.\n"
+        ),
+        "{err}"
+    );
+    assert_eq!(covered_to(&args), Some(served - SETTLE));
+
+    // A track played after that, at a time the machine's clock had already
+    // passed, is read by the next sync.
+    let mut times: Vec<u64> = (1..=20).map(|i| BASE + 10 * i).collect();
+    times.push(served + 60);
+    let later = served + 2 * SETTLE;
+    let server = FakeLastfm::start(Dataset::from_timestamps(times))
+        .await
+        .dated(later);
+    let (result, out, _, _) = sync_on(server, &args, later + 10 * SETTLE).await;
+
+    assert_eq!(result.unwrap(), 0);
+    assert!(out.starts_with("21 scrobbles up to "), "{out}");
+    assert!(out.contains(", 1 of them new."), "{out}");
+}
+
+#[tokio::test]
+async fn a_clock_that_runs_behind_reads_up_to_itself() {
+    let scratch = Scratch::new();
+    let args = SyncArgs {
+        db: scratch.db(),
+        user: Some(USER.to_owned()),
+    };
+    let now = BASE + 10_000;
+    let server = FakeLastfm::start(Dataset::distinct(20))
+        .await
+        .dated(now + 10 * SETTLE);
+
+    let (result, _, err, _) = sync_on(server, &args, now).await;
+
+    assert_eq!(result.unwrap(), 0);
+    assert!(!err.contains("clock"), "{err}");
+    assert_eq!(covered_to(&args), Some(now - SETTLE));
+}
+
+#[tokio::test]
+async fn without_last_fms_clock_nothing_is_read() {
+    let silent = |dataset| async { FakeLastfm::start(dataset).await.undated() };
+    let garbled = |dataset| async {
+        let question = [
+            ("method", "user.getRecentTracks"),
+            ("user", USER),
+            ("api_key", "k"),
+            ("limit", "1"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let (status, body) = respond_to(&dataset, &question);
+        FakeLastfm::start(dataset)
+            .await
+            .script([Behaviour::status_with(
+                status,
+                body,
+                &[("Date", "yesterday")],
+            )])
+    };
+    for server in [
+        silent(Dataset::distinct(20)).await,
+        garbled(Dataset::distinct(20)).await,
+    ] {
+        let scratch = Scratch::new();
+        let args = SyncArgs {
+            db: scratch.db(),
+            user: Some(USER.to_owned()),
+        };
+
+        let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
+
+        let Err(error @ Error::Service(_)) = result else {
+            panic!("expected a service error, got {result:?}");
+        };
+        assert!(error.to_string().contains("what time it is"), "{error}");
+        assert_eq!(error.exit_code(), 1);
+        assert_eq!(out, "");
+        assert_eq!(requests, 1);
+        assert_eq!(covered_to(&args), None);
+    }
 }

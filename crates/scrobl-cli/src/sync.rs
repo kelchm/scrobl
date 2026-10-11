@@ -1,7 +1,8 @@
 //! Reading the history the database does not hold yet.
 //!
 //! A sync has a *cutoff*, fixed when it starts, and makes the database cover
-//! `[0, cutoff)`. It asks the [`Store`] which spans are not covered and
+//! `[0, cutoff)`. The cutoff has to be in the past by Last.fm's clock as
+//! well as this machine's, which is what [`server_time`] is for. It asks the [`Store`] which spans are not covered and
 //! reads each one from its newest end backwards, a window at a time. Every
 //! window is one validated scan, stored in one transaction once the scan
 //! has finished. A sync that stops, for any reason, has lost at most the
@@ -137,6 +138,30 @@ pub async fn sync(
         stored: store.scrobbles_before(cutoff)?,
         reported,
     })
+}
+
+/// The time by Last.fm's clock, in Unix seconds: one request, for the
+/// `Date` header of its answer.
+///
+/// A cutoff is safe only if it lies in the past, because a window that ends
+/// after now is recorded as read while scrobbles can still arrive in it.
+/// This machine's clock cannot vouch for that on its own. The service's
+/// can: it is the clock that dates the scrobbles.
+///
+/// # Errors
+///
+/// [`Error::Lastfm`] when the call fails; [`Error::Service`] when the
+/// answer carries no `Date` header that can be read. There is no falling
+/// back on this machine's clock, which is the one in doubt.
+pub async fn server_time(client: &Client, user: &str) -> Result<u64, Error> {
+    let page = client.user(user).recent_tracks().limit(1).send().await?;
+    page.raw()
+        .header("date")
+        .and_then(time::http_date)
+        .ok_or(Error::Service(
+            "Last.fm's answer did not say what time it is, so the sync cannot tell how far it is \
+             safe to read",
+        ))
 }
 
 /// `[from, to)` as the library takes it. A lower bound of 0 is sent as no

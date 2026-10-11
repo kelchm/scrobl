@@ -99,7 +99,7 @@ scrobl sync --db history.db --user rj    # the first time
 scrobl sync --db history.db              # every time after
 ```
 
-The first sync reads the whole history, thirty days of listening at a time and a second between requests, and stores each stretch once it has passed every check of the scan. It can be stopped at any point and run again: it carries on where it stopped. Later syncs read only what is new, up to half an hour before the present, because the last minutes of a history are still filling in.
+The first sync reads the whole history, thirty days of listening at a time and a second between requests, and stores each stretch once it has passed every check of the scan. It can be stopped at any point and run again: it carries on where it stopped. Later syncs read only what is new, up to half an hour before the present, because the last minutes of a history are still filling in. The present is the earlier of this machine's clock and Last.fm's, so a clock that runs ahead cannot mark time that has not happened yet as read.
 
 The file holds every response exactly as Last.fm sent it (`pages`) and one row per scrobble decoded from them (`scrobbles`, the table to query). Scrobbles are never merged, so two plays in the same second are two rows.
 
