@@ -1011,14 +1011,30 @@ async fn gate6_a_write_is_sent_once_whatever_goes_wrong() {
     .await;
 }
 
+// "Operation failed" is no refusal: the service may have failed after it
+// acted, so the write is neither repeated nor reported as rejected.
+#[tokio::test]
+async fn gate6_operation_failed_leaves_a_write_unknown_and_is_not_retried() {
+    bounded(async {
+        for status in [200, 500] {
+            let failed = Behaviour::status(status, br#"{"error":8,"message":"Operation failed"}"#);
+            let server = serve(dataset(), [failed]).await;
+            let error = writer(&server).call(&love()).await.unwrap_err();
+            assert_eq!(error.api_code(), Some(ApiErrorCode::OPERATION_FAILED));
+            assert_eq!(error.delivery(), Some(Delivery::Unknown), "HTTP {status}");
+            assert_eq!(error.retry(), Retry::No, "HTTP {status}");
+            assert_eq!(server.request_count(), 1, "the write was resent");
+        }
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn gate6_an_error_envelope_is_a_rejection_and_is_not_retried_either() {
     bounded(async {
         // Code 16 is advice to retry; the client still does not.
         for (code, retry) in [
             (6, Retry::No),
-            // Advice to retry a read, never a write.
-            (8, Retry::No),
             (16, Retry::Later),
             (29, Retry::AfterBackoff),
             (9, Retry::AfterReauthentication),

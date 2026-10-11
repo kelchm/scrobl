@@ -58,7 +58,7 @@ const ROWS: &[Row] = &[
         read: Later,
         write: No,
         now_playing: No,
-        delivery: Rejected,
+        delivery: Unknown,
     },
     Row {
         label: "api 11",

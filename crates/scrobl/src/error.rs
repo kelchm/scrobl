@@ -80,8 +80,9 @@ pub enum Delivery {
     NotSent,
     /// The service answered with an error envelope and did not act on it.
     Rejected,
-    /// The request was sent, or may have been, and there is no readable
-    /// answer. The write may or may not have happened.
+    /// The request was sent, or may have been, and nothing says what became
+    /// of it: there is no readable answer, or the answer is code 8,
+    /// "operation failed". The write may or may not have happened.
     Unknown,
 }
 
@@ -239,9 +240,9 @@ impl Error {
     /// HTTP 429 are [`Retry::AfterBackoff`]; code 9 is
     /// [`Retry::AfterReauthentication`]. Everything else is [`Retry::No`].
     ///
-    /// For a write the API code rules are the same but for code 8, which is
-    /// [`Retry::No`]: "operation failed" does not say what the service did
-    /// with the write. A transport failure
+    /// For a write the API code rules are the same but for code 8:
+    /// "operation failed" does not say what the service did with the
+    /// write. A transport failure
     /// that certainly sent nothing is [`Retry::Later`]. Anything whose
     /// [`delivery`](Self::delivery) is [`Delivery::Unknown`] is
     /// [`Retry::No`], and `track.updateNowPlaying` is always [`Retry::No`].
@@ -276,8 +277,9 @@ impl Error {
                 Some(ApiErrorCode::SERVICE_OFFLINE | ApiErrorCode::TEMPORARY_ERROR) => Retry::Later,
                 // Last.fm's own advice for 8 is to try again, and a long
                 // history read meets it often. It does not say what the
-                // service did, so a write or a spent token is not repeated.
-                Some(ApiErrorCode::OPERATION_FAILED) if !write && !get_session => Retry::Later,
+                // service did: a write has unknown delivery and never gets
+                // here, and a token that may be spent is not sent again.
+                Some(ApiErrorCode::OPERATION_FAILED) if !get_session => Retry::Later,
                 Some(ApiErrorCode::RATE_LIMIT_EXCEEDED) => Retry::AfterBackoff,
                 Some(ApiErrorCode::INVALID_SESSION_KEY) => Retry::AfterReauthentication,
                 _ => Retry::No,
@@ -297,8 +299,8 @@ impl Error {
     ///
     /// [`Delivery::NotSent`] for an invalid request, a write refused as
     /// read-only or a transport failure that certainly sent nothing;
-    /// [`Delivery::Rejected`] for an error
-    /// envelope; [`Delivery::Unknown`] for everything else, including a
+    /// [`Delivery::Rejected`] for an error envelope other than code 8;
+    /// [`Delivery::Unknown`] for everything else, including code 8, a
     /// timeout and any failure after the request may have left.
     pub fn delivery(&self) -> Option<Delivery> {
         let inner = &*self.inner;
@@ -310,6 +312,11 @@ impl Error {
                 Delivery::NotSent
             }
             ErrorKind::Transport if !inner.possibly_sent => Delivery::NotSent,
+            // "Operation failed" is not a refusal: the service may have
+            // failed after it acted.
+            ErrorKind::Api if inner.api_code == Some(ApiErrorCode::OPERATION_FAILED) => {
+                Delivery::Unknown
+            }
             ErrorKind::Api => Delivery::Rejected,
             _ => Delivery::Unknown,
         })
