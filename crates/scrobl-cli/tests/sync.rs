@@ -166,12 +166,11 @@ async fn a_row_keeps_what_the_service_said_about_it() {
         String,
         Option<String>,
         Option<String>,
-        Option<bool>,
     );
     let rows: Vec<Row> = store
         .connection()
         .prepare(
-            "SELECT timestamp, artist, artist_mbid, track, album, album_mbid, loved
+            "SELECT timestamp, artist, artist_mbid, track, album, album_mbid
              FROM scrobbles ORDER BY timestamp DESC",
         )
         .unwrap()
@@ -183,7 +182,6 @@ async fn a_row_keeps_what_the_service_said_about_it() {
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
-                row.get(6)?,
             ))
         })
         .unwrap()
@@ -191,25 +189,19 @@ async fn a_row_keeps_what_the_service_said_about_it() {
         .collect();
 
     let album = Some("Synthetic Album".to_owned());
-    let row = |ts, track: &str, loved| {
+    let row = |ts, track: &str| {
         (
             ts,
             "Synthetic Artist".to_owned(),
-            None,
+            Some(support::ARTIST_MBID.to_owned()),
             track.to_owned(),
             album.clone(),
             None,
-            Some(loved),
         )
     };
-    // An empty mbid is stored as NULL; the fake loves every odd marker.
-    assert_eq!(
-        rows,
-        [
-            row(BASE + 20, "Track 0", false),
-            row(BASE + 10, "Track 1", true)
-        ]
-    );
+    // The artist's mbid is only sent in the plain form, so its being here
+    // says which form was asked for. An empty mbid is stored as NULL.
+    assert_eq!(rows, [row(BASE + 20, "Track 0"), row(BASE + 10, "Track 1")]);
 }
 
 #[tokio::test]

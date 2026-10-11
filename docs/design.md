@@ -347,7 +347,7 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 |---|---|
 | `windows` | Each span `[from_ts, to_ts)` that was read completely, with the total the service reported, the page count and size, and when it was read |
 | `pages` | The body of every response of that read, byte for byte |
-| `scrobbles` | One row per scrobble decoded from the pages: timestamp, artist, track, album, their MusicBrainz ids and the loved flag |
+| `scrobbles` | One row per scrobble decoded from the pages: timestamp, artist, track, album, and the `mbid` Last.fm sent for each |
 | `meta` | The user the file belongs to |
 
 The pages are the record and the scrobbles are derived from them, so the derived table can be rebuilt, or given new columns, without asking Last.fm again. A window is written in one transaction, and only from the `ScanSummary` of a scan that finished, which is what makes the library's "provisional until `finish`" rule hold on disk. Windows never overlap: the transaction that writes one checks, and a second sync on the same file fails there instead of storing a period twice. Rows are never merged or deduplicated. The file is marked with an `application_id` and a schema version in `user_version`. A file with no tables and neither mark is new and is set up. Any other file is used only if it carries both marks as this tool wrote them: one that has tables but no marks, or that another program marked, even while empty, is refused, not adopted. A path that names no file (an empty one, or SQLite's `:memory:`) is refused too, because SQLite would read it as a database to throw away.
@@ -358,6 +358,10 @@ A sync fixes a cutoff when it starts, thirty minutes before the present, and mak
 
 It asks the file which spans no window covers and reads each from its newest end backwards. A window holds at most thirty days of listening. Before each one it asks for the newest scrobble left in the span (one request with `limit=1`) and starts the window thirty days before that, so a long silence is one window and not one request per month. A span of thirty days or less is read without asking. The answer only places the window's lower bound: the scan that follows is checked in full whatever it said, and whatever lies below is still read.
 
+Pages are asked for in the plain form, without `extended=1`. The extended form sends every artist's `mbid` empty, for scrobbles whose plain form carries one, and puts the same placeholder image on every artist; what it adds is the loved flag and the artist's URL. The loved flag is not a fact about one scrobble, and `user.getLovedTracks` reports it with the time the track was loved, so it belongs in a table of its own, which the tool does not have yet.
+
+A track's `mbid` is stored as sent and is not always a MusicBrainz recording. In a sample of 24 from one real history, six were recordings, and each of the twelve others that were looked up was a MusicBrainz track id, which names a track on one particular release that is not necessarily the one that was played.
+
 A sync that fails keeps every window it stored and loses only the one it was reading. The next sync finds the same gap and carries on. A later sync finds one gap, from the last cutoff to the new one.
 
 When the gaps are closed it asks Last.fm how many scrobbles lie before the cutoff and compares that with the file. Exit status: 0 when they agree, 3 when they differ, 1 for a failure, 2 for a wrong command line.
@@ -366,6 +370,7 @@ When the gaps are closed it asks Last.fm how many scrobbles lie before the cutof
 
 - It never reads a period twice. A scrobble added to or removed from a period after it was read (an offline device that syncs days later, an edit on the website) shows as a difference in the counts and is not repaired. Equal counts do not prove equal rows, for the reasons under [What a completed scan does not prove](#what-a-completed-scan-does-not-prove).
 - It reads a public history only. A hidden one needs the signed read, which is unverified.
+- It does not record which tracks are loved.
 - No server for agents, no export and no offline check of the file.
 
 ## Coverage
