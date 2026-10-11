@@ -137,7 +137,7 @@
 //! A read is attempted up to [`read_attempts`] times (three by default,
 //! counting the first). It is repeated only after a failure whose
 //! [`Error::retry`] is [`Retry::Later`] or [`Retry::AfterBackoff`]: a
-//! transport failure or timeout, HTTP 5xx, API codes 11 and 16, and then
+//! transport failure or timeout, HTTP 5xx, API codes 8, 11 and 16, and then
 //! HTTP 429 and API code 29. Nothing else is repeated: a bad parameter, a
 //! suspended key, a body that is too large or one that cannot be decoded
 //! will fail the same way again.
@@ -146,6 +146,11 @@
 //! (five times as long after a rate-limit answer), on top of pacing, and at
 //! least as long as the response's `Retry-After` header asked when it gave
 //! a number of seconds. No single wait is longer than five minutes.
+//!
+//! To decide for yourself, build the client with [`read_attempts`]`(1)`:
+//! every failure then comes straight back, and [`Error::retry`],
+//! [`Error::api_code`](crate::Error::api_code) and
+//! [`Error::http_status`](crate::Error::http_status) say what it was.
 //!
 //! **A write is never retried by the client**, whatever went wrong. A
 //! write that failed without a readable answer may have happened, and

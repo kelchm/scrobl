@@ -811,11 +811,31 @@ async fn gate5_the_budget_counts_attempts_in_total_not_retries_on_top() {
 #[tokio::test]
 async fn gate5_transient_api_errors_at_http_200_are_retried() {
     bounded(async {
-        for code in [11, 16] {
+        for code in [8, 11, 16] {
             let server = serve(dataset(), [Behaviour::api_error(code)]).await;
             client(&server).call(&read()).await.unwrap();
             assert_eq!(server.request_count(), 2, "code {code}");
         }
+    })
+    .await;
+}
+
+// What a long history read meets: code 8 in a readable envelope under HTTP
+// 500. The code decides, not the status.
+#[tokio::test]
+async fn gate5_operation_failed_under_http_500_is_retried_for_a_read() {
+    bounded(async {
+        let failed = Behaviour::status(500, br#"{"error":8,"message":"Operation failed"}"#);
+        let server = serve(dataset(), [failed.clone()]).await;
+        client(&server).call(&read()).await.unwrap();
+        assert_eq!(server.request_count(), 2);
+
+        // It is still an error once the attempts are spent.
+        let server = serve(dataset(), []).await.then(failed);
+        let error = client(&server).call(&read()).await.unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::OPERATION_FAILED));
+        assert_eq!(error.retry(), Retry::Later);
+        assert_eq!(server.request_count(), 3);
     })
     .await;
 }
@@ -986,6 +1006,24 @@ async fn gate6_a_write_is_sent_once_whatever_goes_wrong() {
             assert_clean(label, &error);
             // A retry would happen inside the call, so it has returned.
             assert_eq!(server.request_count(), 1, "{label}: the write was resent");
+        }
+    })
+    .await;
+}
+
+// "Operation failed" is no refusal: the service may have failed after it
+// acted, so the write is neither repeated nor reported as rejected.
+#[tokio::test]
+async fn gate6_operation_failed_leaves_a_write_unknown_and_is_not_retried() {
+    bounded(async {
+        for status in [200, 500] {
+            let failed = Behaviour::status(status, br#"{"error":8,"message":"Operation failed"}"#);
+            let server = serve(dataset(), [failed]).await;
+            let error = writer(&server).call(&love()).await.unwrap_err();
+            assert_eq!(error.api_code(), Some(ApiErrorCode::OPERATION_FAILED));
+            assert_eq!(error.delivery(), Some(Delivery::Unknown), "HTTP {status}");
+            assert_eq!(error.retry(), Retry::No, "HTTP {status}");
+            assert_eq!(server.request_count(), 1, "the write was resent");
         }
     })
     .await;
