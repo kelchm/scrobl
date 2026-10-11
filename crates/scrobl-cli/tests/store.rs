@@ -615,3 +615,24 @@ fn pages_that_are_not_one_whole_list_of_loved_tracks_are_refused() {
     );
     assert_eq!(loved_read_at(&store).as_deref(), Some("100"));
 }
+
+#[test]
+fn a_replacement_that_fails_part_way_keeps_the_list_before() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user(USER).unwrap();
+    let before = Dataset::distinct(1).with_loved(3);
+    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
+    let kept = loved_rows(&store);
+
+    // The second track's time is more than a column holds: the insert of
+    // it fails after a page and a track of the new list went in.
+    let mut after = Dataset::distinct(1).with_loved(4);
+    after.loved[1] = u64::MAX;
+    let failed = store.replace_loved(&loved_pages(&after, 2), 200);
+
+    assert!(matches!(failed, Err(Error::Sqlite(_))), "{failed:?}");
+    assert_eq!(loved_rows(&store), kept);
+    assert_eq!(count(&store, "loved_pages"), 2);
+    assert_eq!(loved_read_at(&store).as_deref(), Some("100"));
+}
