@@ -623,7 +623,17 @@ fn a_replacement_that_fails_part_way_keeps_the_list_before() {
     store.bind_user(USER).unwrap();
     let before = Dataset::distinct(1).with_loved(3);
     store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
-    let kept = loved_rows(&store);
+    let bodies = |store: &Store| -> Vec<Vec<u8>> {
+        store
+            .connection()
+            .prepare("SELECT body FROM loved_pages ORDER BY page")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let (kept, kept_bodies) = (loved_rows(&store), bodies(&store));
 
     // The second track's time is more than a column holds: the insert of
     // it fails after a page and a track of the new list went in.
@@ -633,6 +643,7 @@ fn a_replacement_that_fails_part_way_keeps_the_list_before() {
 
     assert!(matches!(failed, Err(Error::Sqlite(_))), "{failed:?}");
     assert_eq!(loved_rows(&store), kept);
-    assert_eq!(count(&store, "loved_pages"), 2);
+    // Byte for byte: the new list has two pages as well.
+    assert_eq!(bodies(&store), kept_bodies);
     assert_eq!(loved_read_at(&store).as_deref(), Some("100"));
 }

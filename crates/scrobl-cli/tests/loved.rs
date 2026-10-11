@@ -36,16 +36,46 @@ async fn run(
 
 /// The first page of `dataset`'s loved tracks, as an answer to script.
 fn first_page(dataset: &Dataset, page_size: u32) -> Behaviour {
+    Behaviour::status(200, page_body(dataset, page_size, 1))
+}
+
+/// The body of one page of `dataset`'s loved tracks.
+fn page_body(dataset: &Dataset, page_size: u32, number: u32) -> String {
     let params = [
         ("method", "user.getLovedTracks".to_owned()),
         ("user", USER.to_owned()),
         ("api_key", "k".to_owned()),
         ("limit", page_size.to_string()),
-        ("page", "1".to_owned()),
+        ("page", number.to_string()),
     ]
     .map(|(name, value)| (name.to_owned(), value));
     let (status, body) = respond_to(dataset, &params);
-    Behaviour::status(status, body)
+    assert_eq!(status, 200);
+    String::from_utf8(body).unwrap()
+}
+
+/// A read of four tracks, two to a page, whose first page is answered
+/// with `again` when it is asked for the second time.
+async fn run_with_second_look(store: &mut Store, again: Behaviour) -> Result<u64, Error> {
+    let dataset = Dataset::distinct(1).with_loved(4);
+    let server =
+        FakeLastfm::start(dataset)
+            .await
+            .script([Behaviour::Normal, Behaviour::Normal, again]);
+    loved(&client(&server), store, USER, 2).await
+}
+
+/// The stored body of a page.
+fn kept_body(store: &Store, page: u32) -> String {
+    let body: Vec<u8> = store
+        .connection()
+        .query_row(
+            "SELECT body FROM loved_pages WHERE page = ?1",
+            [page],
+            |row| row.get(0),
+        )
+        .unwrap();
+    String::from_utf8(body).unwrap()
 }
 
 fn changed(result: Result<u64, Error>) {
@@ -324,6 +354,69 @@ async fn a_first_page_that_reads_differently_the_second_time_stores_nothing() {
         }
         assert!(tracks(&store).is_empty());
     }
+}
+
+#[tokio::test]
+async fn the_second_look_must_be_the_first_page_and_nothing_else() {
+    let dataset = Dataset::distinct(1).with_loved(4);
+    for (again, message) in [
+        // The second page, where the first was asked for.
+        (page_body(&dataset, 2, 2), "not the one asked for"),
+        // Pages of another size.
+        (page_body(&dataset, 3, 1), "not the one asked for"),
+        // The same tracks, the newest of them loved a second later: it
+        // was unloved and loved again.
+        (
+            page_body(&dataset, 2, 1).replace(
+                &format!(r#""uts":"{}""#, BASE + 400),
+                &format!(r#""uts":"{}""#, BASE + 401),
+            ),
+            "changed while",
+        ),
+    ] {
+        assert_ne!(again, page_body(&dataset, 2, 1));
+        let scratch = Scratch::new();
+        let mut store = store(&scratch);
+
+        let result = run_with_second_look(&mut store, Behaviour::status(200, again)).await;
+
+        let Err(error @ Error::Service(_)) = result else {
+            panic!("expected a service error, got {result:?}");
+        };
+        assert!(error.to_string().contains(message), "{error}");
+        assert!(tracks(&store).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_second_look_that_fails_keeps_the_list_before() {
+    let scratch = Scratch::new();
+    let mut store = store(&scratch);
+    run(&Dataset::distinct(1).with_loved(3), &mut store, 2)
+        .await
+        .1
+        .unwrap();
+
+    let result = run_with_second_look(&mut store, Behaviour::api_error(8)).await;
+
+    assert!(matches!(result, Err(Error::Lastfm(_))), "{result:?}");
+    assert_eq!(names(&store), ["Loved 3", "Loved 2", "Loved 1"]);
+}
+
+#[tokio::test]
+async fn what_is_stored_is_the_first_reading_of_the_first_page() {
+    let scratch = Scratch::new();
+    let mut store = store(&scratch);
+    let dataset = Dataset::distinct(1).with_loved(4);
+    // The same rows, in bytes that differ where no check looks.
+    let first = page_body(&dataset, 2, 1);
+    let again = first.replace(r##""#text":"synthetic""##, r##""#text":"another""##);
+    assert_ne!(again, first);
+
+    let result = run_with_second_look(&mut store, Behaviour::status(200, again)).await;
+
+    assert_eq!(result.unwrap(), 4);
+    assert_eq!(kept_body(&store, 1), first);
 }
 
 #[tokio::test]
