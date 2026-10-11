@@ -184,6 +184,7 @@ struct Script {
 struct Shared {
     dataset: Dataset,
     script: Mutex<Script>,
+    clock: Mutex<Clock>,
     connections: AtomicUsize,
     /// Requests started, over all connections.
     served: AtomicUsize,
@@ -200,10 +201,83 @@ struct Shared {
 }
 
 impl Shared {
+    /// The `Date` header of an answer, unless the test took it away.
+    fn date(&self) -> Option<String> {
+        let clock = *self.clock.lock().unwrap_or_else(PoisonError::into_inner);
+        match clock {
+            Clock::System => Some(http_date(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs()),
+            )),
+            Clock::At(seconds) => Some(http_date(seconds)),
+            Clock::Silent => None,
+        }
+    }
+
     fn behaviour(&self, number: usize) -> Behaviour {
         let script = self.script.lock().unwrap_or_else(PoisonError::into_inner);
         script.steps.get(number).unwrap_or(&script.rest).clone()
     }
+}
+
+/// What the server says the time is.
+#[derive(Debug, Clone, Copy)]
+enum Clock {
+    /// The time it is.
+    System,
+    /// These Unix seconds, on every answer.
+    At(u64),
+    /// Nothing: no `Date` header.
+    Silent,
+}
+
+/// Unix seconds as HTTP writes a date: `Tue, 14 Nov 2023 22:13:20 GMT`.
+pub fn http_date(seconds: u64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    let weekday = DAYS[(days % 7) as usize];
+    let mut year = 1970;
+    let mut left = days;
+    let leap = |year: u64| {
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    };
+    while left >= 365 + u64::from(leap(year)) {
+        left -= 365 + u64::from(leap(year));
+        year += 1;
+    }
+    let mut month = 0;
+    for length in [
+        31,
+        28 + u64::from(leap(year)),
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ] {
+        if left < length {
+            break;
+        }
+        left -= length;
+        month += 1;
+    }
+    format!(
+        "{weekday}, {:02} {} {year} {:02}:{:02}:{:02} GMT",
+        left + 1,
+        MONTHS[month],
+        rest / 3_600,
+        rest % 3_600 / 60,
+        rest % 60
+    )
 }
 
 /// A running fake service. Dropping it stops it, and closes every socket,
@@ -225,6 +299,7 @@ impl FakeLastfm {
                 steps: Vec::new(),
                 rest: Behaviour::Normal,
             }),
+            clock: Mutex::new(Clock::System),
             connections: AtomicUsize::new(0),
             served: AtomicUsize::new(0),
             keep_alive: AtomicBool::new(false),
@@ -236,6 +311,28 @@ impl FakeLastfm {
         });
         let task = tokio::spawn(accept_loop(listener, Arc::clone(&shared)));
         Self { addr, shared, task }
+    }
+
+    /// Dates every answer with these Unix seconds instead of the time it is.
+    #[must_use]
+    pub fn dated(self, seconds: u64) -> Self {
+        *self
+            .shared
+            .clock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Clock::At(seconds);
+        self
+    }
+
+    /// Sends no `Date` header.
+    #[must_use]
+    pub fn undated(self) -> Self {
+        *self
+            .shared
+            .clock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Clock::Silent;
+        self
     }
 
     /// Gives connection 0 the first behaviour, connection 1 the second, and
@@ -423,16 +520,25 @@ async fn serve_one(
                 Some("track.love") => love(params),
                 _ => respond_to(&shared.dataset, params),
             };
-            reply(stream, status, &[], &body, keep_alive).await.is_ok()
+            let date = shared.date();
+            let headers: Vec<(&str, &str)> = date.iter().map(|d| ("Date", d.as_str())).collect();
+            reply(stream, status, &headers, &body, keep_alive)
+                .await
+                .is_ok()
         }
         Behaviour::Reply {
             status,
             body,
             headers,
         } => {
+            // A date the test set stands; otherwise the server's own.
+            let date = shared
+                .date()
+                .filter(|_| !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("date")));
             let headers: Vec<(&str, &str)> = headers
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
+                .chain(date.iter().map(|d| ("Date", d.as_str())))
                 .collect();
             reply(stream, status, &headers, &body, keep_alive)
                 .await

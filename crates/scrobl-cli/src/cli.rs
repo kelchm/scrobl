@@ -204,8 +204,14 @@ async fn try_run(
 }
 
 /// `scrobl sync` with a client already built: opens the database, reads
-/// what it lacks up to [`SETTLE`] seconds before `now`, reports, and then
-/// reads the loved tracks afresh.
+/// what it lacks up to [`SETTLE`] seconds before `now` or before Last.fm's
+/// own clock, whichever is earlier, reports, and then reads the loved
+/// tracks afresh.
+///
+/// The second clock is there because a period that ends in the future
+/// would be recorded as read, and what was then played in it never
+/// fetched. A clock that runs ahead costs nothing this way, and one that
+/// runs behind only delays the newest scrobbles to a later sync.
 ///
 /// Returns 0, or [`EXIT_MISMATCH`] when the sync finished but the database
 /// and Last.fm count differently.
@@ -213,8 +219,8 @@ async fn try_run(
 /// # Errors
 ///
 /// [`Error::Usage`] when no user was given and the database has none yet,
-/// and any error of [`Store::open`], [`Store::bind_user`], [`sync::sync`]
-/// and [`sync::loved`]. The history stored before an error stays stored.
+/// and any error of [`Store::open`], [`Store::bind_user`],
+/// [`sync::server_time`], [`sync::sync`] and [`sync::loved`]. The history stored before an error stays stored.
 pub async fn sync_command(
     args: &SyncArgs,
     client: &Client,
@@ -235,7 +241,16 @@ pub async fn sync_command(
     };
     store.bind_user(&user)?;
 
-    let cutoff = now.saturating_sub(SETTLE);
+    let served = sync::server_time(client, &user).await?;
+    if now > served.saturating_add(SETTLE) {
+        let _ = writeln!(
+            err,
+            "This machine's clock is ahead of Last.fm's ({} against {}); reading up to Last.fm's.",
+            time::utc(now),
+            time::utc(served)
+        );
+    }
+    let cutoff = now.min(served).saturating_sub(SETTLE);
     let report = sync::sync(
         client,
         &mut store,
