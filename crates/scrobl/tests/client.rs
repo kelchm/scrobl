@@ -2444,3 +2444,107 @@ fn gate15_a_writer_shows_no_credential() {
         assert!(!text.contains(secret), "{text}");
     }
 }
+
+#[tokio::test]
+async fn loved_tracks_are_read_a_page_at_a_time_with_the_exact_bytes() {
+    bounded(async {
+        let dataset = Dataset::distinct(1).with_loved(5);
+        let server = serve(dataset.clone(), []).await;
+        let page = client(&server)
+            .user(USER)
+            .loved_tracks()
+            .limit(2)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+
+        let request = &server.requests()[0];
+        assert_eq!(
+            request.param("method").as_deref(),
+            Some("user.getLovedTracks")
+        );
+        assert_eq!(request.param("user").as_deref(), Some(USER));
+        assert_eq!(request.param("limit").as_deref(), Some("2"));
+        assert_eq!(request.param("page").as_deref(), Some("2"));
+        let (status, body) = respond_to(&dataset, &request.params());
+        assert_eq!(status, 200);
+        assert_eq!(page.raw().body(), body.as_slice());
+        assert_eq!(page.raw().method(), "user.getLovedTracks");
+
+        // Newest first: page 2 of five holds the third and fourth newest.
+        let attr = page.attr();
+        assert_eq!((attr.page(), attr.per_page(), attr.total()), (2, 2, 5));
+        let loved: Vec<(u64, &str)> = page
+            .tracks()
+            .iter()
+            .map(|t| (t.loved_at(), t.track().name()))
+            .collect();
+        assert_eq!(loved, [(BASE + 300, "Loved 3"), (BASE + 200, "Loved 2")]);
+        assert_eq!(page.tracks()[0].artist().mbid(), Some(ARTIST_MBID));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_loved_tracks_query_sends_only_what_was_set() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let page = client(&server)
+            .user(USER)
+            .loved_tracks()
+            .send()
+            .await
+            .unwrap();
+        assert!(page.tracks().is_empty());
+        assert_eq!(page.attr().total(), 0);
+
+        let request = &server.requests()[0];
+        assert_eq!(request.param("limit"), None);
+        assert_eq!(request.param("page"), None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_loved_tracks_query_that_cannot_be_built_sends_nothing() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1).with_loved(3), []).await;
+        let user = client(&server).user(USER);
+        for query in [
+            user.loved_tracks().limit(0),
+            user.loved_tracks().limit(1001),
+            user.loved_tracks().page(0),
+        ] {
+            let error = query.send().await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.method(), Some("user.getLovedTracks"));
+        }
+        assert_eq!(server.request_count(), 0);
+
+        user.loved_tracks().limit(1000).send().await.unwrap();
+        assert_eq!(server.request_count(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_loved_tracks_failure_is_an_error_of_that_method() {
+    bounded(async {
+        let faults = Faults {
+            api_error: Some((None, 8)),
+            ..Faults::default()
+        };
+        let server = serve(Dataset::distinct(1).with_loved(3).with_faults(faults), []).await;
+        let error = client(&server)
+            .user(USER)
+            .loved_tracks()
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Api);
+        assert_eq!(error.method(), Some("user.getLovedTracks"));
+        assert_clean("loved tracks", &error);
+    })
+    .await;
+}

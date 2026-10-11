@@ -274,7 +274,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 
 pub use builder::ClientBuilder;
-pub use history::{RecentTracksQuery, Scan, User};
+pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
 
 use crate::error::{Error, Retry};
 use crate::protocol::{

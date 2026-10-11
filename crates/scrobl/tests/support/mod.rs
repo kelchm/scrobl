@@ -134,6 +134,9 @@ pub struct Faults {
     pub truncate_on_page: Option<u32>,
     /// Serve this page with no rows, keeping the totals.
     pub empty_page: Option<u32>,
+    /// From this page of the loved tracks on, one more track is loved: the
+    /// list has a new newest row and `total` is one higher.
+    pub love_from_page: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +151,9 @@ pub struct Dataset {
     pub cap: u32,
     /// What `totalPages` says for an empty result.
     pub empty_total_pages: u64,
+    /// When each loved track was loved, newest first. Track `n` of the list
+    /// is named `Loved n`.
+    pub loved: Vec<u64>,
     pub faults: Faults,
 }
 
@@ -167,6 +173,7 @@ impl Dataset {
             now_playing: None,
             cap: 200,
             empty_total_pages: 0,
+            loved: Vec::new(),
             faults: Faults::default(),
         }
     }
@@ -203,6 +210,14 @@ impl Dataset {
     #[must_use]
     pub fn with_now_playing(mut self, with_date: bool, on: Pages) -> Self {
         self.now_playing = Some(NowPlayingSpec { with_date, on });
+        self
+    }
+
+    /// `n` loved tracks, a hundred seconds apart. The newest was loved at
+    /// `BASE + 100 * n`.
+    #[must_use]
+    pub fn with_loved(mut self, n: usize) -> Self {
+        self.loved = (1..=n as u64).rev().map(|i| BASE + 100 * i).collect();
         self
     }
 
@@ -300,6 +315,9 @@ pub fn respond_to(dataset: &Dataset, params: &[(String, String)]) -> (u16, Vec<u
             .map(|(_, v)| v.as_str())
     };
 
+    if get("method").is_some_and(|m| m.eq_ignore_ascii_case("user.getLovedTracks")) {
+        return loved_tracks(dataset, &get);
+    }
     if !get("method").is_some_and(|m| m.eq_ignore_ascii_case("user.getRecentTracks")) {
         return (400, error_body(3, "Invalid Method"));
     }
@@ -478,6 +496,91 @@ pub fn respond_to(dataset: &Dataset, params: &[(String, String)]) -> (u16, Vec<u
         body.truncate(body.len() / 2);
     }
     (200, body)
+}
+
+/// The largest page of loved tracks the fake gives. The real service was
+/// seen to honour 1000.
+const LOVED_CAP: u64 = 1000;
+
+/// Answers `user.getLovedTracks`: `limit` (50 unless given) and `page`.
+fn loved_tracks<'a>(dataset: &Dataset, get: &impl Fn(&str) -> Option<&'a str>) -> (u16, Vec<u8>) {
+    if get("api_key").is_none() {
+        return (403, error_body(10, "Invalid API key"));
+    }
+    if !get("user").is_some_and(|user| user.eq_ignore_ascii_case(&dataset.user)) {
+        return (404, error_body(6, "User not found"));
+    }
+    let number = |name: &str, default: u64| -> Option<u64> {
+        get(name).map_or(Some(default), |v| v.parse().ok())
+    };
+    let (Some(page), Some(limit)) = (number("page", 1), number("limit", 50)) else {
+        return (400, error_body(6, "Invalid parameters"));
+    };
+    if page == 0 || limit == 0 {
+        return (400, error_body(6, "Invalid parameters"));
+    }
+    if let Some((on, code)) = dataset.faults.api_error
+        && on.is_none_or(|p| u64::from(p) == page)
+    {
+        return (200, error_body(code, "Synthetic error"));
+    }
+
+    // The list as it stands when this request arrives.
+    let mut loved = dataset.loved.clone();
+    if dataset
+        .faults
+        .love_from_page
+        .is_some_and(|p| page >= u64::from(p))
+    {
+        loved.insert(0, loved.first().map_or(BASE, |newest| newest + 100));
+    }
+
+    let size = limit.min(LOVED_CAP);
+    let total = loved.len() as u64;
+    let rows: Vec<Value> = loved
+        .iter()
+        .enumerate()
+        .skip(((page - 1) * size) as usize)
+        .take(size as usize)
+        .map(|(index, ts)| {
+            // Numbered from the oldest, so a track keeps its name when a
+            // newer one is loved.
+            let n = loved.len() - index;
+            json!({
+                "artist": {
+                    "url": "https://example.invalid/music/Artist",
+                    "name": "Synthetic Artist",
+                    "mbid": ARTIST_MBID,
+                },
+                "date": {"uts": ts.to_string(), "#text": "synthetic"},
+                "mbid": "",
+                "url": "https://example.invalid/music/Artist/_/Loved",
+                "name": format!("Loved {n}"),
+                "image": images(),
+                "streamable": {"fulltrack": "0", "#text": "0"},
+            })
+        })
+        .collect();
+    let echoed = if dataset
+        .faults
+        .wrong_user_on_page
+        .is_some_and(|p| u64::from(p) == page)
+    {
+        "someone-else"
+    } else {
+        &dataset.user
+    };
+    let body = json!({"lovedtracks": {
+        "track": rows,
+        "@attr": {
+            "user": echoed,
+            "page": page.to_string(),
+            "perPage": size.to_string(),
+            "totalPages": total.div_ceil(size).to_string(),
+            "total": total.to_string(),
+        },
+    }});
+    (200, body.to_string().into_bytes())
 }
 
 fn images() -> Value {

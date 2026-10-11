@@ -1,5 +1,10 @@
 //! The `user` package: [`RecentTracksPage`], the reply to
-//! `user.getRecentTracks`.
+//! `user.getRecentTracks`, and [`LovedTracksPage`], the reply to
+//! `user.getLovedTracks`.
+
+mod loved;
+
+pub use loved::{LovedTrack, LovedTracksPage};
 
 use std::fmt;
 
@@ -126,7 +131,7 @@ impl fmt::Debug for RecentTracksPage {
     }
 }
 
-/// The `@attr` of a page: whose history, which page of how many.
+/// The `@attr` of a page: whose list, which page of how many.
 ///
 /// The service sends these as strings. All five are required.
 #[derive(Clone)]
@@ -159,8 +164,9 @@ impl PageAttr {
         self.total_pages
     }
 
-    /// The number of scrobbles the service says match the request, within
-    /// the `from` and `to` bounds if any were sent.
+    /// The number of items the service says match the request: for a
+    /// history, the scrobbles within the `from` and `to` bounds if any were
+    /// sent.
     pub fn total(&self) -> u64 {
         self.total
     }
@@ -401,7 +407,7 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
         return Err(missing_or(ROOT, "an object"));
     };
     let attr = match recent.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(&attr)?,
+        Some(Value::Object(attr)) => parse_attr(ROOT, &attr)?,
         _ => return Err(missing_or("recenttracks.@attr", "an object")),
     };
 
@@ -416,7 +422,7 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
         })?,
     };
     if rows.is_empty() {
-        check_rows_may_be_absent(&attr)?;
+        check_rows_may_be_absent(ROOT, &attr)?;
     }
 
     let mut scrobbles = Vec::with_capacity(rows.len());
@@ -442,21 +448,21 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
 }
 
 /// An absent or empty `track` is an empty page only if the page's own `@attr`
-/// allows it: no scrobbles match (`total` is 0) or the page lies beyond the
+/// allows it: nothing matches (`total` is 0) or the page lies beyond the
 /// last one. Otherwise the rows are missing, not absent.
-fn check_rows_may_be_absent(attr: &PageAttr) -> Result<(), Error> {
+fn check_rows_may_be_absent(root: &str, attr: &PageAttr) -> Result<(), Error> {
     if attr.total == 0 || attr.page > attr.total_pages {
         return Ok(());
     }
     Err(Error::decode_field(
-        "recenttracks.track",
+        &format!("{root}.track"),
         "absent or empty, but `@attr` says the page holds rows",
     ))
 }
 
-fn parse_attr(attr: &Map<String, Value>) -> Result<PageAttr, Error> {
+fn parse_attr(root: &str, attr: &Map<String, Value>) -> Result<PageAttr, Error> {
     let uint = |key: &str| {
-        let path = format!("recenttracks.@attr.{key}");
+        let path = format!("{root}.@attr.{key}");
         attr.get(key)
             .and_then(de::uint)
             .ok_or_else(|| missing_or(&path, "an unsigned integer"))
@@ -464,7 +470,7 @@ fn parse_attr(attr: &Map<String, Value>) -> Result<PageAttr, Error> {
     let user = attr
         .get("user")
         .and_then(Value::as_str)
-        .ok_or_else(|| missing_or("recenttracks.@attr.user", "a string"))?;
+        .ok_or_else(|| missing_or(&format!("{root}.@attr.user"), "a string"))?;
     Ok(PageAttr {
         user: user.to_owned(),
         page: uint("page")?,
