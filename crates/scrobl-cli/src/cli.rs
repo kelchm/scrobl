@@ -45,7 +45,8 @@ Usage:
   scrobl sync --db <file> [--user <name>]
 
 Commands:
-  sync    Read the history the database does not hold yet
+  sync    Read the history the database does not hold yet, and the loved
+          tracks as they are now
 
 Options:
   --db <file>      The SQLite database, created if it is missing
@@ -203,7 +204,8 @@ async fn try_run(
 }
 
 /// `scrobl sync` with a client already built: opens the database, reads
-/// what it lacks up to [`SETTLE`] seconds before `now`, and reports.
+/// what it lacks up to [`SETTLE`] seconds before `now`, reports, and then
+/// reads the loved tracks afresh.
 ///
 /// Returns 0, or [`EXIT_MISMATCH`] when the sync finished but the database
 /// and Last.fm count differently.
@@ -211,8 +213,8 @@ async fn try_run(
 /// # Errors
 ///
 /// [`Error::Usage`] when no user was given and the database has none yet,
-/// and any error of [`Store::open`], [`Store::bind_user`] and
-/// [`sync::sync`].
+/// and any error of [`Store::open`], [`Store::bind_user`], [`sync::sync`]
+/// and [`sync::loved`]. The history stored before an error stays stored.
 pub async fn sync_command(
     args: &SyncArgs,
     client: &Client,
@@ -259,14 +261,19 @@ pub async fn sync_command(
         time::utc(report.cutoff),
         report.added
     );
-    if report.matches() {
-        return Ok(0);
-    }
-    let _ = writeln!(
-        out,
-        "Last.fm reports {}. Scrobbles were added to or removed from a period after it was \
-         read, and this version does not read a period twice.",
-        report.reported
-    );
-    Ok(EXIT_MISMATCH)
+    let code = if report.matches() {
+        0
+    } else {
+        let _ = writeln!(
+            out,
+            "Last.fm reports {}. Scrobbles were added to or removed from a period after it was \
+             read, and this version does not read a period twice.",
+            report.reported
+        );
+        EXIT_MISMATCH
+    };
+
+    let loved = sync::loved(client, &mut store, &user, options.loved_page_size).await?;
+    let _ = writeln!(out, "{loved} loved tracks.");
+    Ok(code)
 }

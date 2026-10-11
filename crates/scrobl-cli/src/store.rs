@@ -14,11 +14,17 @@
 //! A window is written in one transaction, and only from the summary of a
 //! scan that finished, so the file holds whole windows or nothing of them.
 //! Windows never overlap.
+//!
+//! The tracks the user has loved are kept beside the history, as they stood
+//! at the last sync: `loved_pages` holds the responses and `loved` the rows
+//! decoded from them. Each read replaces the one before.
 
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use scrobl::Response;
 use scrobl::history::{ScanPage, ScanSummary};
+use scrobl::model::LovedTracksPage;
 
 use crate::Error;
 
@@ -26,8 +32,9 @@ use crate::Error;
 /// "scbl".
 const APPLICATION_ID: i64 = 0x7363_626c;
 
-/// The layout below: `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+/// The layout below: `PRAGMA user_version`. Version 1 had no tables for the
+/// loved tracks and, in its first form, a `loved` column on `scrobbles`.
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -71,6 +78,46 @@ CREATE TABLE scrobbles (
 CREATE INDEX scrobbles_timestamp ON scrobbles (timestamp);
 ";
 
+/// The tables of the loved tracks, which version 2 added.
+const LOVED_SCHEMA: &str = "
+CREATE TABLE loved_pages (
+    page INTEGER PRIMARY KEY,
+    body BLOB NOT NULL
+) STRICT;
+
+CREATE TABLE loved (
+    id          INTEGER PRIMARY KEY,
+    page        INTEGER NOT NULL REFERENCES loved_pages (page),
+    position    INTEGER NOT NULL,
+    loved_at    INTEGER NOT NULL,
+    artist      TEXT NOT NULL,
+    artist_mbid TEXT,
+    track       TEXT NOT NULL,
+    track_mbid  TEXT,
+    UNIQUE (page, position)
+) STRICT;
+";
+
+/// Brings a version 1 file to version 2, in one transaction: the tables of
+/// the loved tracks are added, and the `loved` column, which the first
+/// version 1 files have on `scrobbles`, is dropped. What it held is still in
+/// the pages.
+fn upgrade_from_1(connection: &mut Connection) -> Result<(), Error> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_loved: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('scrobbles') WHERE name = 'loved')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_loved {
+        transaction.execute_batch("ALTER TABLE scrobbles DROP COLUMN loved")?;
+    }
+    transaction.execute_batch(LOVED_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 /// An open database.
 #[derive(Debug)]
 pub struct Store {
@@ -79,7 +126,7 @@ pub struct Store {
 
 impl Store {
     /// Opens the database at `path`, creating it if the file is missing or
-    /// empty.
+    /// empty, and bringing a file of the previous layout up to this one.
     ///
     /// # Errors
     ///
@@ -115,6 +162,7 @@ impl Store {
         if objects == 0 && application == 0 && version == 0 {
             let transaction = connection.transaction()?;
             transaction.execute_batch(SCHEMA)?;
+            transaction.execute_batch(LOVED_SCHEMA)?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -125,7 +173,9 @@ impl Store {
                 "the file is a database, but not one this tool made",
             ));
         }
-        if version != SCHEMA_VERSION {
+        if version == 1 {
+            upgrade_from_1(&mut connection)?;
+        } else if version != SCHEMA_VERSION {
             return Err(Error::Database(
                 "the database was written by another version of this tool",
             ));
@@ -296,6 +346,80 @@ impl Store {
                 }
             }
         }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Replaces the loved tracks with `pages`, the whole list as one read
+    /// returned it, page 1 first. The time of the read is kept in `meta` as
+    /// `loved_read_at`. All of it is written in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Database`] when `pages` are not one whole list: when there
+    /// are none, when they are out of order, when they disagree about the
+    /// total, the page size or the user, when the user is not the one the
+    /// database belongs to, or when they do not hold as many tracks as the
+    /// total says. Nothing is written in any of those cases.
+    pub fn replace_loved(
+        &mut self,
+        pages: &[Response<LovedTracksPage>],
+        read_at: u64,
+    ) -> Result<(), Error> {
+        let Some(first) = pages.first().map(|page| page.attr()) else {
+            return Err(Error::Database("a list of loved tracks has a first page"));
+        };
+        let bound = self.user()?;
+        let tracks: usize = pages.iter().map(|page| page.tracks().len()).sum();
+        let belong = pages.iter().zip(1..).all(|(page, number)| {
+            let attr = page.attr();
+            attr.page() == number
+                && attr.total() == first.total()
+                && attr.per_page() == first.per_page()
+                && bound
+                    .as_deref()
+                    .is_some_and(|bound| attr.user().eq_ignore_ascii_case(bound))
+        });
+        if !belong || tracks as u64 != first.total() {
+            return Err(Error::Database(
+                "the pages are not one whole list of this user's loved tracks",
+            ));
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM loved", [])?;
+        transaction.execute("DELETE FROM loved_pages", [])?;
+        {
+            let mut insert_page =
+                transaction.prepare("INSERT INTO loved_pages (page, body) VALUES (?1, ?2)")?;
+            let mut insert_track = transaction.prepare(
+                "INSERT INTO loved (page, position, loved_at, artist, artist_mbid, track,
+                     track_mbid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for page in pages {
+                let number = page.attr().page();
+                insert_page.execute(params![number, page.raw().body()])?;
+                for (position, loved) in page.tracks().iter().enumerate() {
+                    insert_track.execute(params![
+                        number,
+                        position,
+                        loved.loved_at(),
+                        loved.artist().name(),
+                        loved.artist().mbid(),
+                        loved.track().name(),
+                        loved.track().mbid(),
+                    ])?;
+                }
+            }
+        }
+        transaction.execute(
+            "INSERT INTO meta (key, value) VALUES ('loved_read_at', ?1)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [read_at.to_string()],
+        )?;
         transaction.commit()?;
         Ok(())
     }

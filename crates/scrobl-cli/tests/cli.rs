@@ -243,12 +243,13 @@ async fn a_sync_reports_its_windows_and_its_counts() {
     // The newest scrobble is at BASE + 200, half an hour before the clock.
     let now = BASE + 201 + SETTLE;
 
-    let (result, out, err, _) = sync_with(Dataset::distinct(20), &args, now).await;
+    let (result, out, err, _) = sync_with(Dataset::distinct(20).with_loved(3), &args, now).await;
 
     assert_eq!(result.unwrap(), 0);
     assert_eq!(
         out,
-        "20 scrobbles up to 2023-11-14T22:16:41Z, 20 of them new.\n"
+        "20 scrobbles up to 2023-11-14T22:16:41Z, 20 of them new.\n\
+         3 loved tracks.\n"
     );
     // Thirty days of listening, then everything before it, which is empty.
     assert_eq!(
@@ -334,4 +335,47 @@ async fn counts_that_differ_exit_3_and_say_why() {
     let mut lines = out.lines();
     assert!(lines.next().unwrap().starts_with("20 scrobbles up to "));
     assert!(lines.next().unwrap().starts_with("Last.fm reports 21. "));
+    // The loved tracks are read whatever the counts said.
+    assert_eq!(lines.next(), Some("0 loved tracks."));
+}
+
+#[tokio::test]
+async fn loved_tracks_that_cannot_be_read_fail_the_sync_and_keep_the_history() {
+    let scratch = Scratch::new();
+    let args = SyncArgs {
+        db: scratch.db(),
+        user: Some(USER.to_owned()),
+    };
+    // A track is loved between the first page of the list and the second.
+    let faults = Faults {
+        love_from_page: Some(2),
+        ..Faults::default()
+    };
+    let dataset = Dataset::distinct(20).with_loved(4).with_faults(faults);
+    let server = FakeLastfm::start(dataset).await;
+    let mut options = Options::default();
+    options.loved_page_size = 2;
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+
+    let result = sync_command(
+        &args,
+        &client(&server),
+        BASE + 10_000,
+        options,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    let error = result.unwrap_err();
+    assert_eq!(error.exit_code(), 1);
+    assert!(error.to_string().contains("loved tracks"), "{error}");
+    // The history was stored and reported before the list was asked for.
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .starts_with("20 scrobbles up to ")
+    );
+    let store = scrobl_cli::store::Store::open(scratch.db()).unwrap();
+    assert_eq!(store.scrobbles_before(BASE + 10_000).unwrap(), 20);
 }
