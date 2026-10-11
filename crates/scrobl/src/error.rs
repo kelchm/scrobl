@@ -106,7 +106,8 @@ impl ApiErrorCode {
     pub const INVALID_PARAMETERS: Self = Self(6);
     /// 7: the resource cannot give what was asked of it.
     pub const INVALID_RESOURCE: Self = Self(7);
-    /// 8: something failed that Last.fm cannot describe.
+    /// 8: something failed that Last.fm cannot describe. Usually transient:
+    /// the same read will probably succeed.
     pub const OPERATION_FAILED: Self = Self(8);
     /// 9: the session key is invalid. The user must authenticate again.
     pub const INVALID_SESSION_KEY: Self = Self(9);
@@ -233,19 +234,22 @@ impl Error {
 
     /// Whether repeating the same call is reasonable.
     ///
-    /// For a read: transient failures (API codes 11 and 16, HTTP 5xx,
+    /// For a read: transient failures (API codes 8, 11 and 16, HTTP 5xx,
     /// transport failures and timeouts) are [`Retry::Later`]; code 29 and
     /// HTTP 429 are [`Retry::AfterBackoff`]; code 9 is
     /// [`Retry::AfterReauthentication`]. Everything else is [`Retry::No`].
     ///
-    /// For a write the API code rules are the same. A transport failure
+    /// For a write the API code rules are the same but for code 8, which is
+    /// [`Retry::No`]: "operation failed" does not say what the service did
+    /// with the write. A transport failure
     /// that certainly sent nothing is [`Retry::Later`]. Anything whose
     /// [`delivery`](Self::delivery) is [`Delivery::Unknown`] is
     /// [`Retry::No`], and `track.updateNowPlaying` is always [`Retry::No`].
     ///
-    /// `auth.getSession` spends its token, so a timeout or a transport
-    /// failure after the request may have left is [`Retry::No`] for it too:
-    /// a repeat could only fail, and would hide what happened to the first.
+    /// `auth.getSession` spends its token, so a timeout, a transport
+    /// failure after the request may have left or code 8 is [`Retry::No`]
+    /// for it too: a repeat could only fail, and would hide what happened
+    /// to the first.
     pub fn retry(&self) -> Retry {
         let inner = &*self.inner;
         let write = inner.spec.is_some_and(|spec| spec.write());
@@ -263,12 +267,17 @@ impl Error {
             ErrorKind::Transport => inner.possibly_sent,
             _ => false,
         };
-        if possibly_received && inner.spec.is_some_and(|spec| spec.name() == GET_SESSION) {
+        let get_session = inner.spec.is_some_and(|spec| spec.name() == GET_SESSION);
+        if possibly_received && get_session {
             return Retry::No;
         }
         match inner.kind {
             ErrorKind::Api => match inner.api_code {
                 Some(ApiErrorCode::SERVICE_OFFLINE | ApiErrorCode::TEMPORARY_ERROR) => Retry::Later,
+                // Last.fm's own advice for 8 is to try again, and a long
+                // history read meets it often. It does not say what the
+                // service did, so a write or a spent token is not repeated.
+                Some(ApiErrorCode::OPERATION_FAILED) if !write && !get_session => Retry::Later,
                 Some(ApiErrorCode::RATE_LIMIT_EXCEEDED) => Retry::AfterBackoff,
                 Some(ApiErrorCode::INVALID_SESSION_KEY) => Retry::AfterReauthentication,
                 _ => Retry::No,

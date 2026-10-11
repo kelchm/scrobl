@@ -50,8 +50,16 @@ use Delivery::{NotSent, Rejected, Unknown};
 use Retry::{AfterBackoff, AfterReauthentication, Later, No};
 
 // Rules: the Scrobbling 2.0 guide (scrobbling.txt) for codes 9, 11 and 16,
-// docs_codes.md for 29 and HTTP 429, docs/design.md for the rest.
+// docs_codes.md for 8, 29 and HTTP 429, docs/design.md for the rest.
 const ROWS: &[Row] = &[
+    Row {
+        label: "api 8",
+        make: |s| api(s, 500, 8),
+        read: Later,
+        write: No,
+        now_playing: No,
+        delivery: Rejected,
+    },
     Row {
         label: "api 11",
         make: |s| api(s, 200, 11),
@@ -303,9 +311,11 @@ fn get_session_is_not_retried_once_it_may_have_been_received() {
     let mut refused = Vec::new();
     for row in ROWS {
         let error = (row.make)(spec);
+        // Code 8 does not say whether the token was spent.
         let possibly_received = match error.kind() {
             ErrorKind::Timeout => true,
             ErrorKind::Transport => row.delivery == Unknown,
+            ErrorKind::Api => error.api_code() == Some(ApiErrorCode::OPERATION_FAILED),
             _ => false,
         };
         if possibly_received {
@@ -319,7 +329,7 @@ fn get_session_is_not_retried_once_it_may_have_been_received() {
         let token = &crate::protocol::methods::AUTH_GET_TOKEN;
         assert_eq!((row.make)(token).retry(), row.read, "{}", row.label);
     }
-    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert_eq!(refused.len(), 3, "{refused:?}");
 }
 
 #[test]
