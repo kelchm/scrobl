@@ -379,7 +379,7 @@ Last, it reads the loved tracks, a thousand to a page, and replaces the file's c
 
 ### What it does not do yet
 
-- It never reads a period twice. A scrobble added to or removed from a period after it was read (an offline device that syncs days later, an edit on the website) shows as a difference in the counts and is not repaired. Equal counts do not prove equal rows, for the reasons under [What a completed scan does not prove](#what-a-completed-scan-does-not-prove).
+- It never reads a period twice. A scrobble added to or removed from a period after it was read (an offline device that syncs days later, an edit on the website) shows as a difference in the counts and is not repaired. The comparison is one count of everything before the cutoff, so a scrobble removed and another added, in one period or in two, cancel out and the sync ends with status 0. Equal counts do not prove equal rows, for that reason and for those under [What a completed scan does not prove](#what-a-completed-scan-does-not-prove).
 - It reads a public history only. A hidden one needs the signed read, which is unverified.
 - It keeps the loved tracks as they are now, not their history: a track that is unloved leaves the table at the next sync, and nothing records that it was ever there.
 - No server for agents, no export and no offline check of the file.

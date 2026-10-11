@@ -21,6 +21,14 @@ use scrobl::{ApiKey, Response};
 use scrobl_cli::Error;
 use scrobl_cli::store::Store;
 
+/// A database that belongs to [`USER`], as one must before it takes a
+/// window.
+fn bound(scratch: &Scratch) -> Store {
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user(USER).unwrap();
+    store
+}
+
 /// A finished scan of `window`, driven without a socket.
 fn scan(dataset: &Dataset, window: Window, page_size: u32) -> (ScanSummary, Vec<ScanPage>) {
     let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
@@ -221,7 +229,7 @@ fn the_gaps_are_what_no_window_covers_newest_first() {
 #[test]
 fn a_window_is_stored_whole() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     let dataset = Dataset::distinct(10);
     let (summary, pages) = scan(&dataset, Window::before(BASE + 1_000), 4);
 
@@ -259,7 +267,7 @@ fn a_window_is_stored_whole() {
 #[test]
 fn a_window_that_overlaps_a_stored_one_is_refused() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     let dataset = Dataset::distinct(10);
     let (summary, pages) = scan(&dataset, Window::new(BASE, BASE + 60).unwrap(), 4);
     store.commit_window(&summary, &pages, 0).unwrap();
@@ -294,7 +302,7 @@ fn a_window_that_overlaps_a_stored_one_is_refused() {
 #[test]
 fn pages_that_are_not_the_summarys_are_refused() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     let dataset = Dataset::distinct(10);
     let (summary, pages) = scan(&dataset, Window::before(BASE + 1_000), 4);
 
@@ -312,7 +320,7 @@ fn pages_that_are_not_the_summarys_are_refused() {
 #[test]
 fn a_window_without_an_upper_bound_is_refused() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     let (summary, pages) = scan(&Dataset::distinct(3), Window::since(BASE), 4);
 
     let message = database_error(store.commit_window(&summary, &pages, 0));
@@ -370,7 +378,7 @@ fn an_empty_database_that_another_program_marked_is_refused_and_left_alone() {
 #[test]
 fn pages_of_another_window_are_refused_even_when_the_counts_agree() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     let dataset = Dataset::distinct(10);
     // Two windows of five scrobbles in two pages each.
     let (summary, _) = scan(&dataset, Window::new(BASE, BASE + 51).unwrap(), 4);
@@ -412,7 +420,7 @@ fn pages_of_another_window_are_refused_even_when_the_counts_agree() {
 #[test]
 fn a_window_that_fails_part_way_leaves_nothing_behind() {
     let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
+    let mut store = bound(&scratch);
     // The write fails on the second page, after a window, a page and four
     // scrobbles have gone in.
     store
@@ -436,8 +444,8 @@ fn a_window_that_fails_part_way_leaves_nothing_behind() {
 #[test]
 fn two_syncs_on_one_file_cannot_store_a_period_twice() {
     let scratch = Scratch::new();
-    let mut first = Store::open(scratch.db()).unwrap();
-    let mut second = Store::open(scratch.db()).unwrap();
+    let mut first = bound(&scratch);
+    let mut second = bound(&scratch);
     // Both saw the same gap and read the same window.
     let (summary, pages) = scan(&Dataset::distinct(10), Window::before(BASE + 1_000), 4);
 
@@ -646,4 +654,31 @@ fn a_replacement_that_fails_part_way_keeps_the_list_before() {
     // Byte for byte: the new list has two pages as well.
     assert_eq!(bodies(&store), kept_bodies);
     assert_eq!(loved_read_at(&store).as_deref(), Some("100"));
+}
+
+#[test]
+fn a_window_is_stored_only_for_the_user_the_database_belongs_to() {
+    let dataset = Dataset::distinct(3);
+    let (summary, pages) = scan(&dataset, Window::before(BASE + 100), 200);
+
+    // No user yet: nothing says whose history this is.
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let message = database_error(store.commit_window(&summary, &pages, 0));
+    assert!(message.contains("belongs to"), "{message}");
+
+    // Someone else's.
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user("someone-else").unwrap();
+    database_error(store.commit_window(&summary, &pages, 0));
+    assert_eq!(count(&store, "windows"), 0);
+    assert_eq!(count(&store, "scrobbles"), 0);
+
+    // The same user in another case.
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user(&USER.to_uppercase()).unwrap();
+    store.commit_window(&summary, &pages, 0).unwrap();
+    assert_eq!(count(&store, "scrobbles"), 3);
 }

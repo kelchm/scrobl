@@ -654,3 +654,105 @@ async fn a_span_of_zero_still_ends() {
     let sizes: Vec<u64> = stored.iter().map(|window| window.scrobbles).collect();
     assert_eq!(sizes, [1, 1, 1, 0]);
 }
+
+#[tokio::test]
+async fn a_database_of_another_user_is_refused_before_anything_is_asked() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    store.bind_user("someone-else").unwrap();
+
+    let (server, result, _) = run(
+        &Dataset::distinct(3),
+        &mut store,
+        BASE + 100,
+        Options::default(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(Error::OtherUser)), "{result:?}");
+    assert_eq!(server.request_count(), 0);
+    assert_eq!(windows(&store), []);
+    assert_eq!(store.user().unwrap().as_deref(), Some("someone-else"));
+}
+
+#[tokio::test]
+async fn a_sync_ties_a_new_database_to_its_user() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+
+    let (_server, result, _) = run(
+        &Dataset::distinct(3),
+        &mut store,
+        BASE + 100,
+        Options::default(),
+    )
+    .await;
+
+    result.unwrap();
+    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
+}
+
+/// A database holding all of `dataset` before `cutoff`, and the question a
+/// sync asks to count it.
+async fn synced(dataset: &Dataset, store: &mut Store, cutoff: u64) -> Vec<(String, String)> {
+    let (server, result, _) = run(dataset, store, cutoff, Options::default()).await;
+    result.unwrap();
+    server.requests().last().unwrap().params()
+}
+
+#[tokio::test]
+async fn a_count_of_none_that_comes_with_a_scrobble_is_refused() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 100;
+    let dataset = Dataset::distinct(5);
+    let question = synced(&dataset, &mut store, cutoff).await;
+
+    // The answer to the count holds a scrobble and says there are none.
+    let (_, body) = respond_to(&dataset, &question);
+    let body = String::from_utf8(body)
+        .unwrap()
+        .replace(r#""total":"5""#, r#""total":"0""#)
+        .replace(r#""totalPages":"5""#, r#""totalPages":"0""#);
+    assert!(body.contains(r#""total":"0""#) && body.contains(r#""totalPages":"0""#));
+    let server = FakeLastfm::start(dataset)
+        .await
+        .script([Behaviour::status(200, body)]);
+    let result = sync(
+        &client(&server),
+        &mut store,
+        USER,
+        cutoff,
+        Options::default(),
+        |_| {},
+    )
+    .await;
+
+    let Err(Error::Service(message)) = result else {
+        panic!("expected a service error, got {result:?}");
+    };
+    assert!(message.contains("counted no scrobbles"), "{message}");
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_count_that_comes_with_a_scrobble_from_outside_the_period_is_refused() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 100;
+    synced(&Dataset::distinct(10), &mut store, cutoff).await;
+
+    // The service treats `to` as inclusive, and a scrobble sits exactly on
+    // the cutoff.
+    let dataset = Dataset::distinct(10).with_faults(Faults {
+        inclusive_to: true,
+        ..Faults::default()
+    });
+    let (server, result, _) = run(&dataset, &mut store, cutoff, Options::default()).await;
+
+    let Err(Error::Service(message)) = result else {
+        panic!("expected a service error, got {result:?}");
+    };
+    assert!(message.contains("outside the period"), "{message}");
+    assert_eq!(server.request_count(), 1);
+}

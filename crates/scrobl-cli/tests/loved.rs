@@ -441,3 +441,16 @@ async fn a_track_listed_twice_with_two_times_is_refused() {
     changed(result);
     assert!(tracks(&store).is_empty());
 }
+
+#[tokio::test]
+async fn the_loved_tracks_of_another_users_database_are_not_asked_for() {
+    let scratch = Scratch::new();
+    let mut other = Store::open(scratch.db()).unwrap();
+    other.bind_user("someone-else").unwrap();
+
+    let (server, result) = run(&Dataset::distinct(1).with_loved(3), &mut other, 2).await;
+
+    assert!(matches!(result, Err(Error::OtherUser)), "{result:?}");
+    assert_eq!(server.request_count(), 0);
+    assert!(tracks(&other).is_empty());
+}

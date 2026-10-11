@@ -105,7 +105,7 @@ The file holds every response exactly as Last.fm sent it (`pages`) and one row p
 
 Every sync ends by reading the tracks the user has loved and replacing the copy in the file (`loved`, with the responses in `loved_pages`). That list is what is loved now, each track with the time it was loved; a track that was unloved since the last sync is gone from it. If that read fails, the sync exits with status 1 and the history it stored is kept.
 
-Each sync compares the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ and nothing else failed. They differ when scrobbles were added to or removed from a period after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it.
+Each sync compares the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ and nothing else failed. They differ when the number of scrobbles in a period changed after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it. It is one count for the whole history, so equal counts are not proof: a scrobble removed and another added leave the count as it was, and the tool exits with status 0.
 
 ## Last.fm's terms
 

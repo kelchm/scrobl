@@ -14,8 +14,10 @@
 //!
 //! At the end the sync asks Last.fm how many scrobbles lie before the
 //! cutoff and puts that next to what the database holds. The two differ when
-//! scrobbles were added to or removed from a period after it was read. This
-//! version reports that; it does not read a period twice.
+//! the number of scrobbles in a period changed after it was read. This
+//! version reports that; it does not read a period twice. It is one count
+//! for the whole history, so a scrobble removed and another added, in the
+//! same period or in two, leave it as it was.
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
@@ -89,10 +91,12 @@ impl Report {
 }
 
 /// Makes `store` cover `user`'s history before `cutoff`, then compares the
-/// counts. `stored` is called after each window is committed.
+/// counts. `stored` is called after each window is committed. A new
+/// database is tied to `user` first.
 ///
 /// # Errors
 ///
+/// [`Error::OtherUser`] when the database holds another user's history;
 /// [`Error::Lastfm`] when a call fails after the client's retries or a page
 /// breaks a rule of the scan; [`Error::Service`] when an answer cannot be
 /// acted on; [`Error::Database`] and [`Error::Sqlite`] from the store. The
@@ -108,6 +112,7 @@ pub async fn sync(
     if cutoff == 0 {
         return Err(Error::Service("the cutoff is the epoch; check the clock"));
     }
+    store.bind_user(user)?;
     let mut added = 0;
     for (gap_from, gap_to) in store.gaps(cutoff)? {
         let mut to = gap_to;
@@ -167,11 +172,6 @@ async fn window_start(
     let Some(newest) = newest else {
         return Ok(gap_from.max(to - span));
     };
-    if newest < gap_from || newest >= to {
-        return Err(Error::Service(
-            "Last.fm returned a scrobble from outside the period asked for",
-        ));
-    }
     Ok(gap_from.max((newest + 1).saturating_sub(span)))
 }
 
@@ -179,17 +179,21 @@ async fn window_start(
 /// the newest.
 ///
 /// The count decides how a sync ends, so the answer has to be the answer to
-/// this question: the user, the page and the page size asked for.
+/// this question: the user, the page and the page size asked for, and
+/// nothing in it that contradicts the rest, such as a scrobble next to a
+/// count of none or one from outside the period. What is playing now is not
+/// a scrobble and is not counted.
 async fn probe(
     client: &Client,
     user: &str,
     from: u64,
     to: u64,
 ) -> Result<(u64, Option<u64>), Error> {
+    let window = window(from, to)?;
     let page = client
         .user(user)
         .recent_tracks()
-        .window(window(from, to)?)
+        .window(window)
         .limit(1)
         .send()
         .await?;
@@ -197,6 +201,20 @@ async fn probe(
     if !attr.user().eq_ignore_ascii_case(user) || attr.page() != 1 || attr.per_page() != 1 {
         return Err(Error::Service(
             "Last.fm answered a count with a page that was not the one asked for",
+        ));
+    }
+    let scrobbles = page.scrobbles();
+    if scrobbles
+        .iter()
+        .any(|scrobble| !window.contains(scrobble.timestamp()))
+    {
+        return Err(Error::Service(
+            "Last.fm returned a scrobble from outside the period asked for",
+        ));
+    }
+    if attr.total() == 0 && !scrobbles.is_empty() {
+        return Err(Error::Service(
+            "Last.fm counted no scrobbles in a period and returned one from it",
         ));
     }
     let newest = page
@@ -250,10 +268,13 @@ async fn read(
 /// can put the first page back as it was. Only a list that fits one page is
 /// read at a single moment.
 ///
+/// A new database is tied to `user` first.
+///
 /// # Errors
 ///
-/// [`Error::Lastfm`] when a call fails; [`Error::Service`] when a page is
-/// not the one asked for or the list changed while it was read;
+/// [`Error::OtherUser`] when the database holds another user's loved
+/// tracks; [`Error::Lastfm`] when a call fails; [`Error::Service`] when a
+/// page is not the one asked for or the list changed while it was read;
 /// [`Error::Database`] and [`Error::Sqlite`] from the store.
 pub async fn loved(
     client: &Client,
@@ -261,6 +282,7 @@ pub async fn loved(
     user: &str,
     page_size: u32,
 ) -> Result<u64, Error> {
+    store.bind_user(user)?;
     let mut pages: Vec<Response<LovedTracksPage>> = Vec::new();
     loop {
         let page = loved_page(client, user, page_size, pages.len() as u32 + 1).await?;
