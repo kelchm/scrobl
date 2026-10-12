@@ -234,11 +234,12 @@ async fn count(client: &Client, user: &str, from: u64, to: u64) -> Result<u64, E
 
 /// Reads `[from, to)` completely, as one scan.
 ///
-/// A scrobble that arrives in the span while it is read makes the pages
-/// disagree with each other, and the scan refuses them. That is no fault,
-/// least of all where the span reaches the present, so the span is read
-/// again, three times in all. Only a disturbance that shows is retried: a
-/// reading that passes every check is still not a picture of one moment.
+/// A scrobble that arrives in the span while it is read can make the pages
+/// disagree with each other, and then the scan refuses them. That is no
+/// fault, least of all where the span reaches the present, so the span is
+/// read again, three times in all. Only a disturbance that shows is
+/// retried: a reading that passes every check is still not a picture of one
+/// moment.
 async fn read(
     client: &Client,
     user: &str,
