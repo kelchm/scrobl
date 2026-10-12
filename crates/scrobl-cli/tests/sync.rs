@@ -388,11 +388,16 @@ async fn a_second_that_holds_more_than_a_scan_should_is_read_as_one_scan() {
     options.chunk = 3;
     options.page_size = 2;
 
-    let (_server, result, stored) = run(&dataset, &mut store, now, options).await;
+    // A second cannot be halved, and a sync that tried would never end.
+    let (_server, result, stored) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run(&dataset, &mut store, now, options),
+    )
+    .await
+    .expect("the sync ends");
 
     assert!(result.unwrap().matches());
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
-    // A second cannot be halved.
     assert!(
         stored.contains(&Stored {
             from: BASE + 50,

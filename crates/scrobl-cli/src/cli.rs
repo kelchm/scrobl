@@ -219,8 +219,8 @@ async fn try_run(
 /// # Errors
 ///
 /// [`Error::Usage`] when no user was given and the database has none yet,
-/// and any error of [`Store::open`], [`Store::bind_user`], [`sync::sync`]
-/// and [`sync::loved`]. The history stored before an error stays stored.
+/// and any error of [`Store::open`], [`sync::sync`] and [`sync::loved`].
+/// The history stored before an error stays stored.
 pub async fn sync_command(
     args: &SyncArgs,
     client: &Client,
@@ -239,7 +239,6 @@ pub async fn sync_command(
             ));
         }
     };
-    store.bind_user(&user)?;
 
     let mut options = options;
     options.full |= args.full;

@@ -31,6 +31,17 @@ fn bound(scratch: &Scratch) -> Store {
 
 /// A finished scan of `window`, driven without a socket.
 fn scan(dataset: &Dataset, window: Window, page_size: u32) -> (ScanSummary, Vec<ScanPage>) {
+    scan_by(dataset, window, page_size, "Synthetic Artist")
+}
+
+/// A finished scan of `window` of a history in which every play is by
+/// `artist`.
+fn scan_by(
+    dataset: &Dataset,
+    window: Window,
+    page_size: u32,
+    artist: &str,
+) -> (ScanSummary, Vec<ScanPage>) {
     let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
     let mut scan = RecentTracks::new(USER)
         .window(window)
@@ -41,6 +52,9 @@ fn scan(dataset: &Dataset, window: Window, page_size: u32) -> (ScanSummary, Vec<
     while let Some(request) = scan.next_request() {
         let http = protocol::prepare(&credentials, &request).unwrap();
         let (status, body) = support::respond(dataset, &http);
+        let body = String::from_utf8(body)
+            .unwrap()
+            .replace("Synthetic Artist", artist);
         let raw = protocol::decode(&request, HttpResponse::new(status, body)).unwrap();
         pages.push(scan.accept(raw).unwrap());
     }
@@ -479,6 +493,57 @@ fn a_scrobble_that_changed_only_in_what_last_fm_says_about_it_is_the_same_one() 
         mbid.as_deref(),
         Some("11111111-1111-4111-8111-111111111111")
     );
+}
+
+#[test]
+fn a_scrobble_is_told_apart_by_its_time_its_artist_and_its_track() {
+    let window = Window::before(BASE + 1_000);
+    // One play of one song, and then a reading that has in its place a play
+    // that differs from it in one thing only.
+    let song = |time: u64| Dataset::from_timestamps(vec![time]).identical_rows();
+    for (time, artist, track) in [
+        (BASE + 20, "Artist", "Same Song"),
+        (BASE + 10, "Other Artist", "Same Song"),
+        (BASE + 10, "Artist", "Other Song"),
+    ] {
+        let scratch = Scratch::new();
+        let mut store = bound(&scratch);
+        let (summary, pages) = scan_by(&song(BASE + 10), window, 4, "Artist");
+        store.replace(&summary, &pages, 100).unwrap();
+
+        let mut other = song(time);
+        other.entries[0].name = track.to_owned();
+        let (summary, pages) = scan_by(&other, window, 4, artist);
+        let change = store.replace(&summary, &pages, 200).unwrap();
+
+        // Another scrobble: the one that was there went, and this one came.
+        assert_eq!(
+            change,
+            Change {
+                added: 1,
+                removed: 1
+            },
+            "{time} {artist} {track}"
+        );
+        let row = |table: &str| -> (u64, String, String) {
+            store
+                .connection()
+                .query_row(
+                    &format!("SELECT timestamp, artist, track FROM {table}"),
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            row("removed"),
+            (BASE + 10, "Artist".to_owned(), "Same Song".to_owned())
+        );
+        assert_eq!(
+            row("scrobbles"),
+            (time, artist.to_owned(), track.to_owned())
+        );
+    }
 }
 
 #[test]

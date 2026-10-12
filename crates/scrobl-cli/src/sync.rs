@@ -3,18 +3,19 @@
 //! A sync works on *spans* of time, `[from, to)`, and has one way of
 //! dealing with any of them: ask Last.fm how many scrobbles the span holds,
 //! and compare that with the database. If the two agree, the span is left
-//! alone. If they differ and the span holds more than [`Options::chunk`]
-//! scrobbles, it is halved and each half is dealt with the same way.
-//! Otherwise the span is read, as one validated scan, and the database's
-//! copy of it is replaced by what the scan read, in one transaction.
+//! alone. If they differ and Last.fm counts more than [`Options::chunk`]
+//! scrobbles in the span, it is halved and each half is dealt with the same
+//! way. Otherwise the span is read, as one validated scan, and the
+//! database's copy of it is replaced by what the scan read, in one
+//! transaction.
 //!
 //! That one rule is the first import, the daily run and the repair of a
 //! change to old history. A new database agrees with Last.fm only where the
 //! history is empty, so all of it is read. A sync that stops, for any
-//! reason, has lost at most the span it was reading, and the next sync finds
-//! that what was stored agrees and reads the rest. A scrobble that turns up
-//! in a year long past changes that year's count, and the halving leads to
-//! it.
+//! reason, has lost at most the span it was reading, and the next sync
+//! passes over what was stored, wherever it agrees, and reads the rest. A
+//! scrobble that turns up in a year long past changes that year's count,
+//! and the halving leads to it.
 //!
 //! Equal counts do not prove equal rows, and the newest history is where
 //! that matters: a scrobble is dated when its track started and sent when it
@@ -23,9 +24,11 @@
 //! and [`Options::full`] reads the whole history that way.
 //!
 //! Nothing a sync stores is final and nothing records how far it got, so a
-//! clock that is wrong or a second sync on the same file can do no lasting
-//! harm: whatever one sync left wrong, the next one finds by its count or
-//! reads again because it is recent.
+//! clock that is wrong or a second sync on the same file cannot put anything
+//! false on record: whatever one sync left wrong, the next one finds by its
+//! count or reads again because it is recent. What neither shows, a change
+//! that leaves a count as it was in history that is not recent, waits for
+//! [`Options::full`].
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
@@ -49,8 +52,10 @@ const ATTEMPTS: u32 = 3;
 pub struct Options {
     /// How much of the newest history every sync reads again, in seconds.
     pub recent: u64,
-    /// The most scrobbles read as one scan. A span that holds more is
-    /// halved, unless it is a single second.
+    /// How many scrobbles are read as one scan. A span in which Last.fm
+    /// counts more is halved, unless it is a single second. A scan can
+    /// still hold a few more, when scrobbles arrive between the count and
+    /// the scan.
     pub chunk: u64,
     /// The rows asked for on every page of a scan, 1 to 200.
     pub page_size: u32,
@@ -61,10 +66,10 @@ pub struct Options {
 }
 
 impl Default for Options {
-    /// The last fourteen days read every time, scans of at most 5000
-    /// scrobbles, pages of 200 scrobbles, the most the service gives, pages
-    /// of 1000 loved tracks, and the rest of the history read only where the
-    /// counts differ.
+    /// The last fourteen days read every time, scans of 5000 scrobbles by
+    /// Last.fm's count, pages of 200 scrobbles, the most the service gives,
+    /// pages of 1000 loved tracks, and the rest of the history read only
+    /// where the counts differ.
     ///
     /// Fourteen days because several clients report that Last.fm ignores a
     /// scrobble dated more than about two weeks back. Last.fm documents no

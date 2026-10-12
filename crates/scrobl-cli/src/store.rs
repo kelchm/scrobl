@@ -7,7 +7,7 @@
 //!   are two rows.
 //! - `removed`: scrobbles the file held that a later reading of the same
 //!   time did not, each with when that was noticed. The file follows
-//!   Last.fm, and nothing it once held is thrown away.
+//!   Last.fm, and no scrobble it once held is thrown away.
 //! - `loved`: the tracks the user has loved, as they stood at the last
 //!   sync, in the order Last.fm lists them.
 //! - `meta`: whose history this is, and when it and the loved tracks were
@@ -221,7 +221,9 @@ impl Store {
     /// not which scrobble it is. A scrobble only the file had is copied to
     /// `removed` with `now` as the time it was noticed. Then the span's rows
     /// are replaced by the reading's, oldest first, so that
-    /// `ORDER BY timestamp, id` is the order of listening.
+    /// `ORDER BY timestamp, id` is the order of listening. A scrobble both
+    /// have is kept as the reading has it: what Last.fm said about it before
+    /// is not.
     ///
     /// # Errors
     ///
