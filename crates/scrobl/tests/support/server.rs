@@ -555,8 +555,9 @@ async fn serve_one(
             reply(stream, 200, &[], &body, keep_alive).await.is_ok()
         }
         Behaviour::Held { mut until, body } => {
-            let _ = until.wait_for(|open| *open).await;
-            reply(stream, 200, &[], &body, keep_alive).await.is_ok()
+            // A sender that is gone will never open the gate: hang up.
+            until.wait_for(|open| *open).await.is_ok()
+                && reply(stream, 200, &[], &body, keep_alive).await.is_ok()
         }
         Behaviour::StallBeforeResponse => std::future::pending().await,
         Behaviour::StallMidBody => {
