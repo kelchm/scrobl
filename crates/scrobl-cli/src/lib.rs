@@ -6,9 +6,9 @@
 //! The tool is the binary. This library is the same code, split so that it
 //! can be tested without a terminal:
 //!
-//! - [`store`] is the database: the exact pages Last.fm sent, and the
-//!   scrobbles derived from them.
-//! - [`sync`] reads the history that the database does not hold yet.
+//! - [`store`] is the database: one row per scrobble, each with the row as
+//!   Last.fm sent it.
+//! - [`sync`] makes the database agree with the history at Last.fm.
 //! - [`cli`] is the command line around the two.
 //!
 //! It reads through a [`scrobl::Client`], which cannot change an account.

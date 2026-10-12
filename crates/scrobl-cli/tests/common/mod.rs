@@ -48,6 +48,39 @@ pub fn client(server: &FakeLastfm) -> Client {
         .unwrap()
 }
 
+/// A history with a scrobble at each of `times`, each named after its time.
+/// A dataset made from fewer or more times names its rows afresh, and to a
+/// sync a scrobble with another name is another scrobble; these keep theirs
+/// when others come and go.
+pub fn named(times: impl IntoIterator<Item = u64>) -> Dataset {
+    let mut dataset = Dataset::from_timestamps(times.into_iter().collect());
+    for entry in &mut dataset.entries {
+        entry.name = format!("At {}", entry.ts);
+    }
+    dataset
+}
+
+/// What the fake is asked for one page of the history in `[from, to)`, to
+/// work out an answer a test wants to script. A `from` of 0 is no lower
+/// bound, as a sync sends it.
+pub fn question(from: u64, to: u64, limit: u32, page: u32) -> Vec<(String, String)> {
+    let mut question = vec![
+        ("method", "user.getRecentTracks".to_owned()),
+        ("user", USER.to_owned()),
+        ("api_key", "k".to_owned()),
+        ("limit", limit.to_string()),
+        ("page", page.to_string()),
+        ("to", to.to_string()),
+    ];
+    if from > 0 {
+        question.push(("from", from.to_string()));
+    }
+    question
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect()
+}
+
 /// A directory that is removed when the test ends.
 pub struct Scratch(PathBuf);
 
