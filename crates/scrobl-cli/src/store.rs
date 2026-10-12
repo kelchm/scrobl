@@ -15,10 +15,20 @@
 //! scan that finished, so the file holds whole windows or nothing of them.
 //! Windows never overlap.
 //!
+//! A window is *sealed* or it is not. A sealed window is final: it is read
+//! once and never replaced. The windows that are not sealed are the newest
+//! ones, the *tail*, where scrobbles are still arriving. Every sync reads
+//! the tail again and replaces it, in one transaction, so the file holds
+//! the tail as it was read before or as it was read now. When the new
+//! reading has lost a scrobble the old one had, the old windows and their
+//! pages are kept in `superseded_windows` and `superseded_pages`: the
+//! scrobbles table follows Last.fm, and nothing it once said is thrown away.
+//!
 //! The tracks the user has loved are kept beside the history, as they stood
 //! at the last sync: `loved_pages` holds the responses and `loved` the rows
 //! decoded from them. Each read replaces the one before.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -34,7 +44,9 @@ const APPLICATION_ID: i64 = 0x7363_626c;
 
 /// The layout below: `PRAGMA user_version`. Version 1 had no tables for the
 /// loved tracks and, in its first form, a `loved` column on `scrobbles`.
-const SCHEMA_VERSION: i64 = 2;
+/// Version 2 had no windows that were not sealed, and so no column to say
+/// which they are and nowhere to keep one that was replaced.
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -50,6 +62,7 @@ CREATE TABLE windows (
     pages     INTEGER NOT NULL,
     page_size INTEGER NOT NULL,
     read_at   INTEGER NOT NULL,
+    sealed    INTEGER NOT NULL DEFAULT 1 CHECK (sealed IN (0, 1)),
     CHECK (from_ts >= 0 AND from_ts < to_ts)
 ) STRICT;
 
@@ -98,6 +111,43 @@ CREATE TABLE loved (
 ) STRICT;
 ";
 
+/// Where a window of the tail goes when a later reading has lost a scrobble
+/// it had, which version 3 added. The pages are the record, as they are for
+/// a window in use.
+const SUPERSEDED_SCHEMA: &str = "
+CREATE TABLE superseded_windows (
+    id            INTEGER PRIMARY KEY,
+    from_ts       INTEGER NOT NULL,
+    to_ts         INTEGER NOT NULL,
+    total         INTEGER NOT NULL,
+    pages         INTEGER NOT NULL,
+    page_size     INTEGER NOT NULL,
+    read_at       INTEGER NOT NULL,
+    superseded_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE superseded_pages (
+    window_id INTEGER NOT NULL REFERENCES superseded_windows (id),
+    page      INTEGER NOT NULL,
+    body      BLOB NOT NULL,
+    PRIMARY KEY (window_id, page)
+) STRICT;
+";
+
+/// Brings a version 2 file to version 3, in one transaction: every window
+/// it holds was read once and is sealed.
+fn upgrade_from_2(connection: &mut Connection) -> Result<(), Error> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(
+        "ALTER TABLE windows
+             ADD COLUMN sealed INTEGER NOT NULL DEFAULT 1 CHECK (sealed IN (0, 1))",
+    )?;
+    transaction.execute_batch(SUPERSEDED_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 3)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 /// Brings a version 1 file to version 2, in one transaction: the tables of
 /// the loved tracks are added, and the `loved` column, which the first
 /// version 1 files have on `scrobbles`, is dropped. What it held is still in
@@ -113,8 +163,118 @@ fn upgrade_from_1(connection: &mut Connection) -> Result<(), Error> {
         transaction.execute_batch("ALTER TABLE scrobbles DROP COLUMN loved")?;
     }
     transaction.execute_batch(LOVED_SCHEMA)?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.pragma_update(None, "user_version", 2)?;
     transaction.commit()?;
+    Ok(())
+}
+
+/// The windows that are not sealed: the newest part of the history, which
+/// the next sync reads again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tail {
+    /// The windows, as the database numbers them.
+    ids: Vec<i64>,
+    /// The inclusive lower bound of the oldest.
+    pub from: u64,
+    /// The exclusive upper bound of the newest.
+    pub to: u64,
+}
+
+/// One window of a new reading of the tail.
+#[derive(Debug, Clone, Copy)]
+pub struct TailWindow<'a> {
+    /// What the scan returned when it finished.
+    pub summary: &'a ScanSummary,
+    /// The pages that summary came with.
+    pub pages: &'a [ScanPage],
+    /// Whether the window is final from now on.
+    pub sealed: bool,
+}
+
+/// How a new reading of the tail differs from the one it replaced, over the
+/// time both cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TailChange {
+    /// Scrobbles the old reading had and the new one has not. When there
+    /// are any, the old windows were kept as superseded.
+    pub lost: u64,
+    /// Scrobbles the new reading has and the old one had not: they arrived
+    /// after their own time.
+    pub gained: u64,
+}
+
+/// What two scrobbles must share to be the same one in two readings: the
+/// time, the artist and the track. The ids and the album are what Last.fm
+/// says about a scrobble and may fill in or change while it stays the same
+/// scrobble.
+type Row = (u64, String, String);
+
+/// Writes one checked window inside `transaction`: the window, its pages
+/// and its scrobbles. Refuses one that overlaps a window already there.
+fn insert_window(
+    transaction: &rusqlite::Transaction<'_>,
+    summary: &ScanSummary,
+    pages: &[ScanPage],
+    sealed: bool,
+    read_at: u64,
+) -> Result<(), Error> {
+    let window = summary.window();
+    let from = window.from().unwrap_or(0);
+    let Some(to) = window.to() else {
+        return Err(Error::Database(
+            "a window without an upper bound cannot be stored",
+        ));
+    };
+    let page_size = pages.first().map_or(0, |page| page.attr().per_page());
+    let overlaps: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM windows WHERE from_ts < ?2 AND to_ts > ?1)",
+        params![from, to],
+        |row| row.get(0),
+    )?;
+    if overlaps {
+        return Err(Error::Database(
+            "the window overlaps one already stored; is another sync running?",
+        ));
+    }
+
+    transaction.execute(
+        "INSERT INTO windows (from_ts, to_ts, total, pages, page_size, read_at, sealed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            from,
+            to,
+            summary.total(),
+            summary.pages(),
+            page_size,
+            read_at,
+            sealed
+        ],
+    )?;
+    let window_id = transaction.last_insert_rowid();
+    let mut insert_page =
+        transaction.prepare("INSERT INTO pages (window_id, page, body) VALUES (?1, ?2, ?3)")?;
+    let mut insert_scrobble = transaction.prepare(
+        "INSERT INTO scrobbles (window_id, page, position, timestamp, artist,
+             artist_mbid, track, track_mbid, album, album_mbid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
+    for page in pages {
+        insert_page.execute(params![window_id, page.number(), page.raw().body()])?;
+        for (position, scrobble) in page.scrobbles().iter().enumerate() {
+            insert_scrobble.execute(params![
+                window_id,
+                page.number(),
+                position,
+                scrobble.timestamp(),
+                scrobble.artist().name(),
+                scrobble.artist().mbid(),
+                scrobble.track().name(),
+                scrobble.track().mbid(),
+                scrobble.album().title(),
+                scrobble.album().mbid(),
+            ])?;
+        }
+    }
     Ok(())
 }
 
@@ -126,7 +286,7 @@ pub struct Store {
 
 impl Store {
     /// Opens the database at `path`, creating it if the file is missing or
-    /// empty, and bringing a file of the previous layout up to this one.
+    /// empty, and bringing a file of an earlier layout up to this one.
     ///
     /// # Errors
     ///
@@ -163,6 +323,7 @@ impl Store {
             let transaction = connection.transaction()?;
             transaction.execute_batch(SCHEMA)?;
             transaction.execute_batch(LOVED_SCHEMA)?;
+            transaction.execute_batch(SUPERSEDED_SCHEMA)?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -173,12 +334,18 @@ impl Store {
                 "the file is a database, but not one this tool made",
             ));
         }
-        if version == 1 {
-            upgrade_from_1(&mut connection)?;
-        } else if version != SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&version) {
             return Err(Error::Database(
                 "the database was written by another version of this tool",
             ));
+        }
+        // One step at a time, each in a transaction of its own, so a file
+        // is always at a whole version.
+        if version == 1 {
+            upgrade_from_1(&mut connection)?;
+        }
+        if version <= 2 {
+            upgrade_from_2(&mut connection)?;
         }
         Ok(Self { connection })
     }
@@ -216,8 +383,9 @@ impl Store {
         }
     }
 
-    /// The spans of `[0, cutoff)` that no window covers, newest first, each
-    /// as `(from, to)` with `from` inclusive and `to` exclusive.
+    /// The spans of `[0, cutoff)` that no sealed window covers, newest
+    /// first, each as `(from, to)` with `from` inclusive and `to` exclusive.
+    /// The tail does not count: it is read again whatever it covers.
     ///
     /// # Errors
     ///
@@ -225,7 +393,7 @@ impl Store {
     pub fn gaps(&self, cutoff: u64) -> Result<Vec<(u64, u64)>, Error> {
         let mut statement = self
             .connection
-            .prepare("SELECT from_ts, to_ts FROM windows ORDER BY from_ts")?;
+            .prepare("SELECT from_ts, to_ts FROM windows WHERE sealed = 1 ORDER BY from_ts")?;
         let windows = statement.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get(1)?)))?;
 
         let mut gaps = Vec::new();
@@ -269,13 +437,24 @@ impl Store {
         pages: &[ScanPage],
         read_at: u64,
     ) -> Result<(), Error> {
+        self.check_window(summary, pages)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        insert_window(&transaction, summary, pages, true, read_at)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Whether `pages` are the pages `summary` describes, of a scan of the
+    /// user the database belongs to, with an upper bound.
+    fn check_window(&self, summary: &ScanSummary, pages: &[ScanPage]) -> Result<(), Error> {
         let window = summary.window();
-        let from = window.from().unwrap_or(0);
-        let Some(to) = window.to() else {
+        if window.to().is_none() {
             return Err(Error::Database(
                 "a window without an upper bound cannot be stored",
             ));
-        };
+        }
         let page_size = pages.first().map_or(0, |page| page.attr().per_page());
         let scrobbles: usize = pages.iter().map(|page| page.scrobbles().len()).sum();
         let belong = pages.iter().zip(1..).all(|(page, number)| {
@@ -304,62 +483,207 @@ impl Store {
                 "the scan is not of the user the database belongs to",
             ));
         }
+        Ok(())
+    }
+
+    /// The windows that are not sealed, if there are any.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`].
+    pub fn tail(&self) -> Result<Option<Tail>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, from_ts, to_ts FROM windows WHERE sealed = 0 ORDER BY from_ts")?;
+        let windows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<(i64, u64, u64)>, _>>()?;
+        let (Some(first), Some(last)) = (windows.first(), windows.last()) else {
+            return Ok(None);
+        };
+        Ok(Some(Tail {
+            ids: windows.iter().map(|(id, ..)| *id).collect(),
+            from: first.1,
+            to: last.2,
+        }))
+    }
+
+    /// Where the stored history ends: the upper bound of the newest window,
+    /// sealed or not, or 0 when there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`].
+    pub fn covered_to(&self) -> Result<u64, Error> {
+        Ok(self
+            .connection
+            .query_row("SELECT coalesce(max(to_ts), 0) FROM windows", [], |row| {
+                row.get(0)
+            })?)
+    }
+
+    /// Where the sealed history ends: the upper bound of the newest sealed
+    /// window, or 0 when there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`].
+    pub fn sealed_to(&self) -> Result<u64, Error> {
+        Ok(self.connection.query_row(
+            "SELECT coalesce(max(to_ts), 0) FROM windows WHERE sealed = 1",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Replaces the tail with a new reading of it, in one transaction.
+    ///
+    /// `was` is the tail as [`tail`](Self::tail) gave it before the reading
+    /// began, or `None` if there was none. `windows` are the new reading,
+    /// in any order: they must lie end to end, start where the old tail
+    /// started and reach at least as far, and the sealed ones must come
+    /// before the others. Each is checked as
+    /// [`commit_window`](Self::commit_window) checks one.
+    ///
+    /// The two readings are compared over the time the old one covered, by
+    /// the time, artist and track of each row, counting rows that share all
+    /// three. A
+    /// scrobble the old reading had and the new one has not is *lost*, and
+    /// when any is, the old windows and their pages are moved to
+    /// `superseded_windows` and `superseded_pages` instead of being dropped.
+    /// A scrobble that only the new reading has arrived late, and nothing
+    /// needs keeping for it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Database`] when the tail in the file is not the one `was`
+    /// describes (another sync replaced it), when `windows` do not fit as
+    /// said above, or when one overlaps a sealed window. Nothing is written
+    /// in any of those cases: the tail stays as it was.
+    pub fn replace_tail(
+        &mut self,
+        was: Option<&Tail>,
+        windows: &[TailWindow<'_>],
+        read_at: u64,
+    ) -> Result<TailChange, Error> {
+        for window in windows {
+            self.check_window(window.summary, window.pages)?;
+        }
+        let mut windows = windows.to_vec();
+        windows.sort_by_key(|window| window.summary.window().from().unwrap_or(0));
+        let bounds = |window: &TailWindow<'_>| {
+            let span = window.summary.window();
+            (span.from().unwrap_or(0), span.to().unwrap_or(u64::MAX))
+        };
+        let joined = windows
+            .iter()
+            .zip(windows.iter().skip(1))
+            .all(|(older, newer)| {
+                bounds(older).1 == bounds(newer).0 && older.sealed >= newer.sealed
+            });
+        let covers = match (was, windows.first(), windows.last()) {
+            (None, ..) => true,
+            (Some(was), Some(first), Some(last)) => {
+                bounds(first).0 == was.from && bounds(last).1 >= was.to
+            }
+            (Some(_), ..) => false,
+        };
+        if !joined || !covers {
+            return Err(Error::Database(
+                "the new reading of the recent history does not cover the one it replaces",
+            ));
+        }
 
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let overlaps: bool = transaction.query_row(
-            "SELECT EXISTS (SELECT 1 FROM windows WHERE from_ts < ?2 AND to_ts > ?1)",
-            params![from, to],
-            |row| row.get(0),
-        )?;
-        if overlaps {
+        let now: Vec<i64> = transaction
+            .prepare("SELECT id FROM windows WHERE sealed = 0 ORDER BY from_ts")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        if now != was.map_or(&[][..], |was| &was.ids) {
             return Err(Error::Database(
-                "the window overlaps one already stored; is another sync running?",
+                "the recent history in the file changed while it was read; is another sync \
+                 running?",
             ));
         }
 
-        transaction.execute(
-            "INSERT INTO windows (from_ts, to_ts, total, pages, page_size, read_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                from,
-                to,
-                summary.total(),
-                summary.pages(),
-                page_size,
-                read_at
-            ],
-        )?;
-        let window_id = transaction.last_insert_rowid();
-        {
-            let mut insert_page = transaction
-                .prepare("INSERT INTO pages (window_id, page, body) VALUES (?1, ?2, ?3)")?;
-            let mut insert_scrobble = transaction.prepare(
-                "INSERT INTO scrobbles (window_id, page, position, timestamp, artist,
-                     artist_mbid, track, track_mbid, album, album_mbid)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            )?;
-            for page in pages {
-                insert_page.execute(params![window_id, page.number(), page.raw().body()])?;
-                for (position, scrobble) in page.scrobbles().iter().enumerate() {
-                    insert_scrobble.execute(params![
-                        window_id,
-                        page.number(),
-                        position,
-                        scrobble.timestamp(),
-                        scrobble.artist().name(),
-                        scrobble.artist().mbid(),
-                        scrobble.track().name(),
-                        scrobble.track().mbid(),
-                        scrobble.album().title(),
-                        scrobble.album().mbid(),
-                    ])?;
+        // What the old reading held, each row counted, less what the new
+        // one holds for the same time.
+        let mut change = TailChange::default();
+        if let Some(was) = was {
+            let mut counts: HashMap<Row, i64> = HashMap::new();
+            {
+                let mut statement = transaction.prepare(
+                    "SELECT timestamp, artist, track FROM scrobbles
+                     WHERE window_id IN (SELECT id FROM windows WHERE sealed = 0)",
+                )?;
+                let rows =
+                    statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                for row in rows {
+                    *counts.entry(row?).or_default() += 1;
+                }
+            }
+            for scrobble in windows
+                .iter()
+                .flat_map(|window| window.pages)
+                .flat_map(|page| page.scrobbles())
+                .filter(|scrobble| scrobble.timestamp() < was.to)
+            {
+                let row = (
+                    scrobble.timestamp(),
+                    scrobble.artist().name().to_owned(),
+                    scrobble.track().name().to_owned(),
+                );
+                *counts.entry(row).or_default() -= 1;
+            }
+            for count in counts.into_values() {
+                if count > 0 {
+                    change.lost += count.unsigned_abs();
+                } else {
+                    change.gained += count.unsigned_abs();
                 }
             }
         }
+
+        if change.lost > 0 {
+            // Numbered afresh: a window's number is used again once the
+            // window is gone.
+            for id in &now {
+                transaction.execute(
+                    "INSERT INTO superseded_windows
+                         (from_ts, to_ts, total, pages, page_size, read_at, superseded_at)
+                     SELECT from_ts, to_ts, total, pages, page_size, read_at, ?2
+                     FROM windows WHERE id = ?1",
+                    params![id, read_at],
+                )?;
+                transaction.execute(
+                    "INSERT INTO superseded_pages (window_id, page, body)
+                     SELECT ?2, page, body FROM pages WHERE window_id = ?1",
+                    params![id, transaction.last_insert_rowid()],
+                )?;
+            }
+        }
+        transaction.execute(
+            "DELETE FROM scrobbles WHERE window_id IN (SELECT id FROM windows WHERE sealed = 0)",
+            [],
+        )?;
+        transaction.execute(
+            "DELETE FROM pages WHERE window_id IN (SELECT id FROM windows WHERE sealed = 0)",
+            [],
+        )?;
+        transaction.execute("DELETE FROM windows WHERE sealed = 0", [])?;
+        for window in &windows {
+            insert_window(
+                &transaction,
+                window.summary,
+                window.pages,
+                window.sealed,
+                read_at,
+            )?;
+        }
         transaction.commit()?;
-        Ok(())
+        Ok(change)
     }
 
     /// Replaces the loved tracks with `pages`, the whole list as one read

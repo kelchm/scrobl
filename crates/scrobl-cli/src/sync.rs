@@ -1,24 +1,34 @@
-//! Reading the history the database does not hold yet.
+//! Reading the history the database does not hold yet, and reading the
+//! newest part of it again.
 //!
-//! A sync has a *cutoff*, fixed when it starts, and makes the database cover
-//! `[0, cutoff)`. The cutoff has to be in the past by Last.fm's clock as
-//! well as this machine's, which is what [`server_time`] is for. It asks the [`Store`] which spans are not covered and
-//! reads each one from its newest end backwards, a window at a time. Every
-//! window is one validated scan, stored in one transaction once the scan
-//! has finished. A sync that stops, for any reason, has lost at most the
-//! window it was reading, and the next sync carries on from there.
+//! A sync has a *cutoff*, fixed when it starts: the present, by Last.fm's
+//! clock as well as this machine's, which is what [`server_time`] is for.
+//! It makes the database cover `[0, cutoff)`.
 //!
-//! Windows are sized by time, [`Options::span`] at most, and placed by where
-//! the scrobbles are: before each one the sync asks Last.fm for the newest
-//! scrobble left in the span, so years of silence cost one request, not one
-//! per month.
+//! The history up to [`Options::settle`] before the cutoff is *sealed*: it
+//! is read once, a window at a time from its newest end backwards, each
+//! window one validated scan stored in one transaction. A sync that stops,
+//! for any reason, has lost at most the window it was reading, and the next
+//! sync carries on from there. Windows are sized by time,
+//! [`Options::span`] at most, and placed by where the scrobbles are: before
+//! each one the sync asks Last.fm for the newest scrobble left in the span,
+//! so years of silence cost one request, not one per month.
+//!
+//! The history newer than that is the *tail*. A scrobble is dated when its
+//! track started and sent when it ended, or days later from a device that
+//! was offline, so the tail is still filling in. Every sync reads all of it
+//! again and replaces the copy in the database in one transaction: the part
+//! that has grown old enough is sealed, after this one more reading, and
+//! the rest stays the tail. The sealed edge moves a whole UTC day at a
+//! time, so that a sync every few minutes does not leave a window behind
+//! each time.
 //!
 //! At the end the sync asks Last.fm how many scrobbles lie before the
-//! cutoff and puts that next to what the database holds. The two differ when
-//! the number of scrobbles in a period changed after it was read. This
-//! version reports that; it does not read a period twice. It is one count
-//! for the whole history, so a scrobble removed and another added, in the
-//! same period or in two, leave it as it was.
+//! sealed edge and puts that next to what the database holds. The two differ
+//! when the number of scrobbles in a period changed after it was sealed.
+//! This version reports that; it does not read a sealed period twice. It is
+//! one count for the whole sealed history, so a scrobble removed and another
+//! added, in the same period or in two, leave it as it was.
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
@@ -27,11 +37,16 @@ use std::collections::HashSet;
 
 use scrobl::history::{ScanPage, ScanSummary, Window};
 use scrobl::model::LovedTracksPage;
-use scrobl::{Client, Response};
+use scrobl::{Client, ErrorKind, Response};
 
 use crate::Error;
-use crate::store::Store;
+use crate::store::{Store, Tail, TailChange, TailWindow};
 use crate::time;
+
+/// How many times the tail is read when Last.fm's answers do not agree
+/// with each other, which is what a scrobble arriving during the read
+/// looks like.
+const TAIL_ATTEMPTS: u32 = 3;
 
 /// How a sync divides the history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,16 +59,22 @@ pub struct Options {
     pub page_size: u32,
     /// The rows asked for on every page of loved tracks, 1 to 1000.
     pub loved_page_size: u32,
+    /// How long a scrobble's time has to be past before the window it is
+    /// in is sealed, in seconds. Everything newer is read again by every
+    /// sync. Zero seals everything a sync reads, at once.
+    pub settle: u64,
 }
 
 impl Default for Options {
     /// Windows of thirty days, pages of 200 scrobbles, the most the service
-    /// gives, and pages of 1000 loved tracks.
+    /// gives, pages of 1000 loved tracks, and fourteen days before a window
+    /// is sealed.
     fn default() -> Self {
         Self {
             span: 30 * 86_400,
             page_size: 200,
             loved_page_size: 1000,
+            settle: 14 * 86_400,
         }
     }
 }
@@ -67,6 +88,8 @@ pub struct Stored {
     pub to: u64,
     /// The scrobbles in it.
     pub scrobbles: u64,
+    /// Whether it is final. A window that is not is read again next time.
+    pub sealed: bool,
 }
 
 /// What a sync did.
@@ -74,34 +97,44 @@ pub struct Stored {
 pub struct Report {
     /// The database now covers `[0, cutoff)`.
     pub cutoff: u64,
-    /// Scrobbles this sync stored.
+    /// The history before this is sealed; from here to the cutoff is the
+    /// tail.
+    pub sealed_to: u64,
+    /// How many more scrobbles the database holds than before the sync.
     pub added: u64,
     /// Scrobbles in the database before the cutoff.
     pub stored: u64,
-    /// Scrobbles Last.fm reported before the cutoff, asked after the last
-    /// window was stored.
+    /// Scrobbles in the database before the sealed edge.
+    pub sealed: u64,
+    /// Scrobbles Last.fm reported before the sealed edge, asked after the
+    /// last window was stored.
     pub reported: u64,
+    /// Scrobbles the tail held at the last sync that Last.fm no longer
+    /// lists. The reading that had them is kept in the database.
+    pub lost: u64,
 }
 
 impl Report {
-    /// Whether the database holds as many scrobbles as Last.fm reports. Equal
-    /// counts do not prove equal rows.
+    /// Whether the database holds as many sealed scrobbles as Last.fm
+    /// reports for the same time. Equal counts do not prove equal rows.
     pub fn matches(&self) -> bool {
-        self.stored == self.reported
+        self.sealed == self.reported
     }
 }
 
-/// Makes `store` cover `user`'s history before `cutoff`, then compares the
-/// counts. `stored` is called after each window is committed. A new
-/// database is tied to `user` first.
+/// Makes `store` cover `user`'s history before `cutoff`, reading the tail
+/// again, then compares the counts. `stored` is called for each window
+/// once it is committed. A new database is tied to `user` first.
 ///
 /// # Errors
 ///
 /// [`Error::OtherUser`] when the database holds another user's history;
 /// [`Error::Lastfm`] when a call fails after the client's retries or a page
 /// breaks a rule of the scan; [`Error::Service`] when an answer cannot be
-/// acted on; [`Error::Database`] and [`Error::Sqlite`] from the store. The
-/// windows stored before the error stay stored.
+/// acted on, or the cutoff is earlier than what the database covers;
+/// [`Error::Database`] and [`Error::Sqlite`] from the store. The windows
+/// stored before the error stay stored, and the tail stays as it was unless
+/// its new reading was stored whole.
 pub async fn sync(
     client: &Client,
     store: &mut Store,
@@ -114,30 +147,166 @@ pub async fn sync(
         return Err(Error::Service("the cutoff is the epoch; check the clock"));
     }
     store.bind_user(user)?;
-    let mut added = 0;
-    for (gap_from, gap_to) in store.gaps(cutoff)? {
+    if cutoff < store.covered_to()? {
+        return Err(Error::Service(
+            "the database already covers a later time than it is now; check the clock",
+        ));
+    }
+    let before = store.scrobbles_before(cutoff)?;
+
+    // The sealed edge: a whole day, and never earlier than what is sealed
+    // already or than where the tail began.
+    let tail = store.tail()?;
+    let settled = match options.settle {
+        0 => cutoff,
+        settle => cutoff.saturating_sub(settle) / 86_400 * 86_400,
+    };
+    let floor = match &tail {
+        Some(tail) => tail.from,
+        None => store.sealed_to()?,
+    };
+    let sealed_to = settled.max(floor);
+
+    // The tail first, so that the newest history is there whatever happens
+    // to the rest.
+    let mut lost = 0;
+    let mut replace = async |store: &mut Store, was: Option<&Tail>, from, seal_to, to| {
+        let change = replace_tail(
+            client,
+            store,
+            user,
+            was,
+            (from, seal_to, to),
+            options,
+            &mut stored,
+        )
+        .await?;
+        lost += change.lost;
+        Ok::<(), Error>(())
+    };
+    match &tail {
+        // The old tail reaches past the edge: one reading replaces it, the
+        // older part sealed and the newer part the tail from now on.
+        Some(tail) if tail.to > sealed_to => {
+            replace(store, Some(tail), tail.from, sealed_to, cutoff).await?;
+        }
+        // The whole of the old tail is old enough: it is read once more
+        // and sealed, and the new tail is read on its own.
+        Some(tail) => {
+            replace(store, Some(tail), tail.from, tail.to, tail.to).await?;
+            replace(store, None, sealed_to, sealed_to, cutoff).await?;
+        }
+        None => replace(store, None, sealed_to, sealed_to, cutoff).await?,
+    }
+
+    for (gap_from, gap_to) in store.gaps(sealed_to)? {
         let mut to = gap_to;
         while to > gap_from {
             let from = window_start(client, user, gap_from, to, options.span.max(1)).await?;
             let (summary, pages) = read(client, user, from, to, options.page_size).await?;
             store.commit_window(&summary, &pages, time::now())?;
-            added += summary.total();
             stored(Stored {
                 from,
                 to,
                 scrobbles: summary.total(),
+                sealed: true,
             });
             to = from;
         }
     }
 
-    let reported = probe(client, user, 0, cutoff).await?.0;
+    let reported = match sealed_to {
+        0 => 0,
+        sealed_to => probe(client, user, 0, sealed_to).await?.0,
+    };
+    let now = store.scrobbles_before(cutoff)?;
     Ok(Report {
         cutoff,
-        added,
-        stored: store.scrobbles_before(cutoff)?,
+        sealed_to,
+        added: now.saturating_sub(before),
+        stored: now,
+        sealed: store.scrobbles_before(sealed_to)?,
         reported,
+        lost,
     })
+}
+
+/// Reads `[from, to)` afresh and puts it in place of the tail `was`: the
+/// part before `seal_to` sealed, the rest as the new tail. Nothing is
+/// asked or stored when the span is empty and there is no tail to replace.
+///
+/// A scrobble that arrives while the span is read makes Last.fm's answers
+/// disagree, and the scan refuses them. That is no fault here, where the
+/// span reaches the present, so the reading is tried again, three times in
+/// all, and the tail in the database stays as it was until one succeeds.
+async fn replace_tail(
+    client: &Client,
+    store: &mut Store,
+    user: &str,
+    was: Option<&Tail>,
+    (from, seal_to, to): (u64, u64, u64),
+    options: Options,
+    stored: &mut impl FnMut(Stored),
+) -> Result<TailChange, Error> {
+    if from >= to && was.is_none() {
+        return Ok(TailChange::default());
+    }
+    let mut attempt = 1;
+    let (sealed, open) = loop {
+        let reading = async {
+            let sealed = read_span(client, user, from, seal_to, options).await?;
+            let open = read_span(client, user, seal_to, to, options).await?;
+            Ok::<_, Error>((sealed, open))
+        };
+        match reading.await {
+            Err(Error::Lastfm(error))
+                if error.kind() == ErrorKind::Inconsistent && attempt < TAIL_ATTEMPTS =>
+            {
+                attempt += 1;
+            }
+            reading => break reading?,
+        }
+    };
+    let windows: Vec<TailWindow<'_>> = sealed
+        .iter()
+        .map(|window| (window, true))
+        .chain(open.iter().map(|window| (window, false)))
+        .map(|((summary, pages), sealed)| TailWindow {
+            summary,
+            pages,
+            sealed,
+        })
+        .collect();
+    let change = store.replace_tail(was, &windows, time::now())?;
+    for window in &windows {
+        let span = window.summary.window();
+        stored(Stored {
+            from: span.from().unwrap_or(0),
+            to: span.to().unwrap_or(to),
+            scrobbles: window.summary.total(),
+            sealed: window.sealed,
+        });
+    }
+    Ok(change)
+}
+
+/// Reads `[from, to)` completely, as windows from its newest end backwards,
+/// and keeps them in memory.
+async fn read_span(
+    client: &Client,
+    user: &str,
+    from: u64,
+    to: u64,
+    options: Options,
+) -> Result<Vec<(ScanSummary, Vec<ScanPage>)>, Error> {
+    let mut windows = Vec::new();
+    let mut end = to;
+    while end > from {
+        let start = window_start(client, user, from, end, options.span.max(1)).await?;
+        windows.push(read(client, user, start, end, options.page_size).await?);
+        end = start;
+    }
+    Ok(windows)
 }
 
 /// The time by Last.fm's clock, in Unix seconds: one request, for the

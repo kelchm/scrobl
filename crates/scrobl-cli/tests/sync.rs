@@ -19,10 +19,19 @@ use scrobl_cli::Error;
 use scrobl_cli::store::Store;
 use scrobl_cli::sync::{Options, Report, Stored, sync};
 
+/// A sync that seals everything it reads, as every sync did before there
+/// was a tail.
 fn options(span: u64, page_size: u32) -> Options {
-    let mut options = Options::default();
+    let mut options = sealing();
     options.span = span;
     options.page_size = page_size;
+    options
+}
+
+/// The defaults, sealing everything at once.
+fn sealing() -> Options {
+    let mut options = Options::default();
+    options.settle = 0;
     options
 }
 
@@ -103,9 +112,12 @@ async fn a_first_sync_stores_the_whole_history_in_windows() {
         report,
         Report {
             cutoff,
+            sealed_to: cutoff,
             added: 50,
             stored: 50,
-            reported: 50
+            sealed: 50,
+            reported: 50,
+            lost: 0,
         }
     );
     assert!(report.matches());
@@ -156,7 +168,7 @@ async fn a_row_keeps_what_the_service_said_about_it() {
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(2);
 
-    let (_server, result, _) = run(&dataset, &mut store, BASE + 100, Options::default()).await;
+    let (_server, result, _) = run(&dataset, &mut store, BASE + 100, sealing()).await;
     result.unwrap();
 
     type Row = (
@@ -281,7 +293,8 @@ async fn a_later_sync_reads_only_what_is_new() {
         [Stored {
             from: first_cutoff,
             to: cutoff,
-            scrobbles: 10
+            scrobbles: 10,
+            sealed: true,
         }]
     );
     assert_eq!(
@@ -307,10 +320,10 @@ async fn a_sync_with_nothing_to_read_only_counts() {
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(5);
     let cutoff = BASE + 100;
-    let (_server, result, _) = run(&dataset, &mut store, cutoff, Options::default()).await;
+    let (_server, result, _) = run(&dataset, &mut store, cutoff, sealing()).await;
     result.unwrap();
 
-    let (server, result, stored) = run(&dataset, &mut store, cutoff, Options::default()).await;
+    let (server, result, stored) = run(&dataset, &mut store, cutoff, sealing()).await;
 
     let report = result.unwrap();
     assert_eq!((report.added, report.stored, report.reported), (0, 5, 5));
@@ -416,7 +429,7 @@ async fn a_refusal_is_an_error_and_never_an_empty_history() {
         ..Faults::default()
     });
 
-    let (_server, result, _) = run(&dataset, &mut store, BASE + 500, Options::default()).await;
+    let (_server, result, _) = run(&dataset, &mut store, BASE + 500, sealing()).await;
 
     let Err(Error::Lastfm(error)) = result else {
         panic!("expected a Last.fm error");
@@ -430,13 +443,7 @@ async fn scrobbles_added_to_a_period_already_read_show_in_the_counts() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
     let cutoff = BASE + 205;
-    let (_server, result, _) = run(
-        &Dataset::distinct(20),
-        &mut store,
-        cutoff,
-        Options::default(),
-    )
-    .await;
+    let (_server, result, _) = run(&Dataset::distinct(20), &mut store, cutoff, sealing()).await;
     result.unwrap();
 
     // The same history with one more scrobble in the middle of it.
@@ -446,7 +453,7 @@ async fn scrobbles_added_to_a_period_already_read_show_in_the_counts() {
         &Dataset::from_timestamps(times),
         &mut store,
         cutoff,
-        Options::default(),
+        sealing(),
     )
     .await;
 
@@ -461,7 +468,7 @@ async fn a_cutoff_at_the_epoch_is_refused_before_anything_is_asked() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
 
-    let (server, result, _) = run(&Dataset::distinct(3), &mut store, 0, Options::default()).await;
+    let (server, result, _) = run(&Dataset::distinct(3), &mut store, 0, sealing()).await;
 
     assert!(matches!(result, Err(Error::Service(_))));
     assert_eq!(server.request_count(), 0);
@@ -503,7 +510,7 @@ async fn a_failed_call_is_a_lastfm_error_with_its_cause() {
         &mut store,
         USER,
         BASE + 100,
-        Options::default(),
+        sealing(),
         |_| {},
     )
     .await
@@ -520,13 +527,7 @@ async fn a_count_that_answers_for_another_user_is_refused() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
     let cutoff = BASE + 100;
-    let (_server, result, _) = run(
-        &Dataset::distinct(5),
-        &mut store,
-        cutoff,
-        Options::default(),
-    )
-    .await;
+    let (_server, result, _) = run(&Dataset::distinct(5), &mut store, cutoff, sealing()).await;
     result.unwrap();
 
     // Nothing is left to read, so the one request is the count, and its
@@ -535,7 +536,7 @@ async fn a_count_that_answers_for_another_user_is_refused() {
         wrong_user_on_page: Some(1),
         ..Faults::default()
     });
-    let (server, result, _) = run(&dataset, &mut store, cutoff, Options::default()).await;
+    let (server, result, _) = run(&dataset, &mut store, cutoff, sealing()).await;
 
     let Err(Error::Service(message)) = result else {
         panic!("expected a service error");
@@ -602,21 +603,23 @@ async fn a_wrong_answer_about_where_the_scrobbles_are_loses_nothing() {
 }
 
 #[tokio::test]
-async fn a_cutoff_before_what_is_stored_reads_nothing_and_counts_up_to_it() {
+async fn a_cutoff_before_what_is_stored_is_refused_before_anything_is_asked() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(20);
-    let (_server, result, _) = run(&dataset, &mut store, BASE + 205, Options::default()).await;
+    let (_server, result, _) = run(&dataset, &mut store, BASE + 205, sealing()).await;
     result.unwrap();
 
-    // The clock has gone back: ten of the twenty scrobbles lie before it.
-    let (server, result, stored) = run(&dataset, &mut store, BASE + 101, Options::default()).await;
+    // The clock has gone back: the file covers a time that is still to
+    // come, and nothing a sync could do with that is safe.
+    let (server, result, stored) = run(&dataset, &mut store, BASE + 101, sealing()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.stored, report.reported), (0, 10, 10));
-    assert!(report.matches());
+    let Err(Error::Service(message)) = result else {
+        panic!("expected a service error, got {result:?}");
+    };
+    assert!(message.contains("check the clock"), "{message}");
     assert_eq!(stored, []);
-    assert_eq!(server.request_count(), 1);
+    assert_eq!(server.request_count(), 0);
     assert_eq!(timestamps(&store).len(), 20);
 }
 
@@ -661,13 +664,7 @@ async fn a_database_of_another_user_is_refused_before_anything_is_asked() {
     let mut store = Store::open(scratch.db()).unwrap();
     store.bind_user("someone-else").unwrap();
 
-    let (server, result, _) = run(
-        &Dataset::distinct(3),
-        &mut store,
-        BASE + 100,
-        Options::default(),
-    )
-    .await;
+    let (server, result, _) = run(&Dataset::distinct(3), &mut store, BASE + 100, sealing()).await;
 
     assert!(matches!(result, Err(Error::OtherUser)), "{result:?}");
     assert_eq!(server.request_count(), 0);
@@ -680,13 +677,7 @@ async fn a_sync_ties_a_new_database_to_its_user() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
 
-    let (_server, result, _) = run(
-        &Dataset::distinct(3),
-        &mut store,
-        BASE + 100,
-        Options::default(),
-    )
-    .await;
+    let (_server, result, _) = run(&Dataset::distinct(3), &mut store, BASE + 100, sealing()).await;
 
     result.unwrap();
     assert_eq!(store.user().unwrap().as_deref(), Some(USER));
@@ -695,7 +686,7 @@ async fn a_sync_ties_a_new_database_to_its_user() {
 /// A database holding all of `dataset` before `cutoff`, and the question a
 /// sync asks to count it.
 async fn synced(dataset: &Dataset, store: &mut Store, cutoff: u64) -> Vec<(String, String)> {
-    let (server, result, _) = run(dataset, store, cutoff, Options::default()).await;
+    let (server, result, _) = run(dataset, store, cutoff, sealing()).await;
     result.unwrap();
     server.requests().last().unwrap().params()
 }
@@ -723,7 +714,7 @@ async fn a_count_of_none_that_comes_with_a_scrobble_is_refused() {
         &mut store,
         USER,
         cutoff,
-        Options::default(),
+        sealing(),
         |_| {},
     )
     .await;
@@ -748,11 +739,415 @@ async fn a_count_that_comes_with_a_scrobble_from_outside_the_period_is_refused()
         inclusive_to: true,
         ..Faults::default()
     });
-    let (server, result, _) = run(&dataset, &mut store, cutoff, Options::default()).await;
+    let (server, result, _) = run(&dataset, &mut store, cutoff, sealing()).await;
 
     let Err(Error::Service(message)) = result else {
         panic!("expected a service error, got {result:?}");
     };
     assert!(message.contains("outside the period"), "{message}");
     assert_eq!(server.request_count(), 1);
+}
+
+// The tail: the newest history, which every sync reads again.
+
+const DAY: u64 = 86_400;
+
+/// The defaults with windows sealed after `settle` seconds.
+fn settling(settle: u64) -> Options {
+    let mut options = Options::default();
+    options.settle = settle;
+    options
+}
+
+/// One scrobble a day at noon, for the `days` days before the day `today`
+/// is in, oldest first.
+fn daily(today: u64, days: u64) -> Vec<u64> {
+    let midnight = today / DAY * DAY;
+    (1..=days)
+        .rev()
+        .map(|ago| midnight - ago * DAY + DAY / 2)
+        .collect()
+}
+
+/// `dataset` without the scrobbles at `times`. The ones that stay keep
+/// their rows, which a dataset made afresh from fewer times would not.
+fn without(dataset: &Dataset, times: &[u64]) -> Dataset {
+    let mut dataset = dataset.clone();
+    dataset.entries.retain(|entry| !times.contains(&entry.ts));
+    dataset
+}
+
+/// Every window as `(from, to, total, sealed)`, oldest first.
+fn layout(store: &Store) -> Vec<(u64, u64, u64, bool)> {
+    let mut statement = store
+        .connection()
+        .prepare("SELECT from_ts, to_ts, total, sealed FROM windows ORDER BY from_ts")
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+fn count(store: &Store, table: &str) -> u64 {
+    store
+        .connection()
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// The windows lie end to end from 0 to `cutoff`, the sealed ones first.
+fn assert_whole(store: &Store, cutoff: u64) {
+    let layout = layout(store);
+    let mut at = 0;
+    let mut open = false;
+    for (from, to, _, sealed) in &layout {
+        assert_eq!(*from, at, "{layout:?}");
+        assert!(
+            !(open && *sealed),
+            "a sealed window after the tail: {layout:?}"
+        );
+        open |= !sealed;
+        at = *to;
+    }
+    assert_eq!(at, cutoff, "{layout:?}");
+}
+
+#[tokio::test]
+async fn the_newest_history_is_stored_as_a_tail_and_the_rest_is_sealed() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 500;
+    let midnight = cutoff / DAY * DAY;
+    let dataset = Dataset::from_timestamps(daily(cutoff, 20));
+
+    let (_server, result, stored) = run(&dataset, &mut store, cutoff, settling(3 * DAY)).await;
+
+    // Three days back from the cutoff, to the midnight before.
+    let edge = midnight - 3 * DAY;
+    let report = result.unwrap();
+    assert_eq!(report.sealed_to, edge);
+    assert_eq!((report.added, report.stored), (20, 20));
+    // Seventeen noons lie before the edge, three after it.
+    assert_eq!((report.sealed, report.reported), (17, 17));
+    assert!(report.matches());
+    assert_eq!(report.lost, 0);
+    assert_whole(&store, cutoff);
+    assert_eq!(layout(&store).last(), Some(&(edge, cutoff, 3, false)));
+    assert_eq!(store.sealed_to().unwrap(), edge);
+    let tail = store.tail().unwrap().unwrap();
+    assert_eq!((tail.from, tail.to), (edge, cutoff));
+    // The tail is stored first, so the newest history is there whatever
+    // becomes of the rest.
+    assert_eq!(
+        stored.first(),
+        Some(&Stored {
+            from: edge,
+            to: cutoff,
+            scrobbles: 3,
+            sealed: false
+        })
+    );
+    assert!(stored.iter().skip(1).all(|window| window.sealed));
+    assert_eq!(markers(&store), dataset.expected(Window::before(cutoff)));
+}
+
+#[tokio::test]
+async fn a_scrobble_that_arrives_late_is_there_after_the_next_sync() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let edge = first / DAY * DAY - 3 * DAY;
+    // A day on, a device that was offline has sent two plays from inside
+    // the old tail, and there is a new one from today.
+    let second = first + DAY;
+    let late = [edge + 100, edge + DAY + 100, second - 50];
+    let mut times = daily(first, 20);
+    times.extend(late);
+    let dataset = Dataset::from_timestamps(times);
+    let (_server, result, _) = run(
+        &without(&dataset, &late),
+        &mut store,
+        first,
+        settling(3 * DAY),
+    )
+    .await;
+    result.unwrap();
+
+    let (_server, result, stored) = run(&dataset, &mut store, second, settling(3 * DAY)).await;
+
+    let report = result.unwrap();
+    assert_eq!((report.added, report.stored), (3, 23));
+    assert_eq!(report.lost, 0);
+    // The edge moved on a day, and the day it passed was sealed with the
+    // late play in it.
+    assert_eq!(report.sealed_to, edge + DAY);
+    assert_eq!((report.sealed, report.reported), (19, 19));
+    assert!(report.matches());
+    assert_eq!(
+        stored,
+        [
+            Stored {
+                from: edge,
+                to: edge + DAY,
+                scrobbles: 2,
+                sealed: true
+            },
+            Stored {
+                from: edge + DAY,
+                to: second,
+                scrobbles: 4,
+                sealed: false
+            },
+        ]
+    );
+    assert_whole(&store, second);
+    assert_eq!(markers(&store), dataset.expected(Window::before(second)));
+    // Nothing was lost, so nothing was kept aside.
+    assert_eq!(count(&store, "superseded_windows"), 0);
+}
+
+#[tokio::test]
+async fn a_tail_that_has_not_changed_is_read_again_and_keeps_nothing_aside() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(cutoff, 20));
+    run(&dataset, &mut store, cutoff, settling(3 * DAY))
+        .await
+        .1
+        .unwrap();
+    let before = (layout(&store), timestamps(&store));
+
+    let (server, result, stored) = run(&dataset, &mut store, cutoff + 60, settling(3 * DAY)).await;
+
+    let report = result.unwrap();
+    assert_eq!((report.added, report.stored, report.lost), (0, 20, 0));
+    // One page of the tail, and the count.
+    assert_eq!(server.request_count(), 2);
+    assert_eq!(stored.len(), 1);
+    assert_eq!(timestamps(&store), before.1);
+    assert_eq!(layout(&store).len(), before.0.len());
+    assert_whole(&store, cutoff + 60);
+    assert_eq!(count(&store, "superseded_windows"), 0);
+}
+
+#[tokio::test]
+async fn a_scrobble_last_fm_no_longer_lists_goes_and_the_pages_that_had_it_are_kept() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let times = daily(first, 20);
+    let dataset = Dataset::from_timestamps(times.clone());
+    run(&dataset, &mut store, first, settling(3 * DAY))
+        .await
+        .1
+        .unwrap();
+    let old_tail: Vec<Vec<u8>> = store
+        .connection()
+        .prepare(
+            "SELECT body FROM pages WHERE window_id IN
+                 (SELECT id FROM windows WHERE sealed = 0) ORDER BY window_id, page",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+
+    // The newest play was deleted on the website.
+    let deleted = *times.last().unwrap();
+    let (_server, result, _) = run(
+        &without(&dataset, &[deleted]),
+        &mut store,
+        first + 60,
+        settling(3 * DAY),
+    )
+    .await;
+
+    let report = result.unwrap();
+    assert_eq!(report.lost, 1);
+    assert_eq!((report.added, report.stored), (0, 19));
+    assert!(report.matches());
+    // The table to query follows Last.fm.
+    assert!(!timestamps(&store).contains(&deleted));
+    // The reading that had it is still in the file, byte for byte.
+    assert_eq!(count(&store, "superseded_windows"), 1);
+    let kept: Vec<Vec<u8>> = store
+        .connection()
+        .prepare("SELECT body FROM superseded_pages ORDER BY window_id, page")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(kept, old_tail);
+    let (from, to, total): (u64, u64, u64) = store
+        .connection()
+        .query_row(
+            "SELECT from_ts, to_ts, total FROM superseded_windows",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((to, total), (first, 3));
+    assert_eq!(from, first / DAY * DAY - 3 * DAY);
+}
+
+#[tokio::test]
+async fn a_tail_that_is_disturbed_while_it_is_read_is_read_again() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(cutoff, 6));
+    let mut options = settling(30 * DAY);
+    options.page_size = 2;
+    // Long enough that the tail is one window, asked for without a question
+    // about where its scrobbles are.
+    options.span = 365 * DAY;
+
+    // The first answer is the first page of a longer history: what the
+    // tail looked like a moment before a scrobble arrived. The pages after
+    // it disagree with it.
+    let mut longer = daily(cutoff, 6);
+    longer.push(cutoff - 10);
+    let question = [
+        ("method", "user.getRecentTracks".to_owned()),
+        ("user", USER.to_owned()),
+        ("api_key", "k".to_owned()),
+        ("limit", "2".to_owned()),
+        ("to", cutoff.to_string()),
+    ]
+    .map(|(name, value)| (name.to_owned(), value));
+    let (_, body) = respond_to(&Dataset::from_timestamps(longer), &question);
+    let server = FakeLastfm::start(dataset.clone())
+        .await
+        .script([Behaviour::status(200, body)]);
+    let result = sync(&client(&server), &mut store, USER, cutoff, options, |_| {}).await;
+
+    let report = result.unwrap();
+    assert_eq!((report.added, report.stored), (6, 6));
+    assert_eq!(markers(&store), dataset.expected(Window::before(cutoff)));
+    assert_whole(&store, cutoff);
+}
+
+#[tokio::test]
+async fn a_tail_that_never_holds_still_fails_and_the_one_before_stays() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(cutoff, 6));
+    let mut options = settling(30 * DAY);
+    options.page_size = 2;
+    options.span = 365 * DAY;
+    run(&dataset, &mut store, cutoff, options).await.1.unwrap();
+    let before = (layout(&store), timestamps(&store));
+
+    // A scrobble arrives during every reading.
+    let restless = dataset.clone().with_faults(Faults {
+        arrive_from_page: Some(2),
+        ..Faults::default()
+    });
+    let (server, result, stored) = run(&restless, &mut store, cutoff + 60, options).await;
+
+    let Err(Error::Lastfm(error)) = result else {
+        panic!("expected a Last.fm error, got {result:?}");
+    };
+    assert_eq!(error.kind(), ErrorKind::Inconsistent);
+    assert_eq!(stored, []);
+    // Three readings, each stopped at its second page.
+    assert_eq!(server.request_count(), 6);
+    assert_eq!((layout(&store), timestamps(&store)), before);
+}
+
+#[tokio::test]
+async fn a_tail_left_for_a_long_time_is_read_once_more_before_it_is_sealed() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let old_edge = first / DAY * DAY - 3 * DAY;
+    // Forty days without a sync. A play from inside the old tail arrived
+    // in the meantime, and the listening went on.
+    let second = first + 40 * DAY;
+    let mut after = vec![old_edge + 100];
+    after.extend(daily(second, 30));
+    let mut times = daily(first, 10);
+    times.extend(&after);
+    let dataset = Dataset::from_timestamps(times);
+    run(
+        &without(&dataset, &after),
+        &mut store,
+        first,
+        settling(3 * DAY),
+    )
+    .await
+    .1
+    .unwrap();
+
+    let (_server, result, _) = run(&dataset, &mut store, second, settling(3 * DAY)).await;
+
+    let report = result.unwrap();
+    let edge = second / DAY * DAY - 3 * DAY;
+    assert_eq!(report.sealed_to, edge);
+    assert_eq!((report.added, report.stored, report.lost), (31, 41, 0));
+    assert!(report.matches());
+    assert_whole(&store, second);
+    // The old tail is one sealed window now, with the late play in it.
+    assert!(layout(&store).contains(&(old_edge, first, 4, true)));
+    assert_eq!(layout(&store).last(), Some(&(edge, second, 3, false)));
+    assert_eq!(markers(&store), dataset.expected(Window::before(second)));
+}
+
+#[tokio::test]
+async fn a_sync_that_seals_at_once_leaves_no_tail() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(first, 10));
+    run(&dataset, &mut store, first, settling(3 * DAY))
+        .await
+        .1
+        .unwrap();
+    assert!(store.tail().unwrap().is_some());
+
+    let second = first + 60;
+    let (_server, result, _) = run(&dataset, &mut store, second, sealing()).await;
+
+    let report = result.unwrap();
+    assert_eq!(report.sealed_to, second);
+    assert_eq!((report.sealed, report.reported), (10, 10));
+    assert_eq!(store.tail().unwrap(), None);
+    assert_eq!(store.sealed_to().unwrap(), second);
+    assert_whole(&store, second);
+}
+
+#[tokio::test]
+async fn a_longer_settle_does_not_open_what_is_sealed() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(first, 10));
+    run(&dataset, &mut store, first, sealing()).await.1.unwrap();
+
+    let second = first + 60;
+    let (_server, result, stored) = run(&dataset, &mut store, second, settling(5 * DAY)).await;
+
+    let report = result.unwrap();
+    // Everything up to the first sync stays sealed; the tail is what came
+    // after it.
+    assert_eq!(report.sealed_to, first);
+    assert_eq!(
+        stored,
+        [Stored {
+            from: first,
+            to: second,
+            scrobbles: 0,
+            sealed: false
+        }]
+    );
+    assert_whole(&store, second);
 }

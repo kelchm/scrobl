@@ -19,7 +19,7 @@ use scrobl::model::LovedTracksPage;
 use scrobl::protocol::{self, Credentials, HttpResponse, Request, methods};
 use scrobl::{ApiKey, Response};
 use scrobl_cli::Error;
-use scrobl_cli::store::Store;
+use scrobl_cli::store::{Store, TailChange, TailWindow};
 
 /// A database that belongs to [`USER`], as one must before it takes a
 /// window.
@@ -106,7 +106,7 @@ fn a_database_of_another_version_is_refused() {
     Store::open(scratch.db())
         .unwrap()
         .connection()
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .unwrap();
 
     let message = database_error(Store::open(scratch.db()));
@@ -163,7 +163,12 @@ fn a_version_1_file_is_brought_up_to_date_and_keeps_its_history() {
             .connection()
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
+        // What it held was read once and is final; there is no tail yet.
+        assert_eq!(store.tail().unwrap(), None);
+        assert_eq!(store.sealed_to().unwrap(), store.covered_to().unwrap());
+        assert_eq!(count(&store, "superseded_windows"), 0);
+        assert_eq!(count(&store, "superseded_pages"), 0);
         let columns: Vec<String> = store
             .connection()
             .prepare("SELECT name FROM pragma_table_info('scrobbles')")
@@ -681,4 +686,176 @@ fn a_window_is_stored_only_for_the_user_the_database_belongs_to() {
     store.bind_user(&USER.to_uppercase()).unwrap();
     store.commit_window(&summary, &pages, 0).unwrap();
     assert_eq!(count(&store, "scrobbles"), 3);
+}
+
+// The tail: windows that are not sealed, and what replaces them.
+
+/// The windows as `(from, to, total, sealed)`, oldest first.
+fn layout(store: &Store) -> Vec<(u64, u64, u64, bool)> {
+    store
+        .connection()
+        .prepare("SELECT from_ts, to_ts, total, sealed FROM windows ORDER BY from_ts")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[test]
+fn the_tail_is_replaced_whole_and_only_by_a_reading_that_covers_it() {
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    let dataset = Dataset::distinct(10);
+    let scan = |from: u64, to: u64| scan(&dataset, Window::new(from, to).unwrap(), 200);
+    let (old, a, b, c) = (
+        scan(BASE, BASE + 60),
+        scan(BASE, BASE + 30),
+        scan(BASE + 30, BASE + 60),
+        scan(BASE + 60, BASE + 200),
+    );
+    fn window(scan: &(ScanSummary, Vec<ScanPage>), sealed: bool) -> TailWindow<'_> {
+        TailWindow {
+            summary: &scan.0,
+            pages: &scan.1,
+            sealed,
+        }
+    }
+    let (old, a, b, c) = (&old, &a, &b, &c);
+
+    // The first tail, where there was none.
+    assert_eq!(store.tail().unwrap(), None);
+    let change = store.replace_tail(None, &[window(old, false)], 1).unwrap();
+    assert_eq!(change, TailChange::default());
+    let tail = store.tail().unwrap().unwrap();
+    assert_eq!((tail.from, tail.to), (BASE, BASE + 60));
+    assert_eq!(store.sealed_to().unwrap(), 0);
+    assert_eq!(store.covered_to().unwrap(), BASE + 60);
+    // The tail is no gap closed: what is sealed is.
+    assert_eq!(store.gaps(BASE + 60).unwrap(), [(0, BASE + 60)]);
+
+    // Readings that do not fit, each refused with the tail left as it was.
+    for wrong in [
+        // Nothing at all.
+        vec![],
+        // It starts later than the tail did.
+        vec![window(b, false), window(c, false)],
+        // It ends sooner.
+        vec![window(a, false)],
+        // A hole in it.
+        vec![window(a, true), window(c, false)],
+        // A sealed window after one that is not.
+        vec![window(a, false), window(b, true)],
+    ] {
+        let message = database_error(store.replace_tail(Some(&tail), &wrong, 2));
+        assert!(message.contains("does not cover"), "{message}");
+        assert_eq!(layout(&store), [(BASE, BASE + 60, 5, false)]);
+    }
+
+    // One that fits, in any order: part sealed, the rest the new tail.
+    let change = store
+        .replace_tail(
+            Some(&tail),
+            &[window(c, false), window(a, true), window(b, false)],
+            3,
+        )
+        .unwrap();
+    assert_eq!(change, TailChange::default());
+    assert_eq!(
+        layout(&store),
+        [
+            (BASE, BASE + 30, 2, true),
+            (BASE + 30, BASE + 60, 3, false),
+            (BASE + 60, BASE + 200, 5, false),
+        ]
+    );
+    assert_eq!(count(&store, "scrobbles"), 10);
+    assert_eq!(count(&store, "superseded_windows"), 0);
+    assert_eq!(store.sealed_to().unwrap(), BASE + 30);
+
+    // The tail it was read against is gone: another sync got there first.
+    let message = database_error(store.replace_tail(Some(&tail), &[window(old, false)], 4));
+    assert!(message.contains("another sync"), "{message}");
+    let message = database_error(store.replace_tail(None, &[window(c, false)], 4));
+    assert!(message.contains("another sync"), "{message}");
+    assert_eq!(layout(&store).len(), 3);
+}
+
+#[test]
+fn a_new_tail_may_not_overlap_what_is_sealed() {
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    let dataset = Dataset::distinct(10);
+    let (summary, pages) = scan(&dataset, Window::before(BASE + 60), 200);
+    store.commit_window(&summary, &pages, 0).unwrap();
+
+    let (summary, pages) = scan(&dataset, Window::new(BASE + 30, BASE + 200).unwrap(), 200);
+    let message = database_error(store.replace_tail(
+        None,
+        &[TailWindow {
+            summary: &summary,
+            pages: &pages,
+            sealed: false,
+        }],
+        1,
+    ));
+
+    assert!(message.contains("overlaps"), "{message}");
+    assert_eq!(layout(&store), [(0, BASE + 60, 5, true)]);
+}
+
+#[test]
+fn every_reading_that_lost_a_scrobble_is_kept_under_a_number_of_its_own() {
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    let full = Dataset::distinct(6);
+    let reading = |dataset: &Dataset| scan(dataset, Window::new(BASE, BASE + 100).unwrap(), 200);
+    let without = |times: &[u64]| {
+        let mut dataset = full.clone();
+        dataset.entries.retain(|entry| !times.contains(&entry.ts));
+        dataset
+    };
+    let mut replace = |dataset: &Dataset, read_at| {
+        let (summary, pages) = reading(dataset);
+        let was = store.tail().unwrap();
+        store
+            .replace_tail(
+                was.as_ref(),
+                &[TailWindow {
+                    summary: &summary,
+                    pages: &pages,
+                    sealed: false,
+                }],
+                read_at,
+            )
+            .unwrap()
+    };
+
+    replace(&full, 1);
+    // One goes, then another: the window's number is used again each time,
+    // and each reading is kept all the same.
+    let change = replace(&without(&[BASE + 10]), 2);
+    assert_eq!((change.lost, change.gained), (1, 0));
+    let change = replace(&without(&[BASE + 10, BASE + 20]), 3);
+    assert_eq!((change.lost, change.gained), (1, 0));
+    // One comes back and another goes at once.
+    let change = replace(&without(&[BASE + 20, BASE + 30]), 4);
+    assert_eq!((change.lost, change.gained), (1, 1));
+    // A reading that only gained keeps nothing.
+    let change = replace(&full, 5);
+    assert_eq!((change.lost, change.gained), (0, 2));
+
+    let kept: Vec<(u64, u64, u64)> = store
+        .connection()
+        .prepare("SELECT total, read_at, superseded_at FROM superseded_windows ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(kept, [(6, 1, 2), (5, 2, 3), (4, 3, 4)]);
+    assert_eq!(count(&store, "superseded_pages"), 3);
+    assert_eq!(count(&store, "scrobbles"), 6);
 }

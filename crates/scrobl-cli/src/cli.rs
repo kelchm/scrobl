@@ -23,10 +23,9 @@ use crate::time;
 /// line, where other users of the machine could see it.
 pub const API_KEY_VARIABLE: &str = "SCROBL_API_KEY";
 
-/// How far behind the clock a sync stops, in seconds. A scrobble is dated
-/// when its track started and sent when it ended, so the last minutes of a
-/// history are still filling in.
-pub const SETTLE: u64 = 30 * 60;
+/// How far this machine's clock may run ahead of Last.fm's before a sync
+/// says so, in seconds.
+pub const CLOCK_TOLERANCE: u64 = 30 * 60;
 
 /// The exit code of a sync that finished with counts that differ.
 pub const EXIT_MISMATCH: u8 = 3;
@@ -42,15 +41,19 @@ Keeps a local copy of a Last.fm listening history.
 Unofficial: not affiliated with or endorsed by Last.fm.
 
 Usage:
-  scrobl sync --db <file> [--user <name>]
+  scrobl sync --db <file> [--user <name>] [--settle <time>]
 
 Commands:
-  sync    Read the history the database does not hold yet, and the loved
-          tracks as they are now
+  sync    Read the history the database does not hold yet, the newest part
+          of it again, and the loved tracks as they are now
 
 Options:
   --db <file>      The SQLite database, created if it is missing
   --user <name>    The Last.fm user; needed the first time only
+  --settle <time>  How old a scrobble must be before it is final: a number
+                   and s, m, h or d, such as 12h or 14d (the default).
+                   Everything newer is read again by every sync, because
+                   scrobbles arrive late. 0 makes everything final at once
   -h, --help       Show this help
   -V, --version    Show the version
 
@@ -74,6 +77,28 @@ pub struct SyncArgs {
     pub db: PathBuf,
     /// The Last.fm user, if given.
     pub user: Option<String>,
+    /// How old a scrobble must be before it is final, in seconds, if given.
+    pub settle: Option<u64>,
+}
+
+/// Reads a length of time: a whole number and `s`, `m`, `h` or `d`, or a
+/// bare `0`.
+fn duration(text: &str) -> Option<u64> {
+    if text == "0" {
+        return Some(0);
+    }
+    let unit = match text.as_bytes().last()? {
+        b's' => 1,
+        b'm' => 60,
+        b'h' => 3_600,
+        b'd' => 86_400,
+        _ => return None,
+    };
+    let digits = text.get(..text.len() - 1)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(unit)
 }
 
 /// A parsed command line.
@@ -92,11 +117,12 @@ pub enum Command {
 /// # Errors
 ///
 /// [`Error::Usage`] for an unknown command or option, an option without its
-/// value, an option given twice, or a `sync` without `--db`.
+/// value, an option given twice, a `--settle` that is not a length of time,
+/// or a `sync` without `--db`.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error> {
     let usage = |message: String| Error::Usage(format!("{message}; try `scrobl --help`"));
     let mut args = args.into_iter();
-    let (mut command, mut db, mut user) = (None, None, None);
+    let (mut command, mut db, mut user, mut settle) = (None, None, None, None);
 
     while let Some(arg) = args.next() {
         // Only a value that stands on its own may be something other than
@@ -111,7 +137,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
         match name {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
-            "--db" | "--user" => {
+            "--db" | "--user" | "--settle" => {
                 // The value as given, so that a path need not be UTF-8.
                 let value = match inline {
                     Some(value) => OsString::from(value),
@@ -119,7 +145,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
                         .next()
                         .ok_or_else(|| usage(format!("`{name}` needs a value")))?,
                 };
-                let slot = if name == "--db" { &mut db } else { &mut user };
+                let slot = match name {
+                    "--db" => &mut db,
+                    "--user" => &mut user,
+                    _ => &mut settle,
+                };
                 if slot.replace(value).is_some() {
                     return Err(usage(format!("`{name}` was given twice")));
                 }
@@ -142,9 +172,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
                 .map_err(|_| usage("the user name is not valid Unicode".to_owned()))
         })
         .transpose()?;
+    let settle = settle
+        .map(|settle| {
+            settle.to_str().and_then(duration).ok_or_else(|| {
+                usage("`--settle` takes a number and s, m, h or d, such as 14d".to_owned())
+            })
+        })
+        .transpose()?;
     Ok(Command::Sync(SyncArgs {
         db: PathBuf::from(db),
         user,
+        settle,
     }))
 }
 
@@ -204,9 +242,9 @@ async fn try_run(
 }
 
 /// `scrobl sync` with a client already built: opens the database, reads
-/// what it lacks up to [`SETTLE`] seconds before `now` or before Last.fm's
-/// own clock, whichever is earlier, reports, and then reads the loved
-/// tracks afresh.
+/// what it lacks up to `now` or Last.fm's own clock, whichever is earlier,
+/// reads the newest part again, reports, and then reads the loved tracks
+/// afresh. `--settle`, when given, replaces [`Options::settle`].
 ///
 /// The second clock is there because a period that ends in the future
 /// would be recorded as read, and what was then played in it never
@@ -214,7 +252,7 @@ async fn try_run(
 /// runs behind only delays the newest scrobbles to a later sync.
 ///
 /// Returns 0, or [`EXIT_MISMATCH`] when the sync finished but the database
-/// and Last.fm count differently.
+/// and Last.fm count the sealed history differently.
 ///
 /// # Errors
 ///
@@ -242,7 +280,7 @@ pub async fn sync_command(
     store.bind_user(&user)?;
 
     let served = sync::server_time(client, &user).await?;
-    if now > served.saturating_add(SETTLE) {
+    if now > served.saturating_add(CLOCK_TOLERANCE) {
         let _ = writeln!(
             err,
             "This machine's clock is ahead of Last.fm's ({} against {}); reading up to Last.fm's.",
@@ -250,20 +288,26 @@ pub async fn sync_command(
             time::utc(served)
         );
     }
-    let cutoff = now.min(served).saturating_sub(SETTLE);
+    let mut options = options;
+    options.settle = args.settle.unwrap_or(options.settle);
     let report = sync::sync(
         client,
         &mut store,
         &user,
-        cutoff,
+        now.min(served),
         options,
         |window: Stored| {
             let _ = writeln!(
                 err,
-                "{} to {}: {} scrobbles",
+                "{} to {}: {} scrobbles{}",
                 time::utc(window.from),
                 time::utc(window.to),
-                window.scrobbles
+                window.scrobbles,
+                if window.sealed {
+                    ""
+                } else {
+                    ", to be read again"
+                }
             );
         },
     )
@@ -271,19 +315,30 @@ pub async fn sync_command(
 
     let _ = writeln!(
         out,
-        "{} scrobbles up to {}, {} of them new.",
+        "{} scrobbles up to {}, {} more than before.",
         report.stored,
         time::utc(report.cutoff),
         report.added
     );
+    if report.lost > 0 {
+        let _ = writeln!(
+            out,
+            "Last.fm no longer lists {} that were here at the last sync. The file follows \
+             Last.fm and keeps the pages that had them.",
+            report.lost
+        );
+    }
     let code = if report.matches() {
         0
     } else {
         let _ = writeln!(
             out,
-            "Last.fm reports {}. Scrobbles were added to or removed from a period after it was \
-             read, and this version does not read a period twice.",
-            report.reported
+            "Before {} Last.fm reports {} and the file holds {}. The number of scrobbles in a \
+             period changed after it was final, and this version does not read such a period \
+             twice.",
+            time::utc(report.sealed_to),
+            report.reported,
+            report.sealed
         );
         EXIT_MISMATCH
     };

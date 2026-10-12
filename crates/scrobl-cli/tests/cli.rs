@@ -20,7 +20,7 @@ use common::*;
 use scrobl::ApiKey;
 use scrobl_cli::Error;
 use scrobl_cli::cli::{
-    Command, EXIT_MISMATCH, Environment, SETTLE, SyncArgs, parse, run, sync_command,
+    CLOCK_TOLERANCE, Command, EXIT_MISMATCH, Environment, SyncArgs, parse, run, sync_command,
 };
 use scrobl_cli::sync::Options;
 
@@ -103,6 +103,7 @@ fn sync_is_parsed_with_its_options_in_any_order() {
     let expected = Command::Sync(SyncArgs {
         db: PathBuf::from("history.db"),
         user: Some("rj".to_owned()),
+        settle: None,
     });
     for line in [
         &["sync", "--db", "history.db", "--user", "rj"][..],
@@ -115,7 +116,8 @@ fn sync_is_parsed_with_its_options_in_any_order() {
         parse(args(&["sync", "--db", "a=b.db"])).unwrap(),
         Command::Sync(SyncArgs {
             db: PathBuf::from("a=b.db"),
-            user: None
+            user: None,
+            settle: None,
         })
     );
 }
@@ -159,7 +161,8 @@ fn a_path_need_not_be_unicode_but_a_user_name_must() {
         parsed,
         Command::Sync(SyncArgs {
             db: PathBuf::from(odd.clone()),
-            user: None
+            user: None,
+            settle: None,
         })
     );
 
@@ -258,41 +261,43 @@ async fn a_sync_reports_its_windows_and_its_counts() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     // The newest scrobble is at BASE + 200, half an hour before the clock.
-    let now = BASE + 201 + SETTLE;
+    let now = BASE + 2_001;
 
     let (result, out, err, _) = sync_with(Dataset::distinct(20).with_loved(3), &args, now).await;
 
     assert_eq!(result.unwrap(), 0);
     assert_eq!(
         out,
-        "20 scrobbles up to 2023-11-14T22:16:41Z, 20 of them new.\n\
+        "20 scrobbles up to 2023-11-14T22:46:41Z, 20 more than before.\n\
          3 loved tracks.\n"
     );
     // Thirty days of listening, then everything before it, which is empty.
     assert_eq!(
         err,
-        "2023-10-15T22:16:41Z to 2023-11-14T22:16:41Z: 20 scrobbles\n\
+        "2023-10-15T22:16:41Z to 2023-11-14T22:46:41Z: 20 scrobbles\n\
          1970-01-01T00:00:00Z to 2023-10-15T22:16:41Z: 0 scrobbles\n"
     );
 }
 
 #[tokio::test]
-async fn a_sync_stops_short_of_the_last_half_hour() {
+async fn a_sync_reads_right_up_to_the_present() {
     let scratch = Scratch::new();
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
-    // The clock is one second past the newest scrobble, so the last half
-    // hour (180 scrobbles, ten seconds apart) is left for a later sync.
+    // The clock is one second past the newest scrobble: nothing is held
+    // back.
     let now = BASE + 2_001;
 
     let (result, out, _, _) = sync_with(Dataset::distinct(200), &args, now).await;
 
     assert_eq!(result.unwrap(), 0);
-    assert!(out.starts_with("20 scrobbles up to "));
+    assert!(out.starts_with("200 scrobbles up to "), "{out}");
 }
 
 #[tokio::test]
@@ -301,10 +306,12 @@ async fn the_user_is_needed_once_and_checked_afterwards() {
     let named = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     let unnamed = SyncArgs {
         db: scratch.db(),
         user: None,
+        settle: Some(0),
     };
     let now = BASE + 10_000;
 
@@ -327,6 +334,7 @@ async fn the_user_is_needed_once_and_checked_afterwards() {
     let other = SyncArgs {
         db: scratch.db(),
         user: Some("someone-else".to_owned()),
+        settle: Some(0),
     };
     let (result, _, _, requests) = sync_with(Dataset::distinct(3), &other, now).await;
     assert!(matches!(result, Err(Error::OtherUser)));
@@ -339,6 +347,7 @@ async fn counts_that_differ_exit_3_and_say_why() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     let now = BASE + 10_000;
     let (result, _, _, _) = sync_with(Dataset::distinct(20), &args, now).await;
@@ -353,7 +362,10 @@ async fn counts_that_differ_exit_3_and_say_why() {
     assert_eq!(err, "");
     let mut lines = out.lines();
     assert!(lines.next().unwrap().starts_with("20 scrobbles up to "));
-    assert!(lines.next().unwrap().starts_with("Last.fm reports 21. "));
+    assert_eq!(
+        lines.next().unwrap().split_once(". ").unwrap().0,
+        "Before 2023-11-15T01:00:00Z Last.fm reports 21 and the file holds 20"
+    );
     // The loved tracks are read whatever the counts said.
     assert_eq!(lines.next(), Some("0 loved tracks."));
 }
@@ -364,6 +376,7 @@ async fn loved_tracks_that_cannot_be_read_fail_the_sync_and_keep_the_history() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     // A track is loved between the first page of the list and the second.
     let faults = Faults {
@@ -405,17 +418,18 @@ async fn a_clock_that_runs_ahead_does_not_put_the_future_on_record() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     // Last.fm says it is `served`; this machine says it is five hours later.
     let served = BASE + 10_000;
-    let ahead = served + 10 * SETTLE;
+    let ahead = served + 10 * CLOCK_TOLERANCE;
     let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
 
     let (result, out, err, _) = sync_on(server, &args, ahead).await;
 
     assert_eq!(result.unwrap(), 0);
     assert!(
-        out.starts_with("20 scrobbles up to 2023-11-15T00:30:00Z, "),
+        out.starts_with("20 scrobbles up to 2023-11-15T01:00:00Z, "),
         "{out}"
     );
     assert!(
@@ -425,21 +439,21 @@ async fn a_clock_that_runs_ahead_does_not_put_the_future_on_record() {
         ),
         "{err}"
     );
-    assert_eq!(covered_to(&args), Some(served - SETTLE));
+    assert_eq!(covered_to(&args), Some(served));
 
     // A track played after that, at a time the machine's clock had already
     // passed, is read by the next sync.
     let mut times: Vec<u64> = (1..=20).map(|i| BASE + 10 * i).collect();
     times.push(served + 60);
-    let later = served + 2 * SETTLE;
+    let later = served + 2 * CLOCK_TOLERANCE;
     let server = FakeLastfm::start(Dataset::from_timestamps(times))
         .await
         .dated(later);
-    let (result, out, _, _) = sync_on(server, &args, later + 10 * SETTLE).await;
+    let (result, out, _, _) = sync_on(server, &args, later + 10 * CLOCK_TOLERANCE).await;
 
     assert_eq!(result.unwrap(), 0);
     assert!(out.starts_with("21 scrobbles up to "), "{out}");
-    assert!(out.contains(", 1 of them new."), "{out}");
+    assert!(out.contains(", 1 more than before."), "{out}");
 }
 
 #[tokio::test]
@@ -448,17 +462,18 @@ async fn a_clock_that_runs_behind_reads_up_to_itself() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
     let now = BASE + 10_000;
     let server = FakeLastfm::start(Dataset::distinct(20))
         .await
-        .dated(now + 10 * SETTLE);
+        .dated(now + 10 * CLOCK_TOLERANCE);
 
     let (result, _, err, _) = sync_on(server, &args, now).await;
 
     assert_eq!(result.unwrap(), 0);
     assert!(!err.contains("clock"), "{err}");
-    assert_eq!(covered_to(&args), Some(now - SETTLE));
+    assert_eq!(covered_to(&args), Some(now));
 }
 
 #[tokio::test]
@@ -489,6 +504,7 @@ async fn without_last_fms_clock_nothing_is_read() {
         let args = SyncArgs {
             db: scratch.db(),
             user: Some(USER.to_owned()),
+            settle: Some(0),
         };
 
         let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
@@ -510,19 +526,112 @@ async fn a_date_at_the_epoch_ends_the_sync_and_stores_nothing() {
     let args = SyncArgs {
         db: scratch.db(),
         user: Some(USER.to_owned()),
+        settle: Some(0),
     };
-    // Earlier than the margin is long: there is nothing before it to read.
-    for served in [0, SETTLE] {
-        let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
+    // There is nothing before the epoch to read.
+    let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(0);
 
-        let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
+    let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
 
-        let Err(error @ Error::Service(_)) = result else {
-            panic!("expected a service error, got {result:?}");
+    let Err(error @ Error::Service(_)) = result else {
+        panic!("expected a service error, got {result:?}");
+    };
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(out, "");
+    assert_eq!(requests, 1);
+    assert_eq!(covered_to(&args), None);
+}
+
+#[test]
+fn settle_is_a_length_of_time() {
+    for (text, seconds) in [
+        ("0", 0),
+        ("45s", 45),
+        ("30m", 1_800),
+        ("12h", 43_200),
+        ("14d", 1_209_600),
+        ("0d", 0),
+    ] {
+        let Command::Sync(parsed) =
+            parse(args(&["sync", "--db", "h.db", "--settle", text])).unwrap()
+        else {
+            panic!("expected a sync");
         };
-        assert_eq!(error.exit_code(), 1);
-        assert_eq!(out, "");
-        assert_eq!(requests, 1);
-        assert_eq!(covered_to(&args), None);
+        assert_eq!(parsed.settle, Some(seconds), "{text}");
     }
+    assert_eq!(
+        parse(args(&["sync", "--db=h.db", "--settle=2d"])).unwrap(),
+        Command::Sync(SyncArgs {
+            db: PathBuf::from("h.db"),
+            user: None,
+            settle: Some(172_800),
+        })
+    );
+    for wrong in [
+        "",
+        "14",
+        "d",
+        "-1d",
+        "1.5d",
+        "14 d",
+        "14D",
+        "2w",
+        "+1d",
+        "1d2h",
+        "99999999999999999999d",
+        "999999999999999999d",
+    ] {
+        let message = usage_error(&["sync", "--db", "h.db", "--settle", wrong]);
+        assert!(message.contains("`--settle` takes"), "{wrong:?}: {message}");
+    }
+    let message = usage_error(&["sync", "--db", "h.db", "--settle", "1d", "--settle", "2d"]);
+    assert!(message.contains("given twice"), "{message}");
+}
+
+#[tokio::test]
+async fn the_newest_days_are_read_again_and_a_play_that_went_is_reported() {
+    let scratch = Scratch::new();
+    let args = SyncArgs {
+        db: scratch.db(),
+        user: Some(USER.to_owned()),
+        settle: None,
+    };
+    let day = 86_400;
+    let now = BASE + 20 * day;
+    // One play a day at noon for twenty days, the newest yesterday.
+    let midnight = now / day * day;
+    let times: Vec<u64> = (1..=20).map(|ago| midnight - ago * day + day / 2).collect();
+    let dataset = Dataset::from_timestamps(times.clone());
+
+    let (result, out, err, _) = sync_with(dataset.clone(), &args, now).await;
+
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(
+        out,
+        "20 scrobbles up to 2023-12-04T22:13:20Z, 20 more than before.\n\
+         0 loved tracks.\n"
+    );
+    // Fourteen days back, to the midnight before: that much is read again.
+    assert_eq!(
+        err.lines().next(),
+        Some("2023-11-20T00:00:00Z to 2023-12-04T22:13:20Z: 14 scrobbles, to be read again")
+    );
+    assert!(
+        err.lines().skip(1).all(|line| !line.contains("again")),
+        "{err}"
+    );
+
+    // Yesterday's play is deleted on the website.
+    let mut after = dataset;
+    after.entries.retain(|entry| entry.ts != midnight - day / 2);
+    let (result, out, _, _) = sync_with(after, &args, now + 60).await;
+
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(
+        out,
+        "19 scrobbles up to 2023-12-04T22:14:20Z, 0 more than before.\n\
+         Last.fm no longer lists 1 that were here at the last sync. The file follows Last.fm \
+         and keeps the pages that had them.\n\
+         0 loved tracks.\n"
+    );
 }
