@@ -147,6 +147,9 @@ pub async fn sync(
         return Err(Error::Service("the cutoff is the epoch; check the clock"));
     }
     store.bind_user(user)?;
+    // Noted before anything else is read from the file, so that whatever
+    // another sync writes from here on is seen when the tail is replaced.
+    let writes = store.writes()?;
     if cutoff < store.covered_to()? {
         return Err(Error::Service(
             "the database already covers a later time than it is now; check the clock",
@@ -170,7 +173,7 @@ pub async fn sync(
     // The tail first, so that the newest history is there whatever happens
     // to the rest.
     let mut lost = 0;
-    let mut replace = async |store: &mut Store, was: Option<&Tail>, from, seal_to, to| {
+    let mut replace = async |store: &mut Store, was: (Option<&Tail>, u64), from, seal_to, to| {
         let change = replace_tail(
             client,
             store,
@@ -188,15 +191,16 @@ pub async fn sync(
         // The old tail reaches past the edge: one reading replaces it, the
         // older part sealed and the newer part the tail from now on.
         Some(tail) if tail.to > sealed_to => {
-            replace(store, Some(tail), tail.from, sealed_to, cutoff).await?;
+            replace(store, (Some(tail), writes), tail.from, sealed_to, cutoff).await?;
         }
         // The whole of the old tail is old enough: it is read once more
         // and sealed, and the new tail is read on its own.
         Some(tail) => {
-            replace(store, Some(tail), tail.from, tail.to, tail.to).await?;
-            replace(store, None, sealed_to, sealed_to, cutoff).await?;
+            replace(store, (Some(tail), writes), tail.from, tail.to, tail.to).await?;
+            let writes = store.writes()?;
+            replace(store, (None, writes), sealed_to, sealed_to, cutoff).await?;
         }
-        None => replace(store, None, sealed_to, sealed_to, cutoff).await?,
+        None => replace(store, (None, writes), sealed_to, sealed_to, cutoff).await?,
     }
 
     for (gap_from, gap_to) in store.gaps(sealed_to)? {
@@ -231,19 +235,27 @@ pub async fn sync(
     })
 }
 
-/// Reads `[from, to)` afresh and puts it in place of the tail `was`: the
+/// Reads `[from, to)` afresh and puts it in place of the tail `was`, which
+/// comes with the count of writes noted when it was looked up: the
 /// part before `seal_to` sealed, the rest as the new tail. Nothing is
 /// asked or stored when the span is empty and there is no tail to replace.
 ///
-/// A scrobble that arrives while the span is read makes Last.fm's answers
-/// disagree, and the scan refuses them. That is no fault here, where the
-/// span reaches the present, so the reading is tried again, three times in
-/// all, and the tail in the database stays as it was until one succeeds.
+/// A scrobble that arrives while the span is read can make Last.fm's
+/// answers disagree with each other, and then the scan refuses them, or
+/// the question that places a window gets an answer that cannot be acted
+/// on. That is no fault here, where the span reaches the present, so the
+/// reading is tried again, three times in all, and the tail in the database
+/// stays as it was until one succeeds. A reading that succeeds is still not
+/// a picture of one moment: the next sync reads the same time again.
+///
+/// The reading is refused by the store if any window was written to the
+/// file while it was being made, which is what another sync at work looks
+/// like.
 async fn replace_tail(
     client: &Client,
     store: &mut Store,
     user: &str,
-    was: Option<&Tail>,
+    (was, writes): (Option<&Tail>, u64),
     (from, seal_to, to): (u64, u64, u64),
     options: Options,
     stored: &mut impl FnMut(Stored),
@@ -259,11 +271,7 @@ async fn replace_tail(
             Ok::<_, Error>((sealed, open))
         };
         match reading.await {
-            Err(Error::Lastfm(error))
-                if error.kind() == ErrorKind::Inconsistent && attempt < TAIL_ATTEMPTS =>
-            {
-                attempt += 1;
-            }
+            Err(error) if disturbed(&error) && attempt < TAIL_ATTEMPTS => attempt += 1,
             reading => break reading?,
         }
     };
@@ -277,7 +285,7 @@ async fn replace_tail(
             sealed,
         })
         .collect();
-    let change = store.replace_tail(was, &windows, time::now())?;
+    let change = store.replace_tail(was, writes, &windows, time::now())?;
     for window in &windows {
         let span = window.summary.window();
         stored(Stored {
@@ -288,6 +296,17 @@ async fn replace_tail(
         });
     }
     Ok(change)
+}
+
+/// Whether an error is what a history that moved during a reading looks
+/// like: answers that disagree with each other, or one that cannot be acted
+/// on.
+fn disturbed(error: &Error) -> bool {
+    match error {
+        Error::Lastfm(error) => error.kind() == ErrorKind::Inconsistent,
+        Error::Service(_) => true,
+        _ => false,
+    }
 }
 
 /// Reads `[from, to)` completely, as windows from its newest end backwards,

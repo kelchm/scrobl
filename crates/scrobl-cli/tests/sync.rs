@@ -1151,3 +1151,103 @@ async fn a_longer_settle_does_not_open_what_is_sealed() {
     );
     assert_whole(&store, second);
 }
+
+#[tokio::test]
+async fn an_answer_that_cannot_be_acted_on_while_the_tail_is_read_is_asked_again() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let cutoff = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(cutoff, 40));
+    // The tail is longer than a window, so its reading begins by asking
+    // where the newest scrobble is. The first answer counts none and holds
+    // one, as an answer made while a scrobble arrived might.
+    let question = [
+        ("method", "user.getRecentTracks".to_owned()),
+        ("user", USER.to_owned()),
+        ("api_key", "k".to_owned()),
+        ("limit", "1".to_owned()),
+        ("to", cutoff.to_string()),
+    ]
+    .map(|(name, value)| (name.to_owned(), value));
+    let (_, body) = respond_to(&dataset, &question);
+    let body = String::from_utf8(body)
+        .unwrap()
+        .replace(r#""total":"40""#, r#""total":"0""#)
+        .replace(r#""totalPages":"40""#, r#""totalPages":"0""#);
+    assert!(body.contains(r#""total":"0""#));
+    let server = FakeLastfm::start(dataset.clone())
+        .await
+        .script([Behaviour::status(200, body)]);
+
+    let result = sync(
+        &client(&server),
+        &mut store,
+        USER,
+        cutoff,
+        settling(60 * DAY),
+        |_| {},
+    )
+    .await;
+
+    let report = result.unwrap();
+    assert_eq!((report.added, report.stored), (40, 40));
+    assert_whole(&store, cutoff);
+}
+
+#[tokio::test]
+async fn a_sync_that_another_overtook_stores_nothing_of_its_tail() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let first = BASE + 500;
+    let dataset = Dataset::from_timestamps(daily(first, 10));
+    run(&dataset, &mut store, first, settling(3 * DAY))
+        .await
+        .1
+        .unwrap();
+
+    // A sync begins and reads the tail. Before it stores what it read,
+    // another one, started later, finishes: the answer to the first sync's
+    // request is held back for long enough.
+    let edge = first / DAY * DAY - 3 * DAY;
+    let question = [
+        ("method", "user.getRecentTracks".to_owned()),
+        ("user", USER.to_owned()),
+        ("api_key", "k".to_owned()),
+        ("limit", "200".to_owned()),
+        ("from", edge.to_string()),
+        ("to", (first + 60).to_string()),
+    ]
+    .map(|(name, value)| (name.to_owned(), value));
+    let (_, body) = respond_to(&dataset, &question);
+    let slow = FakeLastfm::start(dataset.clone())
+        .await
+        .script([Behaviour::Delayed {
+            by: std::time::Duration::from_millis(750),
+            body,
+        }]);
+    let mut other = Store::open(scratch.db()).unwrap();
+    let slow_client = client(&slow);
+    let overtaken = sync(
+        &slow_client,
+        &mut store,
+        USER,
+        first + 60,
+        settling(3 * DAY),
+        |_| {},
+    );
+    let overtaking = async {
+        slow.wait_for_requests(1).await;
+        let (_server, result, _) = run(&dataset, &mut other, first + 120, settling(3 * DAY)).await;
+        result.unwrap();
+    };
+    let (result, ()) = tokio::join!(overtaken, overtaking);
+
+    // The first sync is refused for its stale reading, and the newer tail
+    // is the one in the file.
+    let Err(Error::Database(message)) = result else {
+        panic!("expected a database error, got {result:?}");
+    };
+    assert!(message.contains("another sync"), "{message}");
+    assert_eq!(other.covered_to().unwrap(), first + 120);
+    assert_whole(&other, first + 120);
+}

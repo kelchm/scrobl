@@ -727,9 +727,13 @@ fn the_tail_is_replaced_whole_and_only_by_a_reading_that_covers_it() {
 
     // The first tail, where there was none.
     assert_eq!(store.tail().unwrap(), None);
-    let change = store.replace_tail(None, &[window(old, false)], 1).unwrap();
+    let change = store
+        .replace_tail(None, 0, &[window(old, false)], 1)
+        .unwrap();
     assert_eq!(change, TailChange::default());
     let tail = store.tail().unwrap().unwrap();
+    let writes = store.writes().unwrap();
+    assert_eq!(writes, 1);
     assert_eq!((tail.from, tail.to), (BASE, BASE + 60));
     assert_eq!(store.sealed_to().unwrap(), 0);
     assert_eq!(store.covered_to().unwrap(), BASE + 60);
@@ -749,7 +753,7 @@ fn the_tail_is_replaced_whole_and_only_by_a_reading_that_covers_it() {
         // A sealed window after one that is not.
         vec![window(a, false), window(b, true)],
     ] {
-        let message = database_error(store.replace_tail(Some(&tail), &wrong, 2));
+        let message = database_error(store.replace_tail(Some(&tail), writes, &wrong, 2));
         assert!(message.contains("does not cover"), "{message}");
         assert_eq!(layout(&store), [(BASE, BASE + 60, 5, false)]);
     }
@@ -758,6 +762,7 @@ fn the_tail_is_replaced_whole_and_only_by_a_reading_that_covers_it() {
     let change = store
         .replace_tail(
             Some(&tail),
+            writes,
             &[window(c, false), window(a, true), window(b, false)],
             3,
         )
@@ -775,12 +780,116 @@ fn the_tail_is_replaced_whole_and_only_by_a_reading_that_covers_it() {
     assert_eq!(count(&store, "superseded_windows"), 0);
     assert_eq!(store.sealed_to().unwrap(), BASE + 30);
 
-    // The tail it was read against is gone: another sync got there first.
-    let message = database_error(store.replace_tail(Some(&tail), &[window(old, false)], 4));
-    assert!(message.contains("another sync"), "{message}");
-    let message = database_error(store.replace_tail(None, &[window(c, false)], 4));
+    // A reading made before that write is stale, whatever it holds: another
+    // sync got there first.
+    assert_eq!(store.writes().unwrap(), 2);
+    let now = store.tail().unwrap().unwrap();
+    for stale in [0, 1, 3] {
+        let message = database_error(store.replace_tail(
+            Some(&now),
+            stale,
+            &[window(b, false), window(c, false)],
+            4,
+        ));
+        assert!(message.contains("another sync"), "{message}");
+    }
+    // So is one that takes there to be no tail when there is one, or one
+    // when there is none.
+    let message = database_error(store.replace_tail(None, 2, &[window(c, false)], 4));
     assert!(message.contains("another sync"), "{message}");
     assert_eq!(layout(&store).len(), 3);
+    assert_eq!(store.writes().unwrap(), 2);
+}
+
+#[test]
+fn a_tail_put_back_just_as_it_was_still_counts_as_a_write() {
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    let dataset = Dataset::distinct(10);
+    let (summary, pages) = scan(&dataset, Window::new(BASE, BASE + 200).unwrap(), 200);
+    let window = [TailWindow {
+        summary: &summary,
+        pages: &pages,
+        sealed: false,
+    }];
+    store.replace_tail(None, 0, &window, 1).unwrap();
+    let (tail, writes) = (store.tail().unwrap().unwrap(), store.writes().unwrap());
+    let id = |store: &Store| -> i64 {
+        store
+            .connection()
+            .query_row("SELECT id FROM windows", [], |row| row.get(0))
+            .unwrap()
+    };
+    let first = id(&store);
+
+    // Another sync replaces the tail with the same span. SQLite gives the
+    // new window the number the old one had, so nothing about the tail
+    // itself shows that it was replaced.
+    store.replace_tail(Some(&tail), writes, &window, 2).unwrap();
+    assert_eq!(id(&store), first);
+    assert_eq!(store.tail().unwrap().unwrap(), tail);
+
+    // The reading made before that is refused all the same.
+    let message = database_error(store.replace_tail(Some(&tail), writes, &window, 3));
+    assert!(message.contains("another sync"), "{message}");
+}
+
+#[test]
+fn final_history_never_lies_above_the_tail() {
+    let dataset = Dataset::distinct(10);
+    let scan = |from: u64, to: u64| scan(&dataset, Window::new(from, to).unwrap(), 200);
+    let (low, high) = (scan(BASE, BASE + 50), scan(BASE + 50, BASE + 200));
+    fn tail(scan: &(ScanSummary, Vec<ScanPage>)) -> Vec<TailWindow<'_>> {
+        vec![TailWindow {
+            summary: &scan.0,
+            pages: &scan.1,
+            sealed: false,
+        }]
+    }
+
+    // A tail below a sealed window that another sync stored meanwhile.
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    store.commit_window(&high.0, &high.1, 1).unwrap();
+    let writes = store.writes().unwrap();
+    let message = database_error(store.replace_tail(None, writes, &tail(&low), 2));
+    assert!(message.contains("final history above"), "{message}");
+    assert_eq!(layout(&store), [(BASE + 50, BASE + 200, 6, true)]);
+    assert_eq!(store.writes().unwrap(), writes);
+
+    // A sealed window above the tail.
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    store.replace_tail(None, 0, &tail(&low), 1).unwrap();
+    let message = database_error(store.commit_window(&high.0, &high.1, 2));
+    assert!(message.contains("final history above"), "{message}");
+    assert_eq!(layout(&store), [(BASE, BASE + 50, 4, false)]);
+
+    // Below it is where sealed history belongs.
+    let (older, _) = (scan(BASE - 100, BASE), ());
+    store.commit_window(&older.0, &older.1, 3).unwrap();
+    assert_eq!(layout(&store).len(), 2);
+}
+
+#[test]
+fn a_tail_window_shows_nothing_the_network_chose() {
+    let dataset = Dataset::distinct(3);
+    let (summary, pages) = scan(&dataset, Window::new(BASE, BASE + 100).unwrap(), 200);
+    let shown = format!(
+        "{:?}",
+        TailWindow {
+            summary: &summary,
+            pages: &pages,
+            sealed: false,
+        }
+    );
+    assert_eq!(
+        shown,
+        format!(
+            "TailWindow {{ from: Some({BASE}), to: Some({}), total: 3, sealed: false }}",
+            BASE + 100
+        )
+    );
 }
 
 #[test]
@@ -792,8 +901,10 @@ fn a_new_tail_may_not_overlap_what_is_sealed() {
     store.commit_window(&summary, &pages, 0).unwrap();
 
     let (summary, pages) = scan(&dataset, Window::new(BASE + 30, BASE + 200).unwrap(), 200);
+    let writes = store.writes().unwrap();
     let message = database_error(store.replace_tail(
         None,
+        writes,
         &[TailWindow {
             summary: &summary,
             pages: &pages,
@@ -823,6 +934,7 @@ fn every_reading_that_lost_a_scrobble_is_kept_under_a_number_of_its_own() {
         store
             .replace_tail(
                 was.as_ref(),
+                store.writes().unwrap(),
                 &[TailWindow {
                     summary: &summary,
                     pages: &pages,
@@ -846,6 +958,16 @@ fn every_reading_that_lost_a_scrobble_is_kept_under_a_number_of_its_own() {
     // A reading that only gained keeps nothing.
     let change = replace(&full, 5);
     assert_eq!((change.lost, change.gained), (0, 2));
+    // Two plays of one track in one second are two scrobbles, and one of
+    // them going is a loss. Nothing but their number tells them apart.
+    let mut twice = full.clone();
+    let mut again = twice.entries[0].clone();
+    again.marker = 99;
+    twice.entries.insert(0, again);
+    let change = replace(&twice, 6);
+    assert_eq!((change.lost, change.gained), (0, 1));
+    let change = replace(&full, 7);
+    assert_eq!((change.lost, change.gained), (1, 0));
 
     let kept: Vec<(u64, u64, u64)> = store
         .connection()
@@ -855,7 +977,7 @@ fn every_reading_that_lost_a_scrobble_is_kept_under_a_number_of_its_own() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(kept, [(6, 1, 2), (5, 2, 3), (4, 3, 4)]);
-    assert_eq!(count(&store, "superseded_pages"), 3);
+    assert_eq!(kept, [(6, 1, 2), (5, 2, 3), (4, 3, 4), (7, 6, 7)]);
+    assert_eq!(count(&store, "superseded_pages"), 4);
     assert_eq!(count(&store, "scrobbles"), 6);
 }

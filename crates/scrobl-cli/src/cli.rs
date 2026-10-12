@@ -52,8 +52,9 @@ Options:
   --user <name>    The Last.fm user; needed the first time only
   --settle <time>  How old a scrobble must be before it is final: a number
                    and s, m, h or d, such as 12h or 14d (the default).
-                   Everything newer is read again by every sync, because
-                   scrobbles arrive late. 0 makes everything final at once
+                   What is not final yet is read again by every sync,
+                   because scrobbles arrive late. 0 makes everything final
+                   at once. What is final stays final
   -h, --help       Show this help
   -V, --version    Show the version
 

@@ -172,8 +172,6 @@ fn upgrade_from_1(connection: &mut Connection) -> Result<(), Error> {
 /// the next sync reads again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tail {
-    /// The windows, as the database numbers them.
-    ids: Vec<i64>,
     /// The inclusive lower bound of the oldest.
     pub from: u64,
     /// The exclusive upper bound of the newest.
@@ -181,7 +179,11 @@ pub struct Tail {
 }
 
 /// One window of a new reading of the tail.
-#[derive(Debug, Clone, Copy)]
+///
+/// `Debug` shows the window's bounds, its total and whether it is sealed,
+/// and nothing of the pages or of the user, which are text the network
+/// chose.
+#[derive(Clone, Copy)]
 pub struct TailWindow<'a> {
     /// What the scan returned when it finished.
     pub summary: &'a ScanSummary,
@@ -189,6 +191,18 @@ pub struct TailWindow<'a> {
     pub pages: &'a [ScanPage],
     /// Whether the window is final from now on.
     pub sealed: bool,
+}
+
+impl std::fmt::Debug for TailWindow<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let window = self.summary.window();
+        f.debug_struct("TailWindow")
+            .field("from", &window.from())
+            .field("to", &window.to())
+            .field("total", &self.summary.total())
+            .field("sealed", &self.sealed)
+            .finish()
+    }
 }
 
 /// How a new reading of the tail differs from the one it replaced, over the
@@ -275,6 +289,32 @@ fn insert_window(
             ])?;
         }
     }
+    Ok(())
+}
+
+/// Ends a transaction that wrote windows: counts the write, and refuses to
+/// commit a layout in which a sealed window lies above one that is not.
+/// The tail is the newest history or it is nothing.
+fn finish_write(transaction: rusqlite::Transaction<'_>) -> Result<(), Error> {
+    let ordered: bool = transaction.query_row(
+        "SELECT coalesce((SELECT max(to_ts) FROM windows WHERE sealed = 1), 0)
+             <= coalesce((SELECT min(from_ts) FROM windows WHERE sealed = 0),
+                         9223372036854775807)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !ordered {
+        return Err(Error::Database(
+            "the window would leave final history above the part still being read; is another \
+             sync running?",
+        ));
+    }
+    transaction.execute(
+        "INSERT INTO meta (key, value) VALUES ('writes', '1')
+         ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        [],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -442,8 +482,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         insert_window(&transaction, summary, pages, true, read_at)?;
-        transaction.commit()?;
-        Ok(())
+        finish_write(transaction)
     }
 
     /// Whether `pages` are the pages `summary` describes, of a scan of the
@@ -492,20 +531,36 @@ impl Store {
     ///
     /// [`Error::Sqlite`].
     pub fn tail(&self) -> Result<Option<Tail>, Error> {
-        let mut statement = self
+        let span: (Option<u64>, Option<u64>) = self.connection.query_row(
+            "SELECT min(from_ts), max(to_ts) FROM windows WHERE sealed = 0",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(match span {
+            (Some(from), Some(to)) => Some(Tail { from, to }),
+            _ => None,
+        })
+    }
+
+    /// How many times windows have been written to the file, by any
+    /// process. A reading that is to replace the tail notes this before it
+    /// starts, and [`replace_tail`](Self::replace_tail) refuses it if the
+    /// number has moved since: a window's own number will not do, because
+    /// SQLite uses one again once its window is gone.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`].
+    pub fn writes(&self) -> Result<u64, Error> {
+        Ok(self
             .connection
-            .prepare("SELECT id, from_ts, to_ts FROM windows WHERE sealed = 0 ORDER BY from_ts")?;
-        let windows = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .collect::<Result<Vec<(i64, u64, u64)>, _>>()?;
-        let (Some(first), Some(last)) = (windows.first(), windows.last()) else {
-            return Ok(None);
-        };
-        Ok(Some(Tail {
-            ids: windows.iter().map(|(id, ..)| *id).collect(),
-            from: first.1,
-            to: last.2,
-        }))
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'writes'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
     }
 
     /// Where the stored history ends: the upper bound of the newest window,
@@ -539,7 +594,8 @@ impl Store {
     /// Replaces the tail with a new reading of it, in one transaction.
     ///
     /// `was` is the tail as [`tail`](Self::tail) gave it before the reading
-    /// began, or `None` if there was none. `windows` are the new reading,
+    /// began, or `None` if there was none, and `writes` is what
+    /// [`writes`](Self::writes) gave then. `windows` are the new reading,
     /// in any order: they must lie end to end, start where the old tail
     /// started and reach at least as far, and the sealed ones must come
     /// before the others. Each is checked as
@@ -556,13 +612,15 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// [`Error::Database`] when the tail in the file is not the one `was`
-    /// describes (another sync replaced it), when `windows` do not fit as
-    /// said above, or when one overlaps a sealed window. Nothing is written
-    /// in any of those cases: the tail stays as it was.
+    /// [`Error::Database`] when windows were written to the file since
+    /// `writes` was read (another sync was at work), when `windows` do not
+    /// fit as said above, or when one overlaps a sealed window or would lie
+    /// below one. Nothing is written in any of those cases: the tail stays
+    /// as it was.
     pub fn replace_tail(
         &mut self,
         was: Option<&Tail>,
+        writes: u64,
         windows: &[TailWindow<'_>],
         read_at: u64,
     ) -> Result<TailChange, Error> {
@@ -597,14 +655,22 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let written: u64 = transaction
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'writes'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
         let now: Vec<i64> = transaction
             .prepare("SELECT id FROM windows WHERE sealed = 0 ORDER BY from_ts")?
             .query_map([], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
-        if now != was.map_or(&[][..], |was| &was.ids) {
+        if written != writes || now.is_empty() != was.is_none() {
             return Err(Error::Database(
-                "the recent history in the file changed while it was read; is another sync \
-                 running?",
+                "the history in the file changed while its newest part was read; is another \
+                 sync running?",
             ));
         }
 
@@ -682,7 +748,7 @@ impl Store {
                 read_at,
             )?;
         }
-        transaction.commit()?;
+        finish_write(transaction)?;
         Ok(change)
     }
 
