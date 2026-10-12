@@ -149,7 +149,7 @@ pub async fn sync(
     store.bind_user(user)?;
     // Noted before anything else is read from the file, so that whatever
     // another sync writes from here on is seen when the tail is replaced.
-    let writes = store.writes()?;
+    let (tail, writes) = store.tail_and_writes()?;
     if cutoff < store.covered_to()? {
         return Err(Error::Service(
             "the database already covers a later time than it is now; check the clock",
@@ -159,7 +159,6 @@ pub async fn sync(
 
     // The sealed edge: a whole day, and never earlier than what is sealed
     // already or than where the tail began.
-    let tail = store.tail()?;
     let settled = match options.settle {
         0 => cutoff,
         settle => cutoff.saturating_sub(settle) / 86_400 * 86_400,
@@ -497,6 +496,7 @@ pub async fn loved(
     page_size: u32,
 ) -> Result<u64, Error> {
     store.bind_user(user)?;
+    let writes = store.writes()?;
     let mut pages: Vec<Response<LovedTracksPage>> = Vec::new();
     loop {
         let page = loved_page(client, user, page_size, pages.len() as u32 + 1).await?;
@@ -524,7 +524,7 @@ pub async fn loved(
                 return Err(CHANGED);
             }
         }
-        store.replace_loved(&pages, time::now())?;
+        store.replace_loved(&pages, time::now(), writes)?;
         return Ok(total);
     }
 }

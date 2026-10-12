@@ -45,6 +45,12 @@ pub enum Behaviour {
     },
     /// Read the request, wait `by`, then answer 200 with this body.
     Delayed { by: Duration, body: Vec<u8> },
+    /// Read the request, wait until `until` holds `true`, then answer 200
+    /// with this body.
+    Held {
+        until: watch::Receiver<bool>,
+        body: Vec<u8>,
+    },
     /// Read the request, then say nothing and keep the socket open.
     StallBeforeResponse,
     /// Send the headers and the start of a body, then say nothing.
@@ -546,6 +552,10 @@ async fn serve_one(
         }
         Behaviour::Delayed { by, body } => {
             tokio::time::sleep(by).await;
+            reply(stream, 200, &[], &body, keep_alive).await.is_ok()
+        }
+        Behaviour::Held { mut until, body } => {
+            let _ = until.wait_for(|open| *open).await;
             reply(stream, 200, &[], &body, keep_alive).await.is_ok()
         }
         Behaviour::StallBeforeResponse => std::future::pending().await,

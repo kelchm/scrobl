@@ -292,7 +292,8 @@ fn insert_window(
     Ok(())
 }
 
-/// Ends a transaction that wrote windows: counts the write, and refuses to
+/// Ends a transaction that wrote windows or the loved tracks: counts the
+/// write, and refuses to
 /// commit a layout in which a sealed window lies above one that is not.
 /// The tail is the newest history or it is nothing.
 fn finish_write(transaction: rusqlite::Transaction<'_>) -> Result<(), Error> {
@@ -542,11 +543,34 @@ impl Store {
         })
     }
 
-    /// How many times windows have been written to the file, by any
-    /// process. A reading that is to replace the tail notes this before it
-    /// starts, and [`replace_tail`](Self::replace_tail) refuses it if the
-    /// number has moved since: a window's own number will not do, because
-    /// SQLite uses one again once its window is gone.
+    /// The tail and the count of writes, read as one: what a sync notes
+    /// before it reads anything else, so that no write can fall between the
+    /// two.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`].
+    pub fn tail_and_writes(&self) -> Result<(Option<Tail>, u64), Error> {
+        let (from, to, writes): (Option<u64>, Option<u64>, u64) = self.connection.query_row(
+            "SELECT (SELECT min(from_ts) FROM windows WHERE sealed = 0),
+                    (SELECT max(to_ts) FROM windows WHERE sealed = 0),
+                    coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'writes'), 0)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let tail = match (from, to) {
+            (Some(from), Some(to)) => Some(Tail { from, to }),
+            _ => None,
+        };
+        Ok((tail, writes))
+    }
+
+    /// How many times the history or the loved tracks have been written to
+    /// the file, by any process. A reading that is to replace something
+    /// notes this before it starts, and [`replace_tail`](Self::replace_tail)
+    /// and [`replace_loved`](Self::replace_loved) refuse it if the number
+    /// has moved since: a window's own number will not do, because SQLite
+    /// uses one again once its window is gone.
     ///
     /// # Errors
     ///
@@ -754,7 +778,8 @@ impl Store {
 
     /// Replaces the loved tracks with `pages`, the whole list as one read
     /// returned it, page 1 first. The time of the read is kept in `meta` as
-    /// `loved_read_at`. All of it is written in one transaction.
+    /// `loved_read_at`. All of it is written in one transaction. `writes` is
+    /// what [`writes`](Self::writes) gave before the read began.
     ///
     /// # Errors
     ///
@@ -762,11 +787,14 @@ impl Store {
     /// are none, when they are out of order, when they disagree about the
     /// total, the page size or the user, when the user is not the one the
     /// database belongs to, or when they do not hold as many tracks as the
-    /// total says. Nothing is written in any of those cases.
+    /// total says, or when the file was written to since `writes` was read
+    /// (another sync was at work, and its list may be the newer one).
+    /// Nothing is written in any of those cases.
     pub fn replace_loved(
         &mut self,
         pages: &[Response<LovedTracksPage>],
         read_at: u64,
+        writes: u64,
     ) -> Result<(), Error> {
         let Some(first) = pages.first().map(|page| page.attr()) else {
             return Err(Error::Database("a list of loved tracks has a first page"));
@@ -791,6 +819,19 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let written: u64 = transaction
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'writes'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if written != writes {
+            return Err(Error::Database(
+                "the file changed while the loved tracks were read; is another sync running?",
+            ));
+        }
         transaction.execute("DELETE FROM loved", [])?;
         transaction.execute("DELETE FROM loved_pages", [])?;
         {
@@ -822,8 +863,7 @@ impl Store {
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             [read_at.to_string()],
         )?;
-        transaction.commit()?;
-        Ok(())
+        finish_write(transaction)
     }
 
     /// The number of scrobbles stored with a timestamp before `cutoff`.

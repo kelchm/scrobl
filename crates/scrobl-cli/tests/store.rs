@@ -184,7 +184,9 @@ fn a_version_1_file_is_brought_up_to_date_and_keeps_its_history() {
 
         // It takes the loved tracks, and a window, like a new file.
         let dataset = Dataset::distinct(1).with_loved(3);
-        store.replace_loved(&loved_pages(&dataset, 2), 100).unwrap();
+        store
+            .replace_loved(&loved_pages(&dataset, 2), 100, store.writes().unwrap())
+            .unwrap();
         assert_eq!(count(&store, "loved"), 3);
         drop(store);
         // And opens again as it is.
@@ -518,7 +520,9 @@ fn loved_tracks_are_stored_with_the_pages_they_came_on() {
     let dataset = Dataset::distinct(1).with_loved(3);
     let pages = loved_pages(&dataset, 2);
 
-    store.replace_loved(&pages, 1_800_000_000).unwrap();
+    store
+        .replace_loved(&pages, 1_800_000_000, store.writes().unwrap())
+        .unwrap();
 
     assert_eq!(
         loved_rows(&store),
@@ -560,7 +564,9 @@ fn a_read_of_the_loved_tracks_replaces_the_one_before() {
     let mut store = Store::open(scratch.db()).unwrap();
     store.bind_user(USER).unwrap();
     let before = Dataset::distinct(1).with_loved(5);
-    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
+    store
+        .replace_loved(&loved_pages(&before, 2), 100, store.writes().unwrap())
+        .unwrap();
     assert_eq!(
         (count(&store, "loved"), count(&store, "loved_pages")),
         (5, 3)
@@ -568,7 +574,9 @@ fn a_read_of_the_loved_tracks_replaces_the_one_before() {
 
     // Three were unloved since.
     let after = Dataset::distinct(1).with_loved(2);
-    store.replace_loved(&loved_pages(&after, 2), 200).unwrap();
+    store
+        .replace_loved(&loved_pages(&after, 2), 200, store.writes().unwrap())
+        .unwrap();
 
     assert_eq!(
         (count(&store, "loved"), count(&store, "loved_pages")),
@@ -578,7 +586,9 @@ fn a_read_of_the_loved_tracks_replaces_the_one_before() {
 
     // And none at all is a list too: one page with no rows.
     let none = Dataset::distinct(1);
-    store.replace_loved(&loved_pages(&none, 2), 300).unwrap();
+    store
+        .replace_loved(&loved_pages(&none, 2), 300, store.writes().unwrap())
+        .unwrap();
     assert_eq!(
         (count(&store, "loved"), count(&store, "loved_pages")),
         (0, 1)
@@ -593,10 +603,12 @@ fn pages_that_are_not_one_whole_list_of_loved_tracks_are_refused() {
     let pages = loved_pages(&dataset, 2);
 
     // A database that belongs to no one yet cannot say whose list this is.
-    database_error(store.replace_loved(&pages, 100));
+    database_error(store.replace_loved(&pages, 100, store.writes().unwrap()));
 
     store.bind_user(USER).unwrap();
-    store.replace_loved(&pages, 100).unwrap();
+    store
+        .replace_loved(&pages, 100, store.writes().unwrap())
+        .unwrap();
 
     let mut swapped = pages.clone();
     swapped.swap(0, 1);
@@ -617,7 +629,7 @@ fn pages_that_are_not_one_whole_list_of_loved_tracks_are_refused() {
         &mixed,
         &grown,
     ] {
-        let message = database_error(store.replace_loved(wrong, 200));
+        let message = database_error(store.replace_loved(wrong, 200, store.writes().unwrap()));
         assert!(message.contains("loved tracks"), "{message}");
     }
 
@@ -635,7 +647,9 @@ fn a_replacement_that_fails_part_way_keeps_the_list_before() {
     let mut store = Store::open(scratch.db()).unwrap();
     store.bind_user(USER).unwrap();
     let before = Dataset::distinct(1).with_loved(3);
-    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
+    store
+        .replace_loved(&loved_pages(&before, 2), 100, store.writes().unwrap())
+        .unwrap();
     let bodies = |store: &Store| -> Vec<Vec<u8>> {
         store
             .connection()
@@ -652,7 +666,7 @@ fn a_replacement_that_fails_part_way_keeps_the_list_before() {
     // it fails after a page and a track of the new list went in.
     let mut after = Dataset::distinct(1).with_loved(4);
     after.loved[1] = u64::MAX;
-    let failed = store.replace_loved(&loved_pages(&after, 2), 200);
+    let failed = store.replace_loved(&loved_pages(&after, 2), 200, store.writes().unwrap());
 
     assert!(matches!(failed, Err(Error::Sqlite(_))), "{failed:?}");
     assert_eq!(loved_rows(&store), kept);
@@ -980,4 +994,51 @@ fn every_reading_that_lost_a_scrobble_is_kept_under_a_number_of_its_own() {
     assert_eq!(kept, [(6, 1, 2), (5, 2, 3), (4, 3, 4), (7, 6, 7)]);
     assert_eq!(count(&store, "superseded_pages"), 4);
     assert_eq!(count(&store, "scrobbles"), 6);
+}
+
+#[test]
+fn any_write_makes_a_reading_begun_before_it_stale() {
+    let scratch = Scratch::new();
+    let mut store = bound(&scratch);
+    let dataset = Dataset::distinct(10).with_loved(3);
+    let scan = |from: u64, to: u64| scan(&dataset, Window::new(from, to).unwrap(), 200);
+    let (old, tail) = (scan(BASE - 100, BASE), scan(BASE, BASE + 200));
+    let reading = [TailWindow {
+        summary: &tail.0,
+        pages: &tail.1,
+        sealed: false,
+    }];
+    let loved = loved_pages(&dataset, 2);
+
+    // A new file has seen no write, and the tail and the count are read
+    // as one.
+    assert_eq!(store.tail_and_writes().unwrap(), (None, 0));
+
+    // A sealed window counts, though it touches no tail: a reading of the
+    // tail and one of the loved tracks, both begun before it, are refused.
+    let before = store.writes().unwrap();
+    store.commit_window(&old.0, &old.1, 1).unwrap();
+    assert_eq!(store.writes().unwrap(), before + 1);
+    let message = database_error(store.replace_tail(None, before, &reading, 2));
+    assert!(message.contains("another sync"), "{message}");
+    let message = database_error(store.replace_loved(&loved, 2, before));
+    assert!(message.contains("another sync"), "{message}");
+    assert_eq!(count(&store, "loved"), 0);
+
+    // So does the tail, and so do the loved tracks.
+    let before = store.writes().unwrap();
+    store.replace_tail(None, before, &reading, 3).unwrap();
+    let (now, writes) = store.tail_and_writes().unwrap();
+    assert_eq!(writes, before + 1);
+    assert_eq!(
+        now.map(|tail| (tail.from, tail.to)),
+        Some((BASE, BASE + 200))
+    );
+    database_error(store.replace_loved(&loved, 3, before));
+    store.replace_loved(&loved, 3, writes).unwrap();
+    assert_eq!(store.writes().unwrap(), writes + 1);
+    // A list read before another one was stored does not replace it.
+    let message = database_error(store.replace_loved(&loved, 4, writes));
+    assert!(message.contains("another sync"), "{message}");
+    assert_eq!(loved_read_at(&store).as_deref(), Some("3"));
 }

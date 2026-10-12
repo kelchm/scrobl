@@ -1207,7 +1207,7 @@ async fn a_sync_that_another_overtook_stores_nothing_of_its_tail() {
 
     // A sync begins and reads the tail. Before it stores what it read,
     // another one, started later, finishes: the answer to the first sync's
-    // request is held back for long enough.
+    // request is held back until then.
     let edge = first / DAY * DAY - 3 * DAY;
     let question = [
         ("method", "user.getRecentTracks".to_owned()),
@@ -1219,12 +1219,10 @@ async fn a_sync_that_another_overtook_stores_nothing_of_its_tail() {
     ]
     .map(|(name, value)| (name.to_owned(), value));
     let (_, body) = respond_to(&dataset, &question);
+    let (release, until) = tokio::sync::watch::channel(false);
     let slow = FakeLastfm::start(dataset.clone())
         .await
-        .script([Behaviour::Delayed {
-            by: std::time::Duration::from_millis(750),
-            body,
-        }]);
+        .script([Behaviour::Held { until, body }]);
     let mut other = Store::open(scratch.db()).unwrap();
     let slow_client = client(&slow);
     let overtaken = sync(
@@ -1239,6 +1237,7 @@ async fn a_sync_that_another_overtook_stores_nothing_of_its_tail() {
         slow.wait_for_requests(1).await;
         let (_server, result, _) = run(&dataset, &mut other, first + 120, settling(3 * DAY)).await;
         result.unwrap();
+        release.send(true).unwrap();
     };
     let (result, ()) = tokio::join!(overtaken, overtaking);
 
