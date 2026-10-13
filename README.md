@@ -125,7 +125,7 @@ sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM 
 sqlite3 history.db "SELECT json_extract(raw, '$.url') FROM scrobbles LIMIT 1"
 ```
 
-Scrobbles are never merged: two plays in the same second are two rows.
+Scrobbles are never merged: two plays in the same second are two rows, and `ORDER BY timestamp, id` is the order of listening.
 
 ## Last.fm's terms
 
