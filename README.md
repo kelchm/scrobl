@@ -118,7 +118,7 @@ Anything that reads SQLite can query it:
 # The ten artists played most
 sqlite3 history.db "SELECT artist, count(*) FROM scrobbles GROUP BY artist ORDER BY 2 DESC LIMIT 10"
 
-# The last twenty plays, in the order of listening
+# The last twenty plays, newest first
 sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM scrobbles ORDER BY timestamp DESC, id DESC LIMIT 20"
 
 # What Last.fm sent that has no column of its own

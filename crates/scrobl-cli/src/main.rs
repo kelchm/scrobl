@@ -7,9 +7,7 @@ use scrobl_cli::cli;
 
 fn main() -> ExitCode {
     let api_key = std::env::var("SCROBL_API_KEY").ok().map(ApiKey::new);
-    let args = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned());
+    let args = std::env::args_os().skip(1);
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
 
     // The client spawns nothing, so one thread is all it needs.
