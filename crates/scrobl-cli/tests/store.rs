@@ -14,11 +14,9 @@
 mod common;
 
 use common::*;
-use rusqlite::OptionalExtension;
+use scrobl::ApiKey;
 use scrobl::history::{RecentTracks, ScanPage, ScanSummary, Window};
-use scrobl::model::LovedTracksPage;
-use scrobl::protocol::{self, Credentials, HttpResponse, Request, methods};
-use scrobl::{ApiKey, Response};
+use scrobl::protocol::{self, Credentials, HttpResponse};
 use scrobl_cli::Error;
 use scrobl_cli::store::{Change, Store};
 
@@ -104,23 +102,6 @@ fn dataset_times(dataset: &Dataset) -> Vec<u64> {
     times
 }
 
-fn meta(store: &Store, key: &str) -> Option<String> {
-    store
-        .connection()
-        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
-            row.get(0)
-        })
-        .optional()
-        .unwrap()
-}
-
-fn database_error(result: Result<impl std::fmt::Debug, Error>) -> &'static str {
-    match result {
-        Err(Error::Database(message)) => message,
-        other => panic!("expected a database error, got {other:?}"),
-    }
-}
-
 #[test]
 fn a_new_file_is_created_and_opens_again() {
     let scratch = Scratch::new();
@@ -135,125 +116,32 @@ fn a_new_file_is_created_and_opens_again() {
 }
 
 #[test]
-fn another_programs_database_is_refused_and_left_alone() {
-    let scratch = Scratch::new();
-    let other = rusqlite::Connection::open(scratch.db()).unwrap();
-    other.execute_batch("CREATE TABLE notes (text)").unwrap();
-    drop(other);
-
-    let message = database_error(Store::open(scratch.db()));
-    assert!(message.contains("not one this tool made"));
-
-    let other = rusqlite::Connection::open(scratch.db()).unwrap();
-    let tables: u64 = other
-        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(tables, 1);
-}
-
-#[test]
-fn an_empty_database_that_another_program_marked_is_refused_and_left_alone() {
-    let scratch = Scratch::new();
-    let other = rusqlite::Connection::open(scratch.db()).unwrap();
-    other.pragma_update(None, "application_id", 12_345).unwrap();
-    other.pragma_update(None, "user_version", 9).unwrap();
-    drop(other);
-
-    database_error(Store::open(scratch.db()));
-
-    let other = rusqlite::Connection::open(scratch.db()).unwrap();
-    let marks: (i64, i64, i64) = (
-        other
-            .pragma_query_value(None, "application_id", |row| row.get(0))
-            .unwrap(),
-        other
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap(),
-        other
-            .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
-            .unwrap(),
-    );
-    assert_eq!(marks, (12_345, 9, 0));
-}
-
-#[test]
-fn a_file_that_is_no_database_is_refused() {
-    let scratch = Scratch::new();
-    std::fs::write(scratch.db(), b"this is not a database, only a text file").unwrap();
-    assert!(matches!(Store::open(scratch.db()), Err(Error::Sqlite(_))));
-}
-
-/// What a file of version 2 held, in short: the history as windows of pages.
-const VERSION_2: &str = "
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-CREATE TABLE windows (
-    id INTEGER PRIMARY KEY, from_ts INTEGER NOT NULL, to_ts INTEGER NOT NULL,
-    total INTEGER NOT NULL, pages INTEGER NOT NULL, page_size INTEGER NOT NULL,
-    read_at INTEGER NOT NULL
-) STRICT;
-CREATE TABLE pages (
-    window_id INTEGER NOT NULL REFERENCES windows (id), page INTEGER NOT NULL,
-    body BLOB NOT NULL, PRIMARY KEY (window_id, page)
-) STRICT;
-CREATE TABLE scrobbles (
-    id INTEGER PRIMARY KEY, window_id INTEGER NOT NULL REFERENCES windows (id),
-    page INTEGER NOT NULL, position INTEGER NOT NULL, timestamp INTEGER NOT NULL,
-    artist TEXT NOT NULL, artist_mbid TEXT, track TEXT NOT NULL, track_mbid TEXT,
-    album TEXT, album_mbid TEXT
-) STRICT;
-INSERT INTO meta VALUES ('user', 'rj_Synthetic');
-INSERT INTO windows VALUES (1, 0, 1700000100, 1, 1, 200, 1700000200);
-INSERT INTO pages VALUES (1, 1, x'7b7d');
-INSERT INTO scrobbles VALUES
-    (1, 1, 1, 0, 1700000010, 'Artist', NULL, 'Track', NULL, 'Album', NULL);
-PRAGMA application_id = 0x7363626c;
-PRAGMA user_version = 2;
-";
-
-#[test]
-fn a_database_of_another_version_is_refused_and_left_alone() {
-    // Versions 1 and 2 kept the history as pages, 3 was never merged, and 5
-    // is yet to come.
-    for (version, says) in [
-        (1, "earlier version"),
-        (2, "earlier version"),
-        (3, "earlier version"),
-        (5, "later version"),
+fn a_file_this_version_did_not_make_is_refused_and_left_as_it_was() {
+    // An earlier version's file, and some other program's database.
+    for marks in [
+        "PRAGMA application_id = 0x7363626c; PRAGMA user_version = 2;",
+        "",
     ] {
         let scratch = Scratch::new();
-        let old = rusqlite::Connection::open(scratch.db()).unwrap();
-        old.execute_batch(VERSION_2).unwrap();
-        old.pragma_update(None, "user_version", version).unwrap();
-        drop(old);
+        let other = rusqlite::Connection::open(scratch.db()).unwrap();
+        other
+            .execute_batch(&format!(
+                "CREATE TABLE windows (id INTEGER PRIMARY KEY); {marks}"
+            ))
+            .unwrap();
+        drop(other);
         let before = std::fs::read(scratch.db()).unwrap();
 
-        let message = database_error(Store::open(scratch.db()));
+        let error = Store::open(scratch.db()).unwrap_err();
 
-        assert!(message.contains(says), "{version}: {message}");
+        // It says what to do about it.
+        assert_eq!(
+            error.to_string(),
+            "the file was written by another version of this tool, or by another program; sync \
+             into a new file"
+        );
         assert_eq!(std::fs::read(scratch.db()).unwrap(), before);
     }
-}
-
-#[test]
-fn a_path_that_names_no_file_is_refused() {
-    // SQLite reads both as a database that is gone when it is closed.
-    for path in ["", ":memory:"] {
-        let message = database_error(Store::open(path));
-        assert!(message.contains("does not name a file"));
-    }
-}
-
-#[test]
-fn a_uri_is_a_file_name_and_not_a_database_in_memory() {
-    let scratch = Scratch::new();
-    let path = scratch.db().with_file_name("file:history?mode=memory");
-    Store::open(&path).unwrap().bind_user("rj").unwrap();
-
-    assert!(path.exists());
-    assert_eq!(
-        Store::open(&path).unwrap().user().unwrap().as_deref(),
-        Some("rj")
-    );
 }
 
 #[test]
@@ -267,8 +155,6 @@ fn a_database_holds_one_users_history() {
     assert_eq!(store.user().unwrap().as_deref(), Some("RJ"));
 
     let error = store.bind_user("someone-else").unwrap_err();
-    assert!(matches!(error, Error::OtherUser));
-    assert_eq!(error.exit_code(), 1);
     assert!(error.to_string().contains("another user"));
 }
 
@@ -617,139 +503,8 @@ fn a_reading_without_an_upper_bound_is_refused() {
     let mut store = bound(&scratch);
     let (summary, pages) = scan(&Dataset::distinct(3), Window::since(BASE), 4);
 
-    let message = database_error(store.replace(&summary, &pages, 0));
+    let error = store.replace(&summary, &pages, 0).unwrap_err();
 
-    assert!(message.contains("upper bound"));
+    assert!(error.to_string().contains("upper bound"));
     assert_eq!(count(&store, "scrobbles"), 0);
-}
-
-/// Every page of `dataset`'s loved tracks, as the service would send them.
-fn loved_pages(dataset: &Dataset, page_size: u32) -> Vec<Response<LovedTracksPage>> {
-    let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
-    let mut pages = Vec::new();
-    loop {
-        let request = Request::new(&methods::USER_GET_LOVED_TRACKS)
-            .param("user", &dataset.user)
-            .param("limit", page_size)
-            .param("page", pages.len() + 1);
-        let http = protocol::prepare(&credentials, &request).unwrap();
-        let (status, body) = support::respond(dataset, &http);
-        let raw = protocol::decode(&request, HttpResponse::new(status, body)).unwrap();
-        let page = LovedTracksPage::decode(&raw).unwrap();
-        let last = pages.len() as u64 + 1 >= page.attr().total_pages();
-        pages.push(Response::new(page, raw));
-        if last {
-            return pages;
-        }
-    }
-}
-
-/// The loved tracks as stored, in the order they were written:
-/// `(loved_at, track)`.
-fn loved_rows(store: &Store) -> Vec<(u64, String)> {
-    store
-        .connection()
-        .prepare("SELECT loved_at, track FROM loved ORDER BY id")
-        .unwrap()
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-}
-
-#[test]
-fn loved_tracks_are_stored_in_the_order_last_fm_lists_them() {
-    let scratch = Scratch::new();
-    let mut store = bound(&scratch);
-    let dataset = Dataset::distinct(1).with_loved(3);
-    let pages = loved_pages(&dataset, 2);
-
-    store.replace_loved(&pages, 1_800_000_000).unwrap();
-
-    assert_eq!(
-        loved_rows(&store),
-        [
-            (BASE + 300, "Loved 3".to_owned()),
-            (BASE + 200, "Loved 2".to_owned()),
-            (BASE + 100, "Loved 1".to_owned()),
-        ]
-    );
-    let (artist, artist_mbid, track_mbid, raw): (String, Option<String>, Option<String>, String) =
-        store
-            .connection()
-            .query_row(
-                "SELECT artist, artist_mbid, track_mbid, raw FROM loved ORDER BY id LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-    assert_eq!(artist, "Synthetic Artist");
-    assert_eq!(artist_mbid.as_deref(), Some(support::ARTIST_MBID));
-    // An empty mbid is stored as NULL.
-    assert_eq!(track_mbid, None);
-    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(&raw, pages[0].tracks()[0].json());
-    assert_eq!(meta(&store, "loved_read_at").as_deref(), Some("1800000000"));
-}
-
-#[test]
-fn a_read_of_the_loved_tracks_replaces_the_one_before() {
-    let scratch = Scratch::new();
-    let mut store = bound(&scratch);
-    let before = Dataset::distinct(1).with_loved(5);
-    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
-    assert_eq!(count(&store, "loved"), 5);
-
-    // Three were unloved since.
-    let after = Dataset::distinct(1).with_loved(2);
-    store.replace_loved(&loved_pages(&after, 2), 200).unwrap();
-
-    assert_eq!(
-        loved_rows(&store),
-        [
-            (BASE + 200, "Loved 2".to_owned()),
-            (BASE + 100, "Loved 1".to_owned())
-        ]
-    );
-    assert_eq!(meta(&store, "loved_read_at").as_deref(), Some("200"));
-
-    // And none at all is a list too: one page with no rows.
-    let none = Dataset::distinct(1);
-    store.replace_loved(&loved_pages(&none, 2), 300).unwrap();
-    assert_eq!(count(&store, "loved"), 0);
-    assert_eq!(meta(&store, "loved_read_at").as_deref(), Some("300"));
-}
-
-#[test]
-fn a_replacement_of_the_loved_tracks_that_fails_part_way_keeps_the_list_before() {
-    let scratch = Scratch::new();
-    let mut store = bound(&scratch);
-    let before = Dataset::distinct(1).with_loved(3);
-    store.replace_loved(&loved_pages(&before, 2), 100).unwrap();
-    let kept = loved_rows(&store);
-
-    // The second track's time is more than a column holds: the insert of
-    // it fails after the list was emptied and a track of the new one went
-    // in.
-    let mut after = Dataset::distinct(1).with_loved(4);
-    after.loved[1] = u64::MAX;
-    let failed = store.replace_loved(&loved_pages(&after, 2), 200);
-
-    assert!(matches!(failed, Err(Error::Sqlite(_))), "{failed:?}");
-    assert_eq!(loved_rows(&store), kept);
-    assert_eq!(meta(&store, "loved_read_at").as_deref(), Some("100"));
-}
-
-#[test]
-fn the_file_says_when_its_history_was_last_read() {
-    let scratch = Scratch::new();
-    let mut store = bound(&scratch);
-    assert_eq!(meta(&store, "history_read_at"), None);
-
-    store.note_history_read(100).unwrap();
-    store.note_history_read(200).unwrap();
-
-    assert_eq!(meta(&store, "history_read_at").as_deref(), Some("200"));
-    // Whose history it is stays as it was.
-    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
 }

@@ -10,11 +10,7 @@ pub fn now() -> u64 {
 }
 
 /// Formats Unix seconds as UTC, to the second: `2023-11-14T22:13:20Z`.
-///
-/// ```
-/// assert_eq!(scrobl_cli::time::utc(1_700_000_000), "2023-11-14T22:13:20Z");
-/// ```
-pub fn utc(seconds: u64) -> String {
+pub(crate) fn utc(seconds: u64) -> String {
     let (days, rest) = (seconds / 86_400, seconds % 86_400);
     let (hour, minute, second) = (rest / 3_600, rest % 3_600 / 60, rest % 60);
 
