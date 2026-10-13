@@ -40,8 +40,8 @@ crates/scrobl/
 crates/scrobl-cli/     the binary `scrobl`
   src/
     main.rs            the process: environment, runtime, exit code
-    cli.rs             arguments, output, exit codes
-    sync.rs            which windows to read, and in what order
+    cli.rs             arguments and output
+    sync.rs            which spans of time to read, and when
     store.rs           the SQLite file
     time.rs            the clock, and seconds as text
   tests/               the same fake Last.fm, included from the library's tests by path
@@ -346,44 +346,47 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Command-line tool
 
-`scrobl-cli` builds the binary `scrobl`. It keeps one user's history in one SQLite file, and is the first consumer of the library. Today it has one command, `scrobl sync --db <file> [--user <name>]`, and reads the API key from `SCROBL_API_KEY`, never from the command line.
+`scrobl-cli` builds the binary `scrobl`. It keeps one user's history in one SQLite file, and is the first consumer of the library. Today it has one command, `scrobl sync --db <file> [--user <name>] [--full]`, and reads the API key from `SCROBL_API_KEY`, never from the command line. It exits with status 0, or with 1 and one line that says why.
 
 ### The file
 
 | Table | Holds |
 |---|---|
-| `windows` | Each span `[from_ts, to_ts)` that was read completely, with the total the service reported, the page count and size, and when it was read |
-| `pages` | The body of every response of that read, byte for byte |
-| `scrobbles` | One row per scrobble decoded from the pages: timestamp, artist, track, album, and the `mbid` Last.fm sent for each |
-| `loved_pages` | The body of every response of the last read of the loved tracks |
-| `loved` | One row per loved track decoded from them: when it was loved, artist, track and the `mbid` Last.fm sent for each |
-| `meta` | The user the file belongs to, and when the loved tracks were last read |
+| `scrobbles` | One row per scrobble: timestamp, artist, track, album, the `mbid` Last.fm sent for each, and in `raw` the row as Last.fm sent it, as JSON |
+| `removed` | Scrobbles the file held that a later reading of the same time did not: the same columns, and when that was noticed |
+| `loved` | One row per loved track, as the list stood at the last sync and in its order: when it was loved, artist, track, the `mbid` Last.fm sent for each, and `raw` |
+| `meta` | The user the file belongs to, and when the history and the loved tracks were last read |
 
-The pages are the record and the scrobbles are derived from them, so the derived table can be rebuilt, or given new columns, without asking Last.fm again. A window is written in one transaction, and only from the `ScanSummary` of a scan that finished, which is what makes the library's "provisional until `finish`" rule hold on disk. Windows never overlap: the transaction that writes one checks, and a second sync on the same file fails there instead of storing a period twice. Rows are never merged or deduplicated. The file is marked with an `application_id` and a schema version in `user_version`, now 2. A version 1 file, from before the loved tracks had tables, is brought up to date when it is opened. Only files a merged build wrote are upgraded: a build that was never merged once wrote version 1 with the loved tables already in it, and such a file is refused. A file with no tables and neither mark is new and is set up. Any other file is used only if it carries both marks as this tool wrote them: one that has tables but no marks, or that another program marked, even while empty, is refused, not adopted. A path that names no file (an empty one, or SQLite's `:memory:`) is refused too, because SQLite would read it as a database to throw away.
+- **The rows are the record.** `raw` is each row as the library decoded it, the same JSON though not the same bytes, so a column can be added or filled in again without asking Last.fm. The page a row came on is not kept.
+- **Nothing in the file says how it was read:** no windows, no mark of how far a sync got, nothing called done. A span of time `[from, to)` is written by one operation, which makes the file hold exactly what one finished scan read for it, in one transaction, so spans can be written twice and in any order. An earlier version read each period once and called it final, which made every mistake permanent and every check against one look necessary. Here whatever a sync leaves wrong, the next finds by its count or reads again because it is recent, so there is no lock, no check of the clock and nothing to resume.
+- **Rows are never merged.** Two plays in one second are two rows. A span is replaced whole, oldest row first, so `ORDER BY timestamp, id` is the order of listening, and an `id` is not a lasting name for a scrobble.
+- **Time, artist and track tell two scrobbles apart,** counting rows that share all three. The ids and the album are what Last.fm says about a scrobble, not which scrobble it is.
+- **The file follows Last.fm and keeps what Last.fm drops.** A scrobble the file has and a new reading lacks was most likely deleted or edited at Last.fm. It leaves `scrobbles` and is copied to `removed` with the time, because a deletion made by mistake should not vanish from a backup overnight. `removed` is a log of what a reading lacked, and nothing prunes it.
+- **One user to a file,** named by the first sync and checked by every later one.
+- **A file is used only as this version wrote it.** It carries an `application_id` and a layout version in `user_version`, now 4. A file with no tables is new; any other without both marks is refused and left as it is, an earlier version's included. Nothing is upgraded, because the history can be read again into a new file.
 
 ### A sync
 
-A sync fixes a cutoff when it starts, thirty minutes before the present, and makes the file cover `[0, cutoff)`. The margin is there because a scrobble is dated when its track started and sent when it ended, so the newest part of a history is still filling in.
+A sync reads up to the present, by this machine's clock, and has one way of dealing with any span of time. It asks Last.fm how many scrobbles the span holds (one request with `limit=1`) and compares that with the file. If they agree, the span is left alone. If they differ and Last.fm counts more than 5000 scrobbles in the span, it is halved and each half is dealt with the same way, down to a single second. Otherwise the span is read as one scan, and the file's copy of it is replaced.
 
-The present is the earlier of two clocks: this machine's, and Last.fm's as the `Date` header of its first answer gives it. A period that ends after the real present would be on record as read while tracks were still to be played in it, and they would never be fetched; a machine whose clock ran more than the margin ahead did exactly that. With both clocks, one that runs ahead costs nothing and one that runs behind only leaves the newest scrobbles to a later sync. An answer with no `Date` that can be read ends the sync with status 1 before any history is stored (a new file keeps the user it was given), because falling back on the machine's clock would trust the clock in doubt. It is a guard and not a proof: the header says when the answer was made, by whichever server made it, and two clocks that are both ahead are not caught. A period wrongly recorded by an earlier version is not repaired, like any period already read.
+That one rule is the first import, the daily run and the repair of old history. A new file agrees with Last.fm only where the history is empty, so everything is read, and years of silence cost a few counts. A sync that fails keeps every span it stored, and the next reads the rest. A scrobble added to or removed from a year long past changes that year's count, and the halving leads to it.
 
-It asks the file which spans no window covers and reads each from its newest end backwards. A window holds at most thirty days of listening. Before each one it asks for the newest scrobble left in the span (one request with `limit=1`) and starts the window thirty days before that, so a long silence is one window and not one request per month. A span of thirty days or less is read without asking. The answer only places the window's lower bound: the scan that follows is checked in full whatever it said, and whatever lies below is still read.
+Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline. So the last fourteen days are read by every sync whatever the counts say, and read first, so that the newest history is in the file whatever becomes of the rest. `--full` reads every span that way. Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back; Last.fm documents no number.
 
-Pages are asked for in the plain form, without `extended=1`. The extended form sends every artist's `mbid` empty, for scrobbles whose plain form carries one, and puts the same placeholder image on every artist; what it adds is the loved flag and the artist's URL. The loved flag is not a fact about one scrobble, and `user.getLovedTracks` reports it with the time the track was loved, so it has a table of its own.
+The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. A count that is wrong costs a read that was not needed, or leaves a span unread until a later count is right. Whether Last.fm's counts for the parts of a history always add up to its count for the whole has not been checked against the live service; if they did not, every sync would read some spans for nothing, and that is all that would show it.
 
-A track's `mbid` is stored as sent and is not always a MusicBrainz recording. In a sample of 24 from one real history, six were recordings, and each of the twelve others that were looked up was a MusicBrainz track id, which names a track on one particular release that is not necessarily the one that was played.
+A scrobble that arrives in a span while it is read can make its pages disagree, and then the scan refuses them. That is no fault where the span reaches the present, so the span is read again, three times in all, before the sync fails with the file as it was.
 
-A sync that fails keeps every window it stored and loses only the one it was reading. The next sync finds the same gap and carries on. A later sync finds one gap, from the last cutoff to the new one.
+Pages are asked for in the plain form, without `extended=1`: the extended form sends every artist's `mbid` empty, and what it adds is the loved flag, which is not a fact about one scrobble. A track's `mbid` is stored as sent and is not always a MusicBrainz recording: of 24 sampled from one real history, six were, and the twelve others looked up each named a track on one particular release.
 
-When the gaps are closed it asks Last.fm how many scrobbles lie before the cutoff and compares that with the file. Exit status: 0 when they agree, 3 when they differ, 1 for a failure, 2 for a wrong command line.
-
-Last, it reads the loved tracks, a thousand to a page, and replaces the file's copy in one transaction. Nothing ties one page of that list to the next, so the read is kept only if every page reports the same total, every page but the last is full, the pages hold exactly that many tracks and no artist and track is listed twice, whatever the times. A list of more than one page then has its first page read once more, and it must list what it listed before: a track that is loved goes to the top, so a track unloved on a page already read and another loved in its place shows there and nowhere else. The end of the list is where the rows add up to the total, not what `totalPages` says. Otherwise the sync fails with status 1, whatever the counts said, the copy from the last sync stays, and the history it stored is unaffected. Only a list that fits one page is read at a single moment; across pages these checks catch a list that grew, shrank or swapped a track, not every possible change. Tracks loved in the same second have no order of their own, and enough loving and unloving inside one second can put the first page back as it was. A loved track is tied to scrobbles by artist and track name, which is all the two lists share for certain.
+Last, a sync reads the loved tracks, a thousand to a page, and replaces the file's copy in one transaction. Nothing ties one page of that list to the next and nothing checks it: in a list longer than a page, a track loved or unloved during the read can leave a row listed twice or missing until the next sync. A loved track is tied to scrobbles by artist and track name, which is all the two lists share for certain.
 
 ### What it does not do yet
 
-- It never reads a period twice. A scrobble added to or removed from a period after it was read (an offline device that syncs days later, an edit on the website) shows as a difference in the counts and is not repaired. The comparison is one count of everything before the cutoff, so a scrobble removed and another added, in one period or in two, cancel out and the sync ends with status 0. Equal counts do not prove equal rows, for that reason and for those under [What a completed scan does not prove](#what-a-completed-scan-does-not-prove).
+- It does not see a change that leaves a count as it was, outside the last fourteen days: a scrobble removed and another added in one span, or an old play that was edited. `--full` reads everything and finds it, and nothing runs that on its own.
+- It does not ask before following a large loss. If Last.fm stopped listing part of a history, those rows would move to `removed`, and come back when Last.fm listed them again.
 - It reads a public history only. A hidden one needs the signed read, which is unverified.
-- It keeps the loved tracks as they are now, not their history: a track that is unloved leaves the table at the next sync, and nothing records that it was ever there.
+- It keeps the loved tracks as they are now, not their history.
 - No server for agents, no export and no offline check of the file.
 
 ## Coverage

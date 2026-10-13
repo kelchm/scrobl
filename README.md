@@ -99,13 +99,33 @@ scrobl sync --db history.db --user rj    # the first time
 scrobl sync --db history.db              # every time after
 ```
 
-The first sync reads the whole history, thirty days of listening at a time and a second between requests, and stores each stretch once it has passed every check of the scan. It can be stopped at any point and run again: it carries on where it stopped. Later syncs read only what is new, up to half an hour before the present, because the last minutes of a history are still filling in. The present is the earlier of this machine's clock and Last.fm's, so this machine's clock running ahead cannot carry a sync past the time Last.fm reports.
+The first sync reads the whole history, a second between requests: about a minute for every 10,000 scrobbles. It can be stopped and run again at any point. Every sync after it reads the last fourteen days again, because scrobbles arrive late, and any older period in which Last.fm counts another number of scrobbles than the file holds. `--full` reads everything again, which also finds what no count shows, such as an old scrobble that was edited.
 
-The file holds every response exactly as Last.fm sent it (`pages`) and one row per scrobble decoded from them (`scrobbles`, the table to query). Scrobbles are never merged, so two plays in the same second are two rows.
+A sync that fails says why in one line, exits with status 1 and keeps what it stored.
 
-Every sync ends by reading the tracks the user has loved and replacing the copy in the file (`loved`, with the responses in `loved_pages`). That list is what is loved now, each track with the time it was loved; a track that was unloved since the last sync is gone from it. If that read fails, the sync exits with status 1 and the history it stored is kept.
+The file holds four tables:
 
-Each sync compares the number of scrobbles in the file with the number Last.fm reports for the same period, and exits with status 3 if they differ and nothing else failed. They differ when the number of scrobbles in a period changed after it was read. The tool does not yet read a period a second time, so it reports the difference and cannot repair it. It is one count for the whole history, so equal counts are not proof: a scrobble removed and another added leave the count as it was, and the tool exits with status 0 if nothing else failed.
+| Table | Holds |
+|---|---|
+| `scrobbles` | One row per scrobble: `timestamp` in Unix seconds, `artist`, `track`, `album`, the `mbid` Last.fm sent for each, and `raw`, the whole row as JSON |
+| `removed` | Scrobbles the file held that Last.fm no longer lists, because they were deleted or edited there, each with `removed_at` |
+| `loved` | The tracks the user has loved, each with `loved_at`, as the list stood at the last sync |
+| `meta` | The user, and when the history and the loved tracks were last read |
+
+Anything that reads SQLite can query it:
+
+```sh
+# The ten artists played most
+sqlite3 history.db "SELECT artist, count(*) FROM scrobbles GROUP BY artist ORDER BY 2 DESC LIMIT 10"
+
+# The last twenty plays, newest first
+sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM scrobbles ORDER BY timestamp DESC, id DESC LIMIT 20"
+
+# What Last.fm sent that has no column of its own
+sqlite3 history.db "SELECT json_extract(raw, '$.url') FROM scrobbles LIMIT 1"
+```
+
+Scrobbles are never merged: two plays in the same second are two rows, and `ORDER BY timestamp, id` is the order of listening.
 
 ## Last.fm's terms
 

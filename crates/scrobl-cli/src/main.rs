@@ -3,14 +3,11 @@
 use std::process::ExitCode;
 
 use scrobl::ApiKey;
-use scrobl_cli::cli::{self, API_KEY_VARIABLE, Environment};
-use scrobl_cli::time;
+use scrobl_cli::cli;
 
 fn main() -> ExitCode {
-    let environment = Environment {
-        api_key: std::env::var(API_KEY_VARIABLE).ok().map(ApiKey::new),
-        now: time::now(),
-    };
+    let api_key = std::env::var("SCROBL_API_KEY").ok().map(ApiKey::new);
+    let args = std::env::args_os().skip(1);
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
 
     // The client spawns nothing, so one thread is all it needs.
@@ -21,11 +18,5 @@ fn main() -> ExitCode {
         Ok(runtime) => runtime,
         Err(_) => return ExitCode::FAILURE,
     };
-    let code = runtime.block_on(cli::run(
-        std::env::args_os().skip(1),
-        &environment,
-        &mut out,
-        &mut err,
-    ));
-    ExitCode::from(code)
+    ExitCode::from(runtime.block_on(cli::run(args, api_key, &mut out, &mut err)))
 }

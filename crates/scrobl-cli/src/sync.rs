@@ -1,261 +1,170 @@
-//! Reading the history the database does not hold yet.
+//! Making the database agree with the history at Last.fm.
 //!
-//! A sync has a *cutoff*, fixed when it starts, and makes the database cover
-//! `[0, cutoff)`. The cutoff has to be in the past by Last.fm's clock as
-//! well as this machine's, which is what [`server_time`] is for. It asks the [`Store`] which spans are not covered and
-//! reads each one from its newest end backwards, a window at a time. Every
-//! window is one validated scan, stored in one transaction once the scan
-//! has finished. A sync that stops, for any reason, has lost at most the
-//! window it was reading, and the next sync carries on from there.
+//! A sync works on *spans* of time, `[from, to)`, and has one way of
+//! dealing with any of them: ask Last.fm how many scrobbles the span holds,
+//! and compare that with the database. If the two agree, the span is left
+//! alone. If they differ and Last.fm counts more than [`Options::chunk`]
+//! scrobbles in the span, it is halved and each half is dealt with the same
+//! way. Otherwise the span is read, as one validated scan, and the
+//! database's copy of it is replaced by what the scan read, in one
+//! transaction.
 //!
-//! Windows are sized by time, [`Options::span`] at most, and placed by where
-//! the scrobbles are: before each one the sync asks Last.fm for the newest
-//! scrobble left in the span, so years of silence cost one request, not one
-//! per month.
+//! That one rule is the first import, the daily run and the repair of a
+//! change to old history. Nothing it stores is final and nothing records how
+//! far it got, so a sync may stop anywhere: the next one passes over what
+//! was stored, wherever it agrees, and reads the rest.
 //!
-//! At the end the sync asks Last.fm how many scrobbles lie before the
-//! cutoff and puts that next to what the database holds. The two differ when
-//! the number of scrobbles in a period changed after it was read. This
-//! version reports that; it does not read a period twice. It is one count
-//! for the whole history, so a scrobble removed and another added, in the
-//! same period or in two, leave it as it was.
+//! Equal counts do not prove equal rows, and the newest history is where
+//! that matters: a scrobble is dated when its track started and sent when it
+//! ended, or days later from a device that was offline. So the last
+//! [`Options::recent`] seconds are read every time, whatever the counts say,
+//! and [`Options::full`] reads the whole history that way. A change that
+//! leaves a count as it was, in history that is not recent, waits for that.
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
 
-use std::collections::HashSet;
-
 use scrobl::history::{ScanPage, ScanSummary, Window};
-use scrobl::model::LovedTracksPage;
-use scrobl::{Client, Response};
+use scrobl::{Client, ErrorKind};
 
 use crate::Error;
-use crate::store::Store;
+use crate::store::{Change, Store};
 use crate::time;
 
-/// How a sync divides the history.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
+/// How many times a span is read before a sync gives up on it.
+const ATTEMPTS: u32 = 3;
+
+/// The rows asked for on every page of loved tracks, the most the service
+/// was seen to give.
+const LOVED_PAGE: u32 = 1000;
+
+/// How a sync goes about the history. The tool runs on the defaults; the
+/// tests shrink them, so that a few dozen scrobbles are a history worth
+/// halving.
+#[derive(Debug, Clone, Copy)]
 pub struct Options {
-    /// The longest stretch of listening one window holds, in seconds. Zero
-    /// is taken as one.
-    pub span: u64,
+    /// How much of the newest history every sync reads again, in seconds.
+    pub recent: u64,
+    /// A span in which Last.fm counts more scrobbles than this is halved,
+    /// unless it is a single second.
+    pub chunk: u64,
     /// The rows asked for on every page of a scan, 1 to 200.
     pub page_size: u32,
-    /// The rows asked for on every page of loved tracks, 1 to 1000.
-    pub loved_page_size: u32,
+    /// Read the whole history again, whatever the counts say.
+    pub full: bool,
 }
 
 impl Default for Options {
-    /// Windows of thirty days, pages of 200 scrobbles, the most the service
-    /// gives, and pages of 1000 loved tracks.
+    /// Fourteen days, because several clients report that Last.fm ignores a
+    /// scrobble dated more than about two weeks back; 5000 scrobbles to a
+    /// scan; and pages of 200, the most the service gives.
     fn default() -> Self {
         Self {
-            span: 30 * 86_400,
+            recent: 14 * 86_400,
+            chunk: 5_000,
             page_size: 200,
-            loved_page_size: 1000,
+            full: false,
         }
     }
 }
 
-/// One window, as it was stored.
+/// One span, as it was read and stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stored {
     /// The inclusive lower bound.
     pub from: u64,
     /// The exclusive upper bound.
     pub to: u64,
-    /// The scrobbles in it.
     pub scrobbles: u64,
-}
-
-/// What a sync did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Report {
-    /// The database now covers `[0, cutoff)`.
-    pub cutoff: u64,
-    /// Scrobbles this sync stored.
+    /// How many of them the database did not hold before.
     pub added: u64,
-    /// Scrobbles in the database before the cutoff.
-    pub stored: u64,
-    /// Scrobbles Last.fm reported before the cutoff, asked after the last
-    /// window was stored.
-    pub reported: u64,
+    /// Scrobbles the database held for the span that Last.fm no longer
+    /// lists. They were moved to `removed`.
+    pub removed: u64,
 }
 
-impl Report {
-    /// Whether the database holds as many scrobbles as Last.fm reports. Equal
-    /// counts do not prove equal rows.
-    pub fn matches(&self) -> bool {
-        self.stored == self.reported
-    }
-}
-
-/// Makes `store` cover `user`'s history before `cutoff`, then compares the
-/// counts. `stored` is called after each window is committed. A new
-/// database is tied to `user` first.
-///
-/// # Errors
-///
-/// [`Error::OtherUser`] when the database holds another user's history;
-/// [`Error::Lastfm`] when a call fails after the client's retries or a page
-/// breaks a rule of the scan; [`Error::Service`] when an answer cannot be
-/// acted on; [`Error::Database`] and [`Error::Sqlite`] from the store. The
-/// windows stored before the error stay stored.
+/// Makes `store` agree with `user`'s history before `now`, and returns what
+/// that added to the file and removed from it. `stored` is called for each
+/// span once it is committed, and the spans stored before an error stay
+/// stored. A new database is tied to `user` first.
 pub async fn sync(
     client: &Client,
     store: &mut Store,
     user: &str,
-    cutoff: u64,
+    now: u64,
     options: Options,
     mut stored: impl FnMut(Stored),
-) -> Result<Report, Error> {
-    if cutoff == 0 {
-        return Err(Error::Service("the cutoff is the epoch; check the clock"));
-    }
+) -> Result<Change, Error> {
     store.bind_user(user)?;
-    let mut added = 0;
-    for (gap_from, gap_to) in store.gaps(cutoff)? {
-        let mut to = gap_to;
-        while to > gap_from {
-            let from = window_start(client, user, gap_from, to, options.span.max(1)).await?;
-            let (summary, pages) = read(client, user, from, to, options.page_size).await?;
-            store.commit_window(&summary, &pages, time::now())?;
-            added += summary.total();
-            stored(Stored {
-                from,
-                to,
-                scrobbles: summary.total(),
-            });
-            to = from;
+    let recent_from = now.saturating_sub(options.recent);
+    let (mut added, mut removed) = (0, 0);
+
+    // The last span pushed is the next one dealt with, so the recent part
+    // goes first and the rest follows from its newest end backwards: the
+    // newest history is in the file whatever becomes of the rest.
+    let mut spans = vec![(0, recent_from, options.full), (recent_from, now, true)];
+    while let Some((from, to, always)) = spans.pop() {
+        if from >= to {
+            continue;
         }
+        let theirs = count(client, user, from, to).await?;
+        if !always && theirs == store.count(from, to)? {
+            continue;
+        }
+        if theirs > options.chunk && to - from > 1 {
+            let middle = from + (to - from) / 2;
+            spans.push((from, middle, always));
+            spans.push((middle, to, always));
+            continue;
+        }
+        let (summary, pages) = read(client, user, from, to, options.page_size).await?;
+        let change = store.replace(&summary, &pages, now)?;
+        added += change.added;
+        removed += change.removed;
+        stored(Stored {
+            from,
+            to,
+            scrobbles: summary.total(),
+            added: change.added,
+            removed: change.removed,
+        });
     }
 
-    let reported = probe(client, user, 0, cutoff).await?.0;
-    Ok(Report {
-        cutoff,
-        added,
-        stored: store.scrobbles_before(cutoff)?,
-        reported,
-    })
-}
-
-/// The time by Last.fm's clock, in Unix seconds: one request, for the
-/// `Date` header of its answer.
-///
-/// A cutoff is safe only if it lies in the past, because a window that ends
-/// after now is recorded as read while scrobbles can still arrive in it.
-/// This machine's clock cannot vouch for that on its own, so the service's
-/// is a second opinion. It is no more than that: the header says when the
-/// answer was made, by whichever server made it.
-///
-/// # Errors
-///
-/// [`Error::Lastfm`] when the call fails; [`Error::Service`] when the
-/// answer carries no `Date` header that can be read. There is no falling
-/// back on this machine's clock, which is the one in doubt.
-pub async fn server_time(client: &Client, user: &str) -> Result<u64, Error> {
-    let page = client.user(user).recent_tracks().limit(1).send().await?;
-    page.raw()
-        .header("date")
-        .and_then(time::http_date)
-        .ok_or(Error::Service(
-            "Last.fm's answer did not say what time it is, so the sync cannot tell how far it is \
-             safe to read",
-        ))
+    store.note_history_read(now)?;
+    Ok(Change { added, removed })
 }
 
 /// `[from, to)` as the library takes it. A lower bound of 0 is sent as no
 /// lower bound, which means the same and is the plainer request.
-fn window(from: u64, to: u64) -> Result<Window, Error> {
+fn window(from: u64, to: u64) -> Result<Window, scrobl::Error> {
     if from == 0 {
         Ok(Window::before(to))
     } else {
-        Ok(Window::new(from, to)?)
+        Window::new(from, to)
     }
 }
 
-/// Where the window that ends at `to` starts: far enough back to hold `span`
-/// seconds of listening, and no further than `gap_from`. An empty remainder
-/// is one window.
-async fn window_start(
-    client: &Client,
-    user: &str,
-    gap_from: u64,
-    to: u64,
-    span: u64,
-) -> Result<u64, Error> {
-    if to - gap_from <= span {
-        return Ok(gap_from);
-    }
-    let (total, newest) = probe(client, user, gap_from, to).await?;
-    if total == 0 {
-        return Ok(gap_from);
-    }
-    // Scrobbles were counted but none came back, as could happen if the
-    // service spent the one row asked for on what is playing now. Any lower
-    // bound is a correct one, so take the plain one.
-    let Some(newest) = newest else {
-        return Ok(gap_from.max(to - span));
-    };
-    Ok(gap_from.max((newest + 1).saturating_sub(span)))
-}
-
-/// One request: how many scrobbles `[from, to)` holds, and the timestamp of
-/// the newest.
+/// One request: how many scrobbles Last.fm counts in `[from, to)`.
 ///
-/// The count decides how a sync ends, so the answer has to be the answer to
-/// this question: the user, the page and the page size asked for, and
-/// nothing in it that contradicts the rest, such as a scrobble next to a
-/// count of none or one from outside the period. What is playing now is not
-/// a scrobble and is not counted.
-async fn probe(
-    client: &Client,
-    user: &str,
-    from: u64,
-    to: u64,
-) -> Result<(u64, Option<u64>), Error> {
-    let window = window(from, to)?;
+/// The count only decides where a sync looks, so nothing about it is
+/// checked. What is stored comes from a scan, which is checked in full.
+async fn count(client: &Client, user: &str, from: u64, to: u64) -> Result<u64, Error> {
     let page = client
         .user(user)
         .recent_tracks()
-        .window(window)
+        .window(window(from, to)?)
         .limit(1)
         .send()
         .await?;
-    let attr = page.attr();
-    if !attr.user().eq_ignore_ascii_case(user) || attr.page() != 1 || attr.per_page() != 1 {
-        return Err(Error::Service(
-            "Last.fm answered a count with a page that was not the one asked for",
-        ));
-    }
-    let scrobbles = page.scrobbles();
-    if scrobbles
-        .iter()
-        .any(|scrobble| !window.contains(scrobble.timestamp()))
-    {
-        return Err(Error::Service(
-            "Last.fm returned a scrobble from outside the period asked for",
-        ));
-    }
-    if attr.total() == 0 && !scrobbles.is_empty() {
-        return Err(Error::Service(
-            "Last.fm counted no scrobbles in a period and returned one from it",
-        ));
-    }
-    let newest = page
-        .scrobbles()
-        .first()
-        .map(|scrobble| scrobble.timestamp());
-    Ok((attr.total(), newest))
+    Ok(page.attr().total())
 }
 
-/// Reads `[from, to)` completely. The pages are held in memory until the
-/// scan has finished, because until then they are provisional.
+/// Reads `[from, to)` completely, as one scan.
 ///
-/// The pages are asked for in the plain form. With `extended=1` Last.fm
-/// sends every artist's `mbid` empty, and what it adds in exchange is the
-/// loved flag, which is not a fact about one scrobble.
+/// A scrobble that arrives in the span while it is read can make the pages
+/// disagree with each other, and then the scan refuses them. That is no
+/// fault, least of all where the span reaches the present, so the span is
+/// read again, [`ATTEMPTS`] times in all.
 async fn read(
     client: &Client,
     user: &str,
@@ -263,6 +172,30 @@ async fn read(
     to: u64,
     page_size: u32,
 ) -> Result<(ScanSummary, Vec<ScanPage>), Error> {
+    let mut attempt = 1;
+    loop {
+        match scan(client, user, from, to, page_size).await {
+            Err(error) if error.kind() == ErrorKind::Inconsistent && attempt < ATTEMPTS => {
+                attempt += 1;
+            }
+            reading => return Ok(reading?),
+        }
+    }
+}
+
+/// One scan of `[from, to)`. The pages are held in memory until the scan has
+/// finished, because until then they are provisional.
+///
+/// The pages are asked for in the plain form. With `extended=1` Last.fm
+/// sends every artist's `mbid` empty, and what it adds in exchange is the
+/// loved flag, which is not a fact about one scrobble.
+async fn scan(
+    client: &Client,
+    user: &str,
+    from: u64,
+    to: u64,
+    page_size: u32,
+) -> Result<(ScanSummary, Vec<ScanPage>), scrobl::Error> {
     let mut scan = client
         .user(user)
         .recent_tracks()
@@ -276,122 +209,31 @@ async fn read(
     Ok((scan.finish()?, pages))
 }
 
-/// Reads every track `user` has loved and replaces the database's copy
-/// with it. Returns how many there are.
+/// Reads every track `user` has loved, a page at a time, and replaces the
+/// database's copy with them. Returns how many there are.
 ///
-/// The list is read newest first, a page at a time, and nothing ties one
-/// page to the next: a track loved or unloved between two requests moves
-/// every later row. So every page must report the same total, every page
-/// but the last must be full, the pages must hold exactly that many tracks,
-/// and no track may be listed twice. A list of more than one page has its
-/// first page read again at the end, which must be as it was: a track that
-/// is loved goes to the top of the list. If any of that fails nothing is
-/// stored, and the copy from the last sync stays as it was.
-///
-/// That catches a list that grew, shrank, or lost one track and gained
-/// another during the read. It is not proof. Tracks loved in the same
-/// second have no order of their own, and enough changes inside one second
-/// can put the first page back as it was. Only a list that fits one page is
-/// read at a single moment.
-///
-/// A new database is tied to `user` first.
-///
-/// # Errors
-///
-/// [`Error::OtherUser`] when the database holds another user's loved
-/// tracks; [`Error::Lastfm`] when a call fails; [`Error::Service`] when a
-/// page is not the one asked for or the list changed while it was read;
-/// [`Error::Database`] and [`Error::Sqlite`] from the store.
-pub async fn loved(
-    client: &Client,
-    store: &mut Store,
-    user: &str,
-    page_size: u32,
-) -> Result<u64, Error> {
-    store.bind_user(user)?;
-    let mut pages: Vec<Response<LovedTracksPage>> = Vec::new();
+/// Nothing ties one page to the next, so a track loved or unloved during the
+/// read can leave a row listed twice or missing, until the next sync reads
+/// the list afresh. The list ends where its rows add up to the total, or at
+/// a page with no rows.
+pub async fn loved(client: &Client, store: &mut Store, user: &str) -> Result<u64, Error> {
+    let mut pages = Vec::new();
+    let mut read = 0;
     loop {
-        let page = loved_page(client, user, page_size, pages.len() as u32 + 1).await?;
-        let total = page.attr().total();
-        let changed = pages
-            .first()
-            .is_some_and(|first| first.attr().total() != total);
-        let full = page.tracks().len() as u64 == u64::from(page_size);
+        let page = client
+            .user(user)
+            .loved_tracks()
+            .limit(LOVED_PAGE)
+            .page(pages.len() as u32 + 1)
+            .send()
+            .await?;
+        let (rows, total) = (page.tracks().len() as u64, page.attr().total());
+        read += rows;
         pages.push(page);
-        let read = pages.iter().map(|page| page.tracks().len()).sum::<usize>() as u64;
-        // The end is where the rows add up to the total, whatever
-        // `totalPages` says. Every page before it must be full, so each
-        // request brings the end nearer and a short page is a list that
-        // shrank.
-        let done = read >= total;
-        if changed || read > total || (!done && !full) || (done && repeats(&pages)) {
-            return Err(CHANGED);
+        if rows == 0 || read >= total {
+            break;
         }
-        if !done {
-            continue;
-        }
-        if let [first, _, ..] = pages.as_slice() {
-            let again = loved_page(client, user, page_size, 1).await?;
-            if again.attr().total() != total || !rows(&again).eq(rows(first)) {
-                return Err(CHANGED);
-            }
-        }
-        store.replace_loved(&pages, time::now())?;
-        return Ok(total);
     }
-}
-
-/// The loved tracks did not hold still for the read.
-const CHANGED: Error = Error::Service(
-    "the loved tracks changed while they were being read; the next sync reads them again",
-);
-
-/// One page of the loved tracks, checked to be the page asked for.
-async fn loved_page(
-    client: &Client,
-    user: &str,
-    page_size: u32,
-    number: u32,
-) -> Result<Response<LovedTracksPage>, Error> {
-    let page = client
-        .user(user)
-        .loved_tracks()
-        .limit(page_size)
-        .page(number)
-        .send()
-        .await?;
-    let attr = page.attr();
-    if !attr.user().eq_ignore_ascii_case(user)
-        || attr.page() != u64::from(number)
-        || attr.per_page() != u64::from(page_size)
-    {
-        return Err(Error::Service(
-            "Last.fm answered with a page of loved tracks that was not the one asked for",
-        ));
-    }
-    Ok(page)
-}
-
-/// What a page lists, in its order: when, whose and which.
-fn rows(page: &LovedTracksPage) -> impl Iterator<Item = (u64, &str, &str)> {
-    page.tracks().iter().map(|loved| {
-        (
-            loved.loved_at(),
-            loved.artist().name(),
-            loved.track().name(),
-        )
-    })
-}
-
-/// Whether a track is listed twice: the same artist and name, whenever each
-/// was loved. A track loved while the list was being read pushes a row from
-/// one page onto the next, where it is read again, and a track unloved and
-/// loved again comes back with a new time. The totals cannot show either
-/// when another track was unloved meanwhile.
-fn repeats(pages: &[Response<LovedTracksPage>]) -> bool {
-    let mut seen = HashSet::new();
-    pages
-        .iter()
-        .flat_map(|page| page.tracks())
-        .any(|loved| !seen.insert((loved.artist().name(), loved.track().name())))
+    store.replace_loved(&pages, time::now())?;
+    Ok(read)
 }

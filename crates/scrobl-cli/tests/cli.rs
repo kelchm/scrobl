@@ -19,34 +19,29 @@ use std::path::PathBuf;
 use common::*;
 use scrobl::ApiKey;
 use scrobl_cli::Error;
-use scrobl_cli::cli::{
-    Command, EXIT_MISMATCH, Environment, SETTLE, SyncArgs, parse, run, sync_command,
-};
-use scrobl_cli::sync::Options;
+use scrobl_cli::cli::{Command, SyncArgs, parse, run, sync_command};
+use scrobl_cli::store::Store;
+
+const DAY: u64 = 86_400;
 
 fn args(line: &[&str]) -> Vec<OsString> {
     line.iter().map(OsString::from).collect()
 }
 
-fn usage_error(line: &[&str]) -> String {
-    match parse(args(line)) {
-        Err(error @ Error::Usage(_)) => {
-            assert_eq!(error.exit_code(), 2);
-            error.to_string()
-        }
-        other => panic!("expected a usage error, got {other:?}"),
+/// The arguments of a plain `scrobl sync` on the database in `scratch`.
+fn sync_args(scratch: &Scratch, user: Option<&str>) -> SyncArgs {
+    SyncArgs {
+        db: scratch.db(),
+        user: user.map(str::to_owned),
+        full: false,
     }
 }
 
 /// Runs the tool and returns its exit code, standard output and standard
 /// error.
 async fn tool(line: &[&str], api_key: Option<&str>) -> (u8, String, String) {
-    let environment = Environment {
-        api_key: api_key.map(ApiKey::new),
-        now: BASE,
-    };
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let code = run(args(line), &environment, &mut out, &mut err).await;
+    let code = run(args(line), api_key.map(ApiKey::new), &mut out, &mut err).await;
     (
         code,
         String::from_utf8(out).unwrap(),
@@ -54,33 +49,16 @@ async fn tool(line: &[&str], api_key: Option<&str>) -> (u8, String, String) {
     )
 }
 
-/// `scrobl sync` against `dataset`, with the clock at `now`.
+/// `scrobl sync` against `dataset`, with the clock at `now`: how it ended,
+/// standard output, standard error and the requests it made.
 async fn sync_with(
     dataset: Dataset,
     args: &SyncArgs,
     now: u64,
-) -> (Result<u8, Error>, String, String, usize) {
-    // The service's clock agrees with the tool's, so that no test goes by
-    // the time it really is.
-    sync_on(FakeLastfm::start(dataset).await.dated(now), args, now).await
-}
-
-/// `scrobl sync` against a server already set up, with the clock at `now`.
-async fn sync_on(
-    server: FakeLastfm,
-    args: &SyncArgs,
-    now: u64,
-) -> (Result<u8, Error>, String, String, usize) {
+) -> (Result<(), Error>, String, String, usize) {
+    let server = FakeLastfm::start(dataset).await;
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let result = sync_command(
-        args,
-        &client(&server),
-        now,
-        Options::default(),
-        &mut out,
-        &mut err,
-    )
-    .await;
+    let result = sync_command(args, &client(&server), now, &mut out, &mut err).await;
     (
         result,
         String::from_utf8(out).unwrap(),
@@ -89,153 +67,78 @@ async fn sync_on(
     )
 }
 
-/// Where the stored history ends: the upper bound of the newest window.
-fn covered_to(args: &SyncArgs) -> Option<u64> {
-    scrobl_cli::store::Store::open(&args.db)
-        .unwrap()
-        .connection()
-        .query_row("SELECT max(to_ts) FROM windows", [], |row| row.get(0))
-        .unwrap()
-}
-
 #[test]
 fn sync_is_parsed_with_its_options_in_any_order() {
-    let expected = Command::Sync(SyncArgs {
-        db: PathBuf::from("history.db"),
-        user: Some("rj".to_owned()),
-    });
+    let expected = |user: Option<&str>, full| {
+        Command::Sync(SyncArgs {
+            db: PathBuf::from("history.db"),
+            user: user.map(str::to_owned),
+            full,
+        })
+    };
     for line in [
         &["sync", "--db", "history.db", "--user", "rj"][..],
         &["--user", "rj", "sync", "--db", "history.db"],
-        &["sync", "--db=history.db", "--user=rj"],
     ] {
-        assert_eq!(parse(args(line)).unwrap(), expected);
+        assert_eq!(parse(args(line)).unwrap(), expected(Some("rj"), false));
     }
     assert_eq!(
-        parse(args(&["sync", "--db", "a=b.db"])).unwrap(),
-        Command::Sync(SyncArgs {
-            db: PathBuf::from("a=b.db"),
-            user: None
-        })
+        parse(args(&["--full", "sync", "--db", "history.db"])).unwrap(),
+        expected(None, true)
     );
 }
 
-#[test]
-fn help_and_version_win_wherever_they_stand() {
+#[tokio::test]
+async fn help_and_version_print_wherever_they_stand() {
     for line in [&["--help"][..], &["-h"], &["sync", "--db", "x", "--help"]] {
-        assert_eq!(parse(args(line)).unwrap(), Command::Help);
+        let (code, out, err) = tool(line, None).await;
+        assert_eq!((code, err.as_str()), (0, ""));
+        assert!(out.contains("scrobl sync --db <file> [--user <name>] [--full]"));
+        assert!(out.contains("not affiliated with or endorsed by Last.fm"));
     }
     for line in [&["--version"][..], &["-V"]] {
-        assert_eq!(parse(args(line)).unwrap(), Command::Version);
+        let (code, out, err) = tool(line, None).await;
+        assert_eq!((code, err.as_str()), (0, ""));
+        assert_eq!(out, format!("scrobl {}\n", env!("CARGO_PKG_VERSION")));
     }
 }
 
-#[test]
-fn a_wrong_command_line_says_what_is_wrong() {
-    assert!(usage_error(&[]).contains("no command"));
-    assert!(usage_error(&["--db", "x"]).contains("no command"));
-    assert!(usage_error(&["sync"]).contains("--db <file>"));
-    assert!(usage_error(&["sync", "--db"]).contains("`--db` needs a value"));
-    assert!(usage_error(&["sync", "--db", "a", "--db", "b"]).contains("given twice"));
-    assert!(usage_error(&["sync", "--user=a", "--user", "b", "--db", "x"]).contains("twice"));
-    assert!(usage_error(&["sync", "--verbose"]).contains("unknown option"));
-    assert!(usage_error(&["serve"]).contains("unknown command"));
-    assert!(usage_error(&["sync", "sync"]).contains("unknown command"));
-    assert!(usage_error(&["sync"]).contains("scrobl --help"));
-    // An empty path names no file; SQLite would read it as a database to
-    // throw away.
-    assert!(usage_error(&["sync", "--db="]).contains("--db <file>"));
-    assert!(usage_error(&["sync", "--db", ""]).contains("--db <file>"));
-}
-
-#[cfg(unix)]
-#[test]
-fn a_path_need_not_be_unicode_but_a_user_name_must() {
-    use std::os::unix::ffi::OsStringExt;
-    let odd = OsString::from_vec(vec![b'h', 0xff, b'.', b'd', b'b']);
-
-    let parsed = parse([OsString::from("sync"), "--db".into(), odd.clone()]).unwrap();
-    assert_eq!(
-        parsed,
-        Command::Sync(SyncArgs {
-            db: PathBuf::from(odd.clone()),
-            user: None
-        })
-    );
-
-    let error = parse([
-        OsString::from("sync"),
-        "--db".into(),
-        "x".into(),
-        "--user".into(),
-        odd,
-    ])
-    .unwrap_err();
-    assert!(error.to_string().contains("not valid Unicode"));
-
-    // Joined to its option, such a value would have to be rewritten to be
-    // read, and a rewritten path is another file.
-    for option in [&b"--db=h"[..], b"--user=h"] {
-        let mut joined = option.to_vec();
-        joined.push(0xff);
-        let error = parse([
-            OsString::from("sync"),
-            "--db".into(),
-            "x".into(),
-            OsString::from_vec(joined),
-        ])
-        .unwrap_err();
-        assert_eq!(error.exit_code(), 2);
-        assert!(error.to_string().contains("not valid Unicode"));
+#[tokio::test]
+async fn a_wrong_command_line_fails_with_one_line_that_says_where_to_look() {
+    let lines: [(&[&str], &str); 7] = [
+        (&[], "expected `scrobl sync --db <file>`"),
+        (&["--db", "x"], "expected `scrobl sync --db <file>`"),
+        (&["sync"], "expected `scrobl sync --db <file>`"),
+        (&["sync", "--db"], "expected `scrobl sync --db <file>`"),
+        // What a variable that was never set leaves, and no file.
+        (&["sync", "--db", ""], "expected `scrobl sync --db <file>`"),
+        (&["sync", "--db", "x", "--verbose"], "unknown argument"),
+        (&["serve"], "unknown argument"),
+    ];
+    // None of these names a user, so none could reach a sync if it were let
+    // through: a new database is refused before anything is asked.
+    for (line, says) in lines {
+        let (code, out, err) = tool(line, Some("key")).await;
+        assert_eq!((code, out.as_str()), (1, ""), "{line:?}");
+        assert_eq!(err, format!("scrobl: {says}; try `scrobl --help`\n"));
     }
 }
 
-#[test]
-fn the_environment_does_not_show_the_api_key() {
-    let environment = Environment {
-        api_key: Some(ApiKey::new("SENTINEL_API_KEY_0001")),
-        now: BASE,
-    };
-    let shown = format!("{environment:?} {environment:#?}");
-    assert!(!shown.contains("SENTINEL"));
-    assert!(shown.contains("now"));
-}
-
 #[tokio::test]
-async fn help_and_version_print_and_succeed() {
-    let (code, out, err) = tool(&["--help"], None).await;
-    assert_eq!((code, err.as_str()), (0, ""));
-    assert!(out.contains("scrobl sync --db <file>"));
-    assert!(out.contains("not affiliated with or endorsed by Last.fm"));
-
-    let (code, out, err) = tool(&["--version"], None).await;
-    assert_eq!((code, err.as_str()), (0, ""));
-    assert_eq!(out, format!("scrobl {}\n", env!("CARGO_PKG_VERSION")));
-}
-
-#[tokio::test]
-async fn a_usage_error_exits_2_and_prints_one_line() {
-    let (code, out, err) = tool(&["sync"], Some("key")).await;
-    assert_eq!((code, out.as_str()), (2, ""));
-    assert!(err.starts_with("scrobl: `sync` needs `--db <file>`"));
-    assert_eq!(err.lines().count(), 1);
-}
-
-#[tokio::test]
-async fn a_sync_without_an_api_key_is_a_usage_error() {
+async fn a_sync_without_an_api_key_says_which_variable_to_set() {
     let scratch = Scratch::new();
     let db = scratch.db();
-    for key in [None, Some("")] {
-        let (code, out, err) = tool(&["sync", "--db", db.to_str().unwrap()], key).await;
-        assert_eq!((code, out.as_str()), (2, ""));
-        assert!(err.contains("SCROBL_API_KEY"));
-    }
+
+    let (code, out, err) = tool(&["sync", "--db", db.to_str().unwrap()], None).await;
+
+    assert_eq!((code, out.as_str()), (1, ""));
+    assert!(err.contains("SCROBL_API_KEY"));
     // Nothing was opened, so nothing was created.
     assert!(!db.exists());
 }
 
 #[tokio::test]
-async fn a_database_that_cannot_be_opened_exits_1_before_anything_is_asked() {
+async fn a_database_that_cannot_be_opened_fails_before_anything_is_asked() {
     let scratch = Scratch::new();
     // A directory is not a database. The failure comes before any request,
     // so this never reaches the real service.
@@ -253,276 +156,135 @@ async fn a_database_that_cannot_be_opened_exits_1_before_anything_is_asked() {
 }
 
 #[tokio::test]
-async fn a_sync_reports_its_windows_and_its_counts() {
+async fn a_sync_reports_its_spans_and_its_counts() {
     let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    // The newest scrobble is at BASE + 200, half an hour before the clock.
-    let now = BASE + 201 + SETTLE;
+    let args = sync_args(&scratch, Some(USER));
+    // The newest scrobble is at BASE + 200, a second before the clock.
+    let now = BASE + 201;
 
     let (result, out, err, _) = sync_with(Dataset::distinct(20).with_loved(3), &args, now).await;
 
-    assert_eq!(result.unwrap(), 0);
+    result.unwrap();
     assert_eq!(
         out,
         "20 scrobbles up to 2023-11-14T22:16:41Z, 20 of them new.\n\
          3 loved tracks.\n"
     );
-    // Thirty days of listening, then everything before it, which is empty.
+    // The last fourteen days. Before them the file and Last.fm both hold
+    // nothing, so nothing was read.
     assert_eq!(
         err,
-        "2023-10-15T22:16:41Z to 2023-11-14T22:16:41Z: 20 scrobbles\n\
-         1970-01-01T00:00:00Z to 2023-10-15T22:16:41Z: 0 scrobbles\n"
+        "2023-10-31T22:16:41Z to 2023-11-14T22:16:41Z: 20 scrobbles, 20 new\n"
     );
-}
 
-#[tokio::test]
-async fn a_sync_stops_short_of_the_last_half_hour() {
-    let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    // The clock is one second past the newest scrobble, so the last half
-    // hour (180 scrobbles, ten seconds apart) is left for a later sync.
-    let now = BASE + 2_001;
+    // The same again, a minute later: read, and nothing in it new.
+    let (result, out, err, _) =
+        sync_with(Dataset::distinct(20).with_loved(3), &args, now + 60).await;
 
-    let (result, out, _, _) = sync_with(Dataset::distinct(200), &args, now).await;
-
-    assert_eq!(result.unwrap(), 0);
-    assert!(out.starts_with("20 scrobbles up to "));
+    result.unwrap();
+    assert_eq!(
+        out,
+        "20 scrobbles up to 2023-11-14T22:17:41Z, 0 of them new.\n\
+         3 loved tracks.\n"
+    );
+    assert_eq!(
+        err,
+        "2023-10-31T22:17:41Z to 2023-11-14T22:17:41Z: 20 scrobbles\n"
+    );
 }
 
 #[tokio::test]
 async fn the_user_is_needed_once_and_checked_afterwards() {
     let scratch = Scratch::new();
-    let named = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    let unnamed = SyncArgs {
-        db: scratch.db(),
-        user: None,
-    };
+    let named = sync_args(&scratch, Some(USER));
+    let unnamed = sync_args(&scratch, None);
     let now = BASE + 10_000;
 
     // A new database cannot guess whose history it is to hold.
     let (result, _, _, requests) = sync_with(Dataset::distinct(3), &unnamed, now).await;
-    let error = result.unwrap_err();
-    assert_eq!(error.exit_code(), 2);
-    assert!(error.to_string().contains("--user <name>"));
+    assert!(result.unwrap_err().to_string().contains("--user <name>"));
     assert_eq!(requests, 0);
 
     let (result, _, _, _) = sync_with(Dataset::distinct(3), &named, now).await;
-    assert_eq!(result.unwrap(), 0);
+    result.unwrap();
 
     // From then on it knows.
     let (result, out, _, _) = sync_with(Dataset::distinct(3), &unnamed, now).await;
-    assert_eq!(result.unwrap(), 0);
+    result.unwrap();
     assert!(out.starts_with("3 scrobbles up to "));
 
     // And it refuses anyone else, before asking the service anything.
-    let other = SyncArgs {
-        db: scratch.db(),
-        user: Some("someone-else".to_owned()),
-    };
+    let other = sync_args(&scratch, Some("someone-else"));
     let (result, _, _, requests) = sync_with(Dataset::distinct(3), &other, now).await;
-    assert!(matches!(result, Err(Error::OtherUser)));
+    assert!(result.unwrap_err().to_string().contains("another user"));
     assert_eq!(requests, 0);
 }
 
 #[tokio::test]
-async fn counts_that_differ_exit_3_and_say_why() {
+async fn what_changed_at_last_fm_is_followed_and_reported() {
     let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    let now = BASE + 10_000;
-    let (result, _, _, _) = sync_with(Dataset::distinct(20), &args, now).await;
-    assert_eq!(result.unwrap(), 0);
+    let args = sync_args(&scratch, Some(USER));
+    let now = BASE + 201;
+    let before = named((1..=20).map(|i| BASE + 10 * i));
+    let (result, _, _, _) = sync_with(before.clone(), &args, now).await;
+    result.unwrap();
 
-    // One more scrobble, dated inside the period already read.
-    let mut times: Vec<u64> = (1..=20).map(|i| BASE + 10 * i).collect();
-    times.push(BASE + 55);
-    let (result, out, err, _) = sync_with(Dataset::from_timestamps(times), &args, now).await;
-
-    assert_eq!(result.unwrap(), EXIT_MISMATCH);
-    assert_eq!(err, "");
-    let mut lines = out.lines();
-    assert!(lines.next().unwrap().starts_with("20 scrobbles up to "));
-    assert!(lines.next().unwrap().starts_with("Last.fm reports 21. "));
-    // The loved tracks are read whatever the counts said.
-    assert_eq!(lines.next(), Some("0 loved tracks."));
-}
-
-#[tokio::test]
-async fn loved_tracks_that_cannot_be_read_fail_the_sync_and_keep_the_history() {
-    let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    // A track is loved between the first page of the list and the second.
-    let faults = Faults {
-        love_from_page: Some(2),
-        ..Faults::default()
-    };
-    let dataset = Dataset::distinct(20).with_loved(4).with_faults(faults);
-    let server = FakeLastfm::start(dataset).await;
-    let mut options = Options::default();
-    options.loved_page_size = 2;
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-
-    let result = sync_command(
-        &args,
-        &client(&server),
-        BASE + 10_000,
-        options,
-        &mut out,
-        &mut err,
-    )
-    .await;
-
-    let error = result.unwrap_err();
-    assert_eq!(error.exit_code(), 1);
-    assert!(error.to_string().contains("loved tracks"), "{error}");
-    // The history was stored and reported before the list was asked for.
-    assert!(
-        String::from_utf8(out)
-            .unwrap()
-            .starts_with("20 scrobbles up to ")
+    // One play was deleted on the website, and one arrived late.
+    let after = named(
+        before
+            .entries
+            .iter()
+            .map(|entry| entry.ts)
+            .filter(|time| *time != BASE + 50)
+            .chain([BASE + 55]),
     );
-    let store = scrobl_cli::store::Store::open(scratch.db()).unwrap();
-    assert_eq!(store.scrobbles_before(BASE + 10_000).unwrap(), 20);
-}
+    let (result, out, err, _) = sync_with(after, &args, now + 60).await;
 
-#[tokio::test]
-async fn a_clock_that_runs_ahead_does_not_put_the_future_on_record() {
-    let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    // Last.fm says it is `served`; this machine says it is five hours later.
-    let served = BASE + 10_000;
-    let ahead = served + 10 * SETTLE;
-    let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
-
-    let (result, out, err, _) = sync_on(server, &args, ahead).await;
-
-    assert_eq!(result.unwrap(), 0);
-    assert!(
-        out.starts_with("20 scrobbles up to 2023-11-15T00:30:00Z, "),
-        "{out}"
+    result.unwrap();
+    assert_eq!(
+        out,
+        "20 scrobbles up to 2023-11-14T22:17:41Z, 1 of them new.\n\
+         Last.fm no longer lists 1 of the scrobbles the file held. The table `removed` keeps \
+         every one.\n\
+         0 loved tracks.\n"
     );
-    assert!(
-        err.starts_with(
-            "This machine's clock is ahead of Last.fm's (2023-11-15T06:00:00Z against \
-             2023-11-15T01:00:00Z); reading up to Last.fm's.\n"
-        ),
-        "{err}"
+    assert_eq!(
+        err,
+        "2023-10-31T22:17:41Z to 2023-11-14T22:17:41Z: 20 scrobbles, 1 new, 1 gone\n"
     );
-    assert_eq!(covered_to(&args), Some(served - SETTLE));
-
-    // A track played after that, at a time the machine's clock had already
-    // passed, is read by the next sync.
-    let mut times: Vec<u64> = (1..=20).map(|i| BASE + 10 * i).collect();
-    times.push(served + 60);
-    let later = served + 2 * SETTLE;
-    let server = FakeLastfm::start(Dataset::from_timestamps(times))
-        .await
-        .dated(later);
-    let (result, out, _, _) = sync_on(server, &args, later + 10 * SETTLE).await;
-
-    assert_eq!(result.unwrap(), 0);
-    assert!(out.starts_with("21 scrobbles up to "), "{out}");
-    assert!(out.contains(", 1 of them new."), "{out}");
+    let store = Store::open(scratch.db()).unwrap();
+    let removed: u64 = store
+        .connection()
+        .query_row("SELECT timestamp FROM removed", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(removed, BASE + 50);
 }
 
 #[tokio::test]
-async fn a_clock_that_runs_behind_reads_up_to_itself() {
+async fn full_reads_the_whole_history_again() {
     let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    let now = BASE + 10_000;
-    let server = FakeLastfm::start(Dataset::distinct(20))
-        .await
-        .dated(now + 10 * SETTLE);
+    let args = sync_args(&scratch, Some(USER));
+    // A month of plays, one a day, the newest an hour ago.
+    let now = BASE + 30 * DAY;
+    let dataset = Dataset::from_timestamps((0..30).map(|day| now - 3_600 - day * DAY).collect());
+    let (result, ..) = sync_with(dataset.clone(), &args, now).await;
+    result.unwrap();
 
-    let (result, _, err, _) = sync_on(server, &args, now).await;
+    // Without `--full`, the last fourteen days.
+    let (result, out, err, _) = sync_with(dataset.clone(), &args, now).await;
+    result.unwrap();
+    assert!(out.starts_with("30 scrobbles up to "), "{out}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(err.ends_with(": 14 scrobbles\n"), "{err}");
 
-    assert_eq!(result.unwrap(), 0);
-    assert!(!err.contains("clock"), "{err}");
-    assert_eq!(covered_to(&args), Some(now - SETTLE));
-}
-
-#[tokio::test]
-async fn without_last_fms_clock_nothing_is_read() {
-    let silent = |dataset| async { FakeLastfm::start(dataset).await.undated() };
-    let garbled = |dataset| async {
-        let question = [
-            ("method", "user.getRecentTracks"),
-            ("user", USER),
-            ("api_key", "k"),
-            ("limit", "1"),
-        ]
-        .map(|(name, value)| (name.to_owned(), value.to_owned()));
-        let (status, body) = respond_to(&dataset, &question);
-        FakeLastfm::start(dataset)
-            .await
-            .script([Behaviour::status_with(
-                status,
-                body,
-                &[("Date", "yesterday")],
-            )])
-    };
-    for server in [
-        silent(Dataset::distinct(20)).await,
-        garbled(Dataset::distinct(20)).await,
-    ] {
-        let scratch = Scratch::new();
-        let args = SyncArgs {
-            db: scratch.db(),
-            user: Some(USER.to_owned()),
-        };
-
-        let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
-
-        let Err(error @ Error::Service(_)) = result else {
-            panic!("expected a service error, got {result:?}");
-        };
-        assert!(error.to_string().contains("what time it is"), "{error}");
-        assert_eq!(error.exit_code(), 1);
-        assert_eq!(out, "");
-        assert_eq!(requests, 1);
-        assert_eq!(covered_to(&args), None);
-    }
-}
-
-#[tokio::test]
-async fn a_date_at_the_epoch_ends_the_sync_and_stores_nothing() {
-    let scratch = Scratch::new();
-    let args = SyncArgs {
-        db: scratch.db(),
-        user: Some(USER.to_owned()),
-    };
-    // Earlier than the margin is long: there is nothing before it to read.
-    for served in [0, SETTLE] {
-        let server = FakeLastfm::start(Dataset::distinct(20)).await.dated(served);
-
-        let (result, out, _, requests) = sync_on(server, &args, BASE + 10_000).await;
-
-        let Err(error @ Error::Service(_)) = result else {
-            panic!("expected a service error, got {result:?}");
-        };
-        assert_eq!(error.exit_code(), 1);
-        assert_eq!(out, "");
-        assert_eq!(requests, 1);
-        assert_eq!(covered_to(&args), None);
-    }
+    // With it, those and everything before them.
+    let full = SyncArgs { full: true, ..args };
+    let (result, out, err, _) = sync_with(dataset, &full, now).await;
+    result.unwrap();
+    assert!(out.contains(", 0 of them new.\n"), "{out}");
+    let read: Vec<&str> = err.lines().collect();
+    assert_eq!(read.len(), 2, "{err}");
+    assert!(read[0].ends_with(": 14 scrobbles"), "{err}");
+    assert!(read[1].starts_with("1970-01-01T00:00:00Z to "), "{err}");
+    assert!(read[1].ends_with(": 16 scrobbles"), "{err}");
 }
