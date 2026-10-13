@@ -13,6 +13,7 @@
 
 mod common;
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use common::*;
@@ -23,8 +24,8 @@ use scrobl_cli::store::Store;
 
 const DAY: u64 = 86_400;
 
-fn args(line: &[&str]) -> Vec<String> {
-    line.iter().map(|&arg| arg.to_owned()).collect()
+fn args(line: &[&str]) -> Vec<OsString> {
+    line.iter().map(OsString::from).collect()
 }
 
 /// The arguments of a plain `scrobl sync` on the database in `scratch`.
@@ -104,14 +105,18 @@ async fn help_and_version_print_wherever_they_stand() {
 
 #[tokio::test]
 async fn a_wrong_command_line_fails_with_one_line_that_says_where_to_look() {
-    let lines: [(&[&str], &str); 6] = [
+    let lines: [(&[&str], &str); 7] = [
         (&[], "expected `scrobl sync --db <file>`"),
         (&["--db", "x"], "expected `scrobl sync --db <file>`"),
         (&["sync"], "expected `scrobl sync --db <file>`"),
         (&["sync", "--db"], "expected `scrobl sync --db <file>`"),
+        // What a variable that was never set leaves, and no file.
+        (&["sync", "--db", ""], "expected `scrobl sync --db <file>`"),
         (&["sync", "--db", "x", "--verbose"], "unknown argument"),
         (&["serve"], "unknown argument"),
     ];
+    // None of these names a user, so none could reach a sync if it were let
+    // through: a new database is refused before anything is asked.
     for (line, says) in lines {
         let (code, out, err) = tool(line, Some("key")).await;
         assert_eq!((code, out.as_str()), (1, ""), "{line:?}");

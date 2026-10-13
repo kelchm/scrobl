@@ -4,6 +4,7 @@
 //! scrobl sync --db <file> [--user <name>] [--full]
 //! ```
 
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -62,24 +63,27 @@ pub enum Command {
 
 /// Parses the arguments after the program name. The messages are fixed and
 /// repeat no argument, since one given by mistake may be a key.
-pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, Error> {
+///
+/// An empty `--db` is no file: SQLite would take it for a database to throw
+/// away when it is closed, and a sync into it would seem to go well.
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error> {
     let mut args = args.into_iter();
     let (mut sync, mut db, mut user, mut full) = (false, None, None, false);
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => return Ok(Command::Help),
-            "-V" | "--version" => return Ok(Command::Version),
-            "sync" => sync = true,
-            "--db" => db = args.next(),
-            "--user" => user = args.next(),
-            "--full" => full = true,
+        match arg.to_str() {
+            Some("-h" | "--help") => return Ok(Command::Help),
+            Some("-V" | "--version") => return Ok(Command::Version),
+            Some("sync") => sync = true,
+            Some("--db") => db = args.next(),
+            Some("--user") => user = args.next(),
+            Some("--full") => full = true,
             _ => return Err(Error::Refused("unknown argument; try `scrobl --help`")),
         }
     }
     match db {
-        Some(db) if sync => Ok(Command::Sync(SyncArgs {
+        Some(db) if sync && !db.is_empty() => Ok(Command::Sync(SyncArgs {
             db: PathBuf::from(db),
-            user,
+            user: user.and_then(|user| user.into_string().ok()),
             full,
         })),
         _ => Err(Error::Refused(
@@ -94,7 +98,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, Error> {
 /// The API key is the value of `SCROBL_API_KEY`. It is never taken from the
 /// command line, where other users of the machine could see it.
 pub async fn run(
-    args: impl IntoIterator<Item = String>,
+    args: impl IntoIterator<Item = OsString>,
     api_key: Option<ApiKey>,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -110,7 +114,7 @@ pub async fn run(
 }
 
 async fn try_run(
-    args: impl IntoIterator<Item = String>,
+    args: impl IntoIterator<Item = OsString>,
     api_key: Option<ApiKey>,
     out: &mut dyn Write,
     err: &mut dyn Write,
