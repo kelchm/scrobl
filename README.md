@@ -99,15 +99,33 @@ scrobl sync --db history.db --user rj    # the first time
 scrobl sync --db history.db              # every time after
 ```
 
-A sync makes the file agree with Last.fm. It asks Last.fm how many scrobbles a period holds and compares that with the file: where the two agree it moves on, and where they differ it halves the period and asks again, until Last.fm counts no more than 5000 in what is left. That it reads, every page checked by the library's scan, and the reading replaces the file's copy of the period in one step. The first sync reads the whole history this way, a second between requests. It can be stopped and run again at any point: what it stored is counted and, where it agrees, passed over.
+The first sync reads the whole history, a second between requests: about a minute for every 10,000 scrobbles. It can be stopped and run again at any point. Every sync after it reads the last fourteen days again, because scrobbles arrive late, and any older period in which Last.fm counts another number of scrobbles than the file holds. `--full` reads everything again, which also finds what no count shows, such as an old scrobble that was edited.
 
-Scrobbles arrive late, from a track that has just ended or a device that was offline for days. So every sync also reads the last fourteen days whatever the counts say. A scrobble that arrives later than that changes the count of its period, and the next sync is led to it. `--full` reads the whole history again, which also finds what no count shows, such as one scrobble removed and another added.
+A sync that fails says why in one line, exits with status 1 and keeps what it stored.
 
-The file holds one row per scrobble in `scrobbles`, the table to query: its time, artist, track and album, the ids Last.fm sent, and in `raw` the whole row as JSON. Scrobbles are never merged, so two plays in the same second are two rows, and `ORDER BY timestamp, id` is the order of listening. A scrobble that was in the file and is no longer at Last.fm, because it was deleted or edited there, leaves `scrobbles` and is kept in `removed`; the sync says how many did. `loved` is the tracks the user has loved, each with the time it was loved, as the list stood at the last sync.
+The file holds four tables:
 
-A sync exits with status 0 when it is done, 1 when it failed, 2 when the command line was wrong, and 3 when it finished but Last.fm and the file still count the history older than fourteen days differently. That last means the history changed while it was being read, which the next sync puts right, or that Last.fm's counts do not add up, which no reading can. A sync that fails keeps what it stored.
+| Table | Holds |
+|---|---|
+| `scrobbles` | One row per scrobble: `timestamp` in Unix seconds, `artist`, `track`, `album`, the `mbid` Last.fm sent for each, and `raw`, the whole row as JSON |
+| `removed` | Scrobbles the file held that Last.fm no longer lists, because they were deleted or edited there, each with `removed_at` |
+| `loved` | The tracks the user has loved, each with `loved_at`, as the list stood at the last sync |
+| `meta` | The user, and when the history and the loved tracks were last read |
 
-Nothing in the file is final or records how far a sync got, so a wrong clock or a second sync on the same file cannot put anything false on record. A clock that runs behind leaves the newest scrobbles to a later sync, and one that runs ahead reads all there is. Two syncs at once each write checked readings over whole periods, and the later write stands. Where that leaves an older reading over a newer one, the next sync finds it by its count or reads it again because it is recent; what neither shows waits for `--full`.
+Anything that reads SQLite can query it:
+
+```sh
+# The ten artists played most
+sqlite3 history.db "SELECT artist, count(*) FROM scrobbles GROUP BY artist ORDER BY 2 DESC LIMIT 10"
+
+# The last twenty plays, in the order of listening
+sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM scrobbles ORDER BY timestamp DESC, id DESC LIMIT 20"
+
+# What Last.fm sent that has no column of its own
+sqlite3 history.db "SELECT json_extract(raw, '$.url') FROM scrobbles LIMIT 1"
+```
+
+Scrobbles are never merged: two plays in the same second are two rows.
 
 ## Last.fm's terms
 

@@ -1,41 +1,35 @@
 //! The database: one SQLite file holding one user's history.
 //!
-//! - `scrobbles`: one row per scrobble. This is the table to query, and it
-//!   is the record: `raw` holds the row as Last.fm sent it, as JSON, so a
-//!   column can be added or filled in again without asking Last.fm. Rows
-//!   are never merged: two scrobbles of the same track in the same second
-//!   are two rows.
+//! - `scrobbles`: one row per scrobble, and the table to query. `raw` is the
+//!   row as Last.fm sent it, as JSON. Rows are never merged: two scrobbles
+//!   of the same track in the same second are two rows.
 //! - `removed`: scrobbles the file held that a later reading of the same
-//!   time did not, each with when that was noticed. The file follows
-//!   Last.fm, and no scrobble it once held is thrown away.
+//!   time did not, each with when that was noticed.
 //! - `loved`: the tracks the user has loved, as they stood at the last
 //!   sync, in the order Last.fm lists them.
 //! - `meta`: whose history this is, and when it and the loved tracks were
 //!   last read.
 //!
-//! Nothing in the file says how the history was read. A span of time is
-//! written by [`Store::replace`], which makes the file hold exactly what one
-//! checked reading of that span held, in one transaction. Writing the same
-//! reading again changes nothing, so a span cannot be stored twice, and
-//! spans may be written in any order.
+//! Nothing in the file says how the history was read. [`Store::replace`]
+//! makes it hold, for a span of time, exactly what one checked reading of
+//! that span held. Writing the same reading again changes nothing, so spans
+//! may be written twice and in any order.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use scrobl::Response;
 use scrobl::history::{ScanPage, ScanSummary};
 use scrobl::model::LovedTracksPage;
 
 use crate::Error;
 
-/// Marks the file as this tool's: `PRAGMA application_id`. The bytes spell
-/// "scbl".
+/// `PRAGMA application_id`, which marks the file as this tool's. The bytes
+/// spell "scbl".
 const APPLICATION_ID: i64 = 0x7363_626c;
 
-/// The layout below: `PRAGMA user_version`. Versions 1 and 2 kept the
-/// history as the pages Last.fm sent, and 3 was written by a build that was
-/// never merged. None of them is read.
+/// `PRAGMA user_version`, which says the file has the layout below.
 const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
@@ -99,72 +93,33 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens the database at `path`, creating it if the file is missing or
-    /// empty.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Database`] when the path names no file (it is empty, or is
-    /// SQLite's `:memory:`), when the file is some other SQLite database or
-    /// was written by another version of this tool, and [`Error::Sqlite`]
-    /// when it cannot be opened or is not a database at all. A file that is
-    /// refused is left as it was.
+    /// Opens the database at `path`. A file with no tables is new and is set
+    /// up. Any other file must carry both marks as this version writes them,
+    /// or it is refused and left as it was: nothing is upgraded, because the
+    /// history can be read again.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let path = path.as_ref();
-        // SQLite reads both of these as a database that is thrown away when
-        // it is closed, which is the one thing a backup must not be.
-        if path.as_os_str().is_empty() || path.as_os_str() == ":memory:" {
-            return Err(Error::Database("the database path does not name a file"));
-        }
-        // Without the URI flag a path is only ever a path, so `file:` names
-        // a file and cannot ask for a database in memory.
-        let mut connection = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
-
-        let objects: i64 =
+        let mut connection = Connection::open(path)?;
+        let tables: i64 =
             connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
         let application: i64 =
             connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        // New means untouched: no tables and neither mark set. A file that
-        // another program has marked is that program's, even while empty.
-        if objects == 0 && application == 0 && version == 0 {
+        if tables == 0 {
             let transaction = connection.transaction()?;
             transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
-            return Ok(Self { connection });
-        }
-        if application != APPLICATION_ID {
-            return Err(Error::Database(
-                "the file is a database, but not one this tool made",
-            ));
-        }
-        if version < SCHEMA_VERSION {
-            return Err(Error::Database(
-                "the database was written by an earlier version of this tool, which kept the \
-                 history in another form; sync into a new file",
-            ));
-        }
-        if version > SCHEMA_VERSION {
-            return Err(Error::Database(
-                "the database was written by a later version of this tool",
+        } else if (application, version) != (APPLICATION_ID, SCHEMA_VERSION) {
+            return Err(Error::Refused(
+                "the file was written by another version of this tool, or by another program; \
+                 sync into a new file",
             ));
         }
         Ok(Self { connection })
     }
 
     /// The user whose history the database holds, if one has been set.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Sqlite`].
     pub fn user(&self) -> Result<Option<String>, Error> {
         Ok(self
             .connection
@@ -176,15 +131,12 @@ impl Store {
 
     /// Ties the database to `user`. The first call records the name; a later
     /// one checks it, ignoring ASCII case as Last.fm does.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::OtherUser`] when the database already holds another user's
-    /// history.
     pub fn bind_user(&mut self, user: &str) -> Result<(), Error> {
         match self.user()? {
             Some(bound) if bound.eq_ignore_ascii_case(user) => Ok(()),
-            Some(_) => Err(Error::OtherUser),
+            Some(_) => Err(Error::Refused(
+                "the database holds another user's history; use one file per user",
+            )),
             None => {
                 self.connection
                     .execute("INSERT INTO meta (key, value) VALUES ('user', ?1)", [user])?;
@@ -194,10 +146,6 @@ impl Store {
     }
 
     /// The number of scrobbles stored with a timestamp in `[from, to)`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Sqlite`].
     pub fn count(&self, from: u64, to: u64) -> Result<u64, Error> {
         Ok(self.connection.query_row(
             "SELECT count(*) FROM scrobbles WHERE timestamp >= ?1 AND timestamp < ?2",
@@ -210,25 +158,16 @@ impl Store {
     /// that scan read, in one transaction.
     ///
     /// `summary` is what [`Scan::finish`](scrobl::client::Scan::finish)
-    /// returned for `pages`, which is the proof that every page passed the
-    /// scan's checks, and it says which span they cover. Nothing here checks
-    /// the pages again, so they must be the ones the summary came with. A
-    /// span with no lower bound starts at 0.
+    /// returned for `pages`: the proof that every page passed the scan's
+    /// checks, and the span they cover. Nothing here checks the pages again.
     ///
-    /// The reading is compared with what the file held for the span, by the
+    /// The reading is compared with what the file held for the span by the
     /// time, artist and track of each row, counting rows that share all
     /// three: the ids and the album are what Last.fm says about a scrobble,
     /// not which scrobble it is. A scrobble only the file had is copied to
     /// `removed` with `now` as the time it was noticed. Then the span's rows
     /// are replaced by the reading's, oldest first, so that
-    /// `ORDER BY timestamp, id` is the order of listening. A scrobble both
-    /// have is kept as the reading has it: what Last.fm said about it before
-    /// is not.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Database`] when the span has no upper bound, and
-    /// [`Error::Sqlite`]. Nothing is written in either case.
+    /// `ORDER BY timestamp, id` is the order of listening.
     pub fn replace(
         &mut self,
         summary: &ScanSummary,
@@ -238,7 +177,7 @@ impl Store {
         let span = summary.window();
         let from = span.from().unwrap_or(0);
         let Some(to) = span.to() else {
-            return Err(Error::Database(
+            return Err(Error::Refused(
                 "a reading without an upper bound cannot be stored",
             ));
         };
@@ -321,15 +260,10 @@ impl Store {
         Ok(change)
     }
 
-    /// Replaces the loved tracks with `pages`, the whole list as one read
-    /// returned it, page 1 first, in one transaction. The time of the read
-    /// is kept in `meta` as `loved_read_at`. Nothing here checks that the
-    /// pages are one whole list: [`sync::loved`](crate::sync::loved) does.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Sqlite`]. Nothing is written then.
-    pub fn replace_loved(
+    /// Replaces the loved tracks with `pages`, page 1 first, in one
+    /// transaction, and keeps the time of the read in `meta` as
+    /// `loved_read_at`.
+    pub(crate) fn replace_loved(
         &mut self,
         pages: &[Response<LovedTracksPage>],
         read_at: u64,
@@ -362,11 +296,7 @@ impl Store {
     /// Notes in `meta`, as `history_read_at`, that a sync finished reading
     /// the history at `read_at`. Nothing in the tool goes by it: it is there
     /// for whoever asks how fresh the file is.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Sqlite`].
-    pub fn note_history_read(&mut self, read_at: u64) -> Result<(), Error> {
+    pub(crate) fn note_history_read(&mut self, read_at: u64) -> Result<(), Error> {
         note(&self.connection, "history_read_at", read_at)
     }
 

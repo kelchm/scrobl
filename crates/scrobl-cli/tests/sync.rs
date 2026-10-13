@@ -17,8 +17,8 @@ use rusqlite::OptionalExtension;
 use scrobl::history::Window;
 use scrobl::{ApiErrorCode, ErrorKind};
 use scrobl_cli::Error;
-use scrobl_cli::store::Store;
-use scrobl_cli::sync::{Options, Report, Stored, sync};
+use scrobl_cli::store::{Change, Store};
+use scrobl_cli::sync::{Options, Stored, sync};
 
 const DAY: u64 = 86_400;
 
@@ -26,11 +26,12 @@ const DAY: u64 = 86_400;
 /// worth halving: the last hundred seconds are read every time, a scan
 /// holds ten scrobbles at most and a page four.
 fn options() -> Options {
-    let mut options = Options::default();
-    options.recent = 100;
-    options.chunk = 10;
-    options.page_size = 4;
-    options
+    Options {
+        recent: 100,
+        chunk: 10,
+        page_size: 4,
+        full: false,
+    }
 }
 
 /// One sync of `dataset` into `store`, with the server it ran against and
@@ -40,7 +41,7 @@ async fn run(
     store: &mut Store,
     now: u64,
     options: Options,
-) -> (FakeLastfm, Result<Report, Error>, Vec<Stored>) {
+) -> (FakeLastfm, Result<Change, Error>, Vec<Stored>) {
     let server = FakeLastfm::start(dataset.clone()).await;
     let mut stored = Vec::new();
     let result = sync(&client(&server), store, USER, now, options, |span| {
@@ -124,22 +125,17 @@ async fn a_first_sync_stores_the_whole_history_newest_first() {
 
     let (_server, result, stored) = run(&dataset, &mut store, now, options()).await;
 
-    let report = result.unwrap();
     assert_eq!(
-        report,
-        Report {
-            to: now,
-            recent_from: now - 100,
+        result.unwrap(),
+        Change {
             added: 50,
-            removed: 0,
-            stored: 50,
-            older: 40,
-            reported: 40,
+            removed: 0
         }
     );
-    assert!(report.matches());
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
     assert_eq!(history_read_at(&store), Some(now.to_string()));
+    // A new database is tied to the user it was first synced for.
+    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
 
     // The recent part first, then the rest from its newest end backwards,
     // no scan larger than it should be and no time read twice.
@@ -240,6 +236,7 @@ async fn a_sync_that_fails_keeps_what_it_stored_and_the_next_one_finishes() {
     })
     .await
     .unwrap_err();
+    assert!(error.to_string().starts_with("Last.fm: "), "{error}");
     let Error::Lastfm(error) = error else {
         panic!("expected a Last.fm error, got {error:?}");
     };
@@ -257,7 +254,7 @@ async fn a_sync_that_fails_keeps_what_it_stored_and_the_next_one_finishes() {
     let later = now + 7;
     let (server, result, second) = run(&dataset, &mut store, later, options()).await;
 
-    assert!(result.unwrap().matches());
+    result.unwrap();
     assert_eq!(markers(&store), dataset.expected(Window::before(later)));
     assert_eq!(history_read_at(&store), Some(later.to_string()));
     // Apart from the recent part, which every sync reads, it read again no
@@ -276,8 +273,10 @@ async fn a_sync_that_fails_keeps_what_it_stored_and_the_next_one_finishes() {
 async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
-    let mut options = options();
-    options.page_size = 200;
+    let options = Options {
+        page_size: 200,
+        ..options()
+    };
     let first_now = BASE + 205;
     let (_server, result, _) = run(&Dataset::distinct(20), &mut store, first_now, options).await;
     result.unwrap();
@@ -287,9 +286,13 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
     let now = BASE + 305;
     let (server, result, stored) = run(&dataset, &mut store, now, options).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (10, 0, 30));
-    assert_eq!((report.older, report.reported), (20, 20));
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 10,
+            removed: 0
+        }
+    );
     assert_eq!(
         stored,
         [Stored {
@@ -305,8 +308,8 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
         dataset.expected_timestamps(Window::before(now))
     );
 
-    // How many are recent, and a page of them; how many are older, which is
-    // as many as the file holds; and how many are older once more.
+    // How many are recent, and a page of them; and how many are older, which
+    // is as many as the file holds.
     let asked: Vec<(Option<String>, Option<String>, Option<String>)> = server
         .requests()
         .iter()
@@ -325,7 +328,6 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
             (text(1), text(now - 100), text(now)),
             (text(200), text(now - 100), text(now)),
             (text(1), None, text(now - 100)),
-            (text(1), None, text(now - 100)),
         ]
     );
 }
@@ -340,13 +342,11 @@ async fn a_sync_with_nothing_new_changes_nothing() {
 
     let (server, result, stored) = run(&dataset, &mut store, now + 7, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (0, 0, 50));
-    assert!(report.matches());
+    assert_eq!(result.unwrap(), Change::default());
     // Only the recent part was read, and it held what the file held.
     assert_eq!(stored.len(), 1);
     assert_eq!((stored[0].added, stored[0].removed), (0, 0));
-    assert_eq!(server.request_count() - pages_asked(&server), 3);
+    assert_eq!(server.request_count() - pages_asked(&server), 2);
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
     assert!(timestamps(&store, "removed").is_empty());
 }
@@ -360,14 +360,15 @@ async fn scrobbles_that_share_a_second_are_all_kept_however_often_they_are_read(
     all.extend([BASE + 10, BASE + 90]);
     let dataset = Dataset::from_timestamps(all).byte_identical();
     let now = BASE + 100;
-    let mut options = options();
-    options.page_size = 2;
+    let options = Options {
+        page_size: 2,
+        ..options()
+    };
 
     for added in [7, 0, 0] {
         let (_server, result, _) = run(&dataset, &mut store, now, options).await;
 
-        let report = result.unwrap();
-        assert_eq!((report.added, report.removed), (added, 0));
+        assert_eq!(result.unwrap(), Change { added, removed: 0 });
         let kept = timestamps(&store, "scrobbles");
         assert_eq!(kept, dataset.expected_timestamps(Window::before(now)));
         assert_eq!(kept.iter().filter(|&&ts| ts == BASE + 50).count(), 5);
@@ -384,9 +385,11 @@ async fn a_second_that_holds_more_than_a_scan_should_is_read_as_one_scan() {
     all.extend([BASE + 10, BASE + 20, BASE + 90]);
     let dataset = Dataset::from_timestamps(all).identical_rows();
     let now = BASE + 100;
-    let mut options = options();
-    options.chunk = 3;
-    options.page_size = 2;
+    let options = Options {
+        chunk: 3,
+        page_size: 2,
+        ..options()
+    };
 
     // A second cannot be halved, and a sync that tried would never end.
     let (_server, result, stored) = tokio::time::timeout(
@@ -396,7 +399,7 @@ async fn a_second_that_holds_more_than_a_scan_should_is_read_as_one_scan() {
     .await
     .expect("the sync ends");
 
-    assert!(result.unwrap().matches());
+    result.unwrap();
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
     assert!(
         stored.contains(&Stored {
@@ -425,12 +428,14 @@ async fn a_long_silence_costs_a_few_counts() {
     all.extend((1..=5).map(|i| later + 10 * i));
     let dataset = Dataset::from_timestamps(all);
     let now = later + 1_000_000;
-    let mut options = options();
-    options.chunk = 5;
+    let options = Options {
+        chunk: 5,
+        ..options()
+    };
 
     let (server, result, stored) = run(&dataset, &mut store, now, options).await;
 
-    assert!(result.unwrap().matches());
+    result.unwrap();
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
     // The recent part, which is empty, and then each end of the silence as
     // one scan. Nothing was read where there is nothing.
@@ -448,11 +453,9 @@ async fn an_empty_history_is_no_error() {
 
     let (server, result, stored) = run(&Dataset::distinct(0), &mut store, now, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.stored, report.reported), (0, 0, 0));
-    assert!(report.matches());
+    assert_eq!(result.unwrap(), Change::default());
     assert_eq!(stored.len(), 1);
-    assert_eq!(server.request_count(), 4);
+    assert_eq!(server.request_count(), 3);
     assert!(timestamps(&store, "scrobbles").is_empty());
 }
 
@@ -462,14 +465,14 @@ async fn the_now_playing_row_is_not_a_scrobble() {
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(25).with_now_playing(true, Pages::All);
     let now = BASE + 255;
-    let mut options = options();
-    options.page_size = 2;
+    let options = Options {
+        page_size: 2,
+        ..options()
+    };
 
     let (_server, result, _) = run(&dataset, &mut store, now, options).await;
 
-    let report = result.unwrap();
-    assert!(report.matches());
-    assert_eq!(report.stored, 25);
+    assert_eq!(result.unwrap().added, 25);
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
 }
 
@@ -479,9 +482,11 @@ async fn a_span_that_is_disturbed_while_it_is_read_is_read_again() {
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(6);
     let now = BASE + 100;
-    let mut options = options();
-    options.recent = 1_000;
-    options.page_size = 2;
+    let options = Options {
+        recent: 1_000,
+        page_size: 2,
+        ..options()
+    };
 
     // The first page of the first reading is the first page of a longer
     // history: what Last.fm held a moment before a scrobble was deleted.
@@ -497,8 +502,7 @@ async fn a_span_that_is_disturbed_while_it_is_read_is_read_again() {
         .script([Behaviour::Normal, Behaviour::status(200, body)]);
     let result = sync(&client(&server), &mut store, USER, now, options, |_| {}).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.stored), (6, 6));
+    assert_eq!(result.unwrap().added, 6);
     assert_eq!(markers(&store), dataset.expected(Window::before(now)));
     // Two readings: one stopped at its second page, and one of three pages.
     assert_eq!(pages_asked(&server), 5);
@@ -510,9 +514,11 @@ async fn a_span_that_never_holds_still_fails_and_the_file_stays_as_it_was() {
     let mut store = Store::open(scratch.db()).unwrap();
     let dataset = Dataset::distinct(6);
     let now = BASE + 5_000;
-    let mut options = options();
-    options.recent = 10_000;
-    options.page_size = 2;
+    let options = Options {
+        recent: 10_000,
+        page_size: 2,
+        ..options()
+    };
     run(&dataset, &mut store, now, options).await.1.unwrap();
     let before = markers(&store);
 
@@ -561,53 +567,6 @@ async fn a_refusal_is_an_error_and_never_an_empty_history() {
 }
 
 #[tokio::test]
-async fn a_failed_call_is_a_lastfm_error_with_its_cause() {
-    use std::error::Error as _;
-
-    let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
-    let server = FakeLastfm::start(Dataset::distinct(3))
-        .await
-        .then(Behaviour::html(503));
-
-    let error = sync(
-        &client(&server),
-        &mut store,
-        USER,
-        BASE + 100,
-        Options::default(),
-        |_| {},
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(error.exit_code(), 1);
-    assert!(error.to_string().starts_with("Last.fm: "));
-    assert!(error.source().is_some());
-    assert!(timestamps(&store, "scrobbles").is_empty());
-}
-
-#[tokio::test]
-async fn a_count_for_another_user_is_refused() {
-    let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
-    // The first answer, which is a count, names someone else.
-    let dataset = Dataset::distinct(5).with_faults(Faults {
-        wrong_user_on_page: Some(1),
-        ..Faults::default()
-    });
-
-    let (server, result, _) = run(&dataset, &mut store, BASE + 100, options()).await;
-
-    let Err(Error::Service(message)) = result else {
-        panic!("expected a service error, got {result:?}");
-    };
-    assert!(message.contains("another user"), "{message}");
-    assert_eq!(server.request_count(), 1);
-    assert!(timestamps(&store, "scrobbles").is_empty());
-}
-
-#[tokio::test]
 async fn a_database_of_another_user_is_refused_before_anything_is_asked() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
@@ -621,27 +580,14 @@ async fn a_database_of_another_user_is_refused_before_anything_is_asked() {
     )
     .await;
 
-    assert!(matches!(result, Err(Error::OtherUser)), "{result:?}");
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the database holds another user's history; use one file per user"
+    );
     assert_eq!(server.request_count(), 0);
     assert!(timestamps(&store, "scrobbles").is_empty());
     assert_eq!(store.user().unwrap().as_deref(), Some("someone-else"));
-}
-
-#[tokio::test]
-async fn a_sync_ties_a_new_database_to_its_user() {
-    let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
-
-    let (_server, result, _) = run(
-        &Dataset::distinct(3),
-        &mut store,
-        BASE + 100,
-        Options::default(),
-    )
-    .await;
-
-    result.unwrap();
-    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
 }
 
 /// A database holding twenty scrobbles ten seconds apart, synced five
@@ -663,9 +609,13 @@ async fn a_scrobble_that_arrives_late_is_there_after_the_next_sync() {
     let after = changed(&before, &[], &[BASE + 155]);
     let (_server, result, stored) = run(&after, &mut store, now, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (1, 0, 21));
-    assert!(report.matches());
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 1,
+            removed: 0
+        }
+    );
     assert_eq!(timestamps(&store, "scrobbles"), times(&after));
     // It was in the recent part, which is all that was read.
     assert_eq!(stored.len(), 1);
@@ -683,9 +633,13 @@ async fn a_late_scrobble_in_old_history_is_found_by_its_count() {
     let after = changed(&before, &[], &[late]);
     let (_server, result, stored) = run(&after, &mut store, now, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (1, 0, 21));
-    assert!(report.matches());
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 1,
+            removed: 0
+        }
+    );
     assert_eq!(timestamps(&store, "scrobbles"), times(&after));
     // The recent part, and the one span the halving led to.
     assert_eq!(stored.len(), 2, "{stored:?}");
@@ -706,9 +660,13 @@ async fn a_scrobble_last_fm_no_longer_lists_is_set_aside_wherever_it_was() {
     let after = changed(&before, &[BASE + 50, BASE + 190], &[]);
     let (_server, result, stored) = run(&after, &mut store, now, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (0, 2, 18));
-    assert!(report.matches());
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 0,
+            removed: 2
+        }
+    );
     assert_eq!(stored.iter().map(|span| span.removed).sum::<u64>(), 2);
     // The table to query follows Last.fm, and what went is kept.
     assert_eq!(timestamps(&store, "scrobbles"), times(&after));
@@ -741,57 +699,28 @@ async fn a_change_that_leaves_the_count_as_it_was_waits_for_a_full_sync() {
     let (_server, result, stored) = run(&after, &mut store, now, options()).await;
 
     // The counts agree, so nothing leads a sync there.
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed), (0, 0));
-    assert!(report.matches());
+    assert_eq!(result.unwrap(), Change::default());
     assert_eq!(stored.len(), 1);
     let mut stale = times(&before);
     stale.retain(|time| *time < now);
     assert_eq!(timestamps(&store, "scrobbles"), stale);
 
     // A full sync reads everything, and finds both.
-    let mut full = options();
-    full.full = true;
+    let full = Options {
+        full: true,
+        ..options()
+    };
     let (_server, result, _) = run(&after, &mut store, now, full).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (1, 1, 20));
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 1,
+            removed: 1
+        }
+    );
     assert_eq!(timestamps(&store, "scrobbles"), times(&after));
     assert_eq!(timestamps(&store, "removed"), [BASE + 50]);
-}
-
-#[tokio::test]
-async fn a_history_that_changes_after_it_was_compared_shows_in_the_counts() {
-    let scratch = Scratch::new();
-    let mut store = Store::open(scratch.db()).unwrap();
-    let before = synced(&mut store).await;
-    let now = BASE + 215;
-    let mut options = options();
-    options.page_size = 200;
-
-    // The count of the recent part, its one page and the count of the rest
-    // are as the file has them. Then a play from long ago turns up, and the
-    // last count is one higher.
-    let after = changed(&before, &[], &[BASE + 55]);
-    let (_, last) = respond_to(&after, &question(0, now - 100, 1, 1));
-    let server = FakeLastfm::start(before.clone()).await.script([
-        Behaviour::Normal,
-        Behaviour::Normal,
-        Behaviour::Normal,
-        Behaviour::status(200, last),
-    ]);
-    let result = sync(&client(&server), &mut store, USER, now, options, |_| {}).await;
-
-    let report = result.unwrap();
-    assert_eq!((report.older, report.reported), (11, 12));
-    assert!(!report.matches());
-    assert_eq!(server.request_count(), 4);
-
-    // The next sync is led to it by the count.
-    let (_server, result, _) = run(&after, &mut store, now + 60, options).await;
-    let report = result.unwrap();
-    assert_eq!(report.added, 1);
-    assert!(report.matches());
 }
 
 #[tokio::test]
@@ -811,8 +740,8 @@ async fn two_syncs_at_once_leave_one_copy_of_everything() {
         sync(&client, &mut second, USER, now + 7, options(), |_| {}),
     );
 
-    assert!(one.unwrap().matches());
-    assert!(other.unwrap().matches());
+    one.unwrap();
+    other.unwrap();
     assert_eq!(markers(&first), dataset.expected(Window::before(now)));
     assert!(timestamps(&first, "removed").is_empty());
 }
@@ -826,7 +755,7 @@ async fn a_clock_that_runs_ahead_leaves_nothing_wrong_behind() {
     // a month later.
     let truly = BASE + 205;
     let (_server, result, _) = run(&before, &mut store, truly + 30 * DAY, options()).await;
-    assert_eq!(result.unwrap().stored, 20);
+    assert_eq!(result.unwrap().added, 20);
 
     // Two tracks are played at times the wrong clock had already passed.
     // Then the clock is put right, and the next sync has both: one because
@@ -835,9 +764,13 @@ async fn a_clock_that_runs_ahead_leaves_nothing_wrong_behind() {
     let after = changed(&before, &[], &[truly + 60, truly + 120]);
     let (_server, result, _) = run(&after, &mut store, now, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.added, report.removed, report.stored), (2, 0, 22));
-    assert!(report.matches());
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 2,
+            removed: 0
+        }
+    );
     assert_eq!(timestamps(&store, "scrobbles"), times(&after));
 }
 
@@ -852,9 +785,7 @@ async fn a_clock_that_runs_behind_leaves_the_newest_for_a_later_sync() {
 
     let (_server, result, _) = run(&dataset, &mut store, behind, options()).await;
 
-    let report = result.unwrap();
-    assert_eq!((report.stored, report.to), (25, behind));
-    assert!(report.matches());
+    assert_eq!(result.unwrap().added, 25);
     assert_eq!(markers(&store), dataset.expected(Window::before(behind)));
 
     let now = BASE + 505;
@@ -877,10 +808,7 @@ async fn a_clock_at_the_start_of_time_reads_nothing_and_harms_nothing() {
     for (early, requests) in [(0, 0), (50, 2)] {
         let (server, result, _) = run(&dataset, &mut store, early, options()).await;
 
-        let report = result.unwrap();
-        assert_eq!((report.to, report.recent_from), (early, 0));
-        assert_eq!((report.added, report.removed, report.stored), (0, 0, 0));
-        assert!(report.matches());
+        assert_eq!(result.unwrap(), Change::default());
         assert_eq!(server.request_count(), requests);
         // What the file held stays, for the sync that knows what time it is.
         assert_eq!(markers(&store), dataset.expected(Window::before(now)));

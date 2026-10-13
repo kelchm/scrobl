@@ -3,12 +3,7 @@
 //! ```text
 //! scrobl sync --db <file> [--user <name>] [--full]
 //! ```
-//!
-//! Exit codes: 0 when the command did what it was asked, 1 when it failed, 2
-//! when the command line was wrong, and 3 when a sync finished but the
-//! database and Last.fm still disagree on how many scrobbles there are.
 
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -18,13 +13,6 @@ use crate::Error;
 use crate::store::Store;
 use crate::sync::{self, Options, Stored};
 use crate::time;
-
-/// The variable the API key is read from. It is never taken from the command
-/// line, where other users of the machine could see it.
-pub const API_KEY_VARIABLE: &str = "SCROBL_API_KEY";
-
-/// The exit code of a sync that finished with counts that differ.
-pub const EXIT_MISMATCH: u8 = 3;
 
 const USER_AGENT: &str = concat!(
     "scrobl-cli/",
@@ -56,193 +44,120 @@ Environment:
   SCROBL_API_KEY   Your Last.fm API key
 ";
 
-/// What the process was started with, apart from its arguments.
-#[derive(Debug, Clone, Default)]
-pub struct Environment {
-    /// The value of [`API_KEY_VARIABLE`], if set. `Debug` does not show it.
-    pub api_key: Option<ApiKey>,
-    /// The clock, as Unix seconds.
-    pub now: u64,
-}
-
 /// The arguments of `scrobl sync`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SyncArgs {
-    /// The database file.
     pub db: PathBuf,
-    /// The Last.fm user, if given.
     pub user: Option<String>,
-    /// Whether to read the whole history again.
     pub full: bool,
 }
 
 /// A parsed command line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Print the usage text.
     Help,
-    /// Print the version.
     Version,
-    /// Make the database agree with the history at Last.fm.
     Sync(SyncArgs),
 }
 
-/// Parses the arguments after the program name.
-///
-/// # Errors
-///
-/// [`Error::Usage`] for an unknown command or option, an option without its
-/// value, an option given twice, or a `sync` without `--db`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error> {
-    let usage = |message: String| Error::Usage(format!("{message}; try `scrobl --help`"));
+/// Parses the arguments after the program name. The messages are fixed and
+/// repeat no argument, since one given by mistake may be a key.
+pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, Error> {
     let mut args = args.into_iter();
-    let (mut command, mut db, mut user, mut full) = (None, None, None, false);
-
+    let (mut sync, mut db, mut user, mut full) = (false, None, None, false);
     while let Some(arg) = args.next() {
-        // Only a value that stands on its own may be something other than
-        // Unicode; `--db=<value>` would have to be taken apart to be read.
-        let text = arg.to_str().ok_or_else(|| {
-            usage("an argument is not valid Unicode; give such a value on its own".to_owned())
-        })?;
-        let (name, inline) = match text.split_once('=') {
-            Some((name, value)) if name.starts_with("--") => (name, Some(value)),
-            _ => (text, None),
-        };
-        match name {
+        match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
-            "--db" | "--user" => {
-                // The value as given, so that a path need not be UTF-8.
-                let value = match inline {
-                    Some(value) => OsString::from(value),
-                    None => args
-                        .next()
-                        .ok_or_else(|| usage(format!("`{name}` needs a value")))?,
-                };
-                let slot = if name == "--db" { &mut db } else { &mut user };
-                if slot.replace(value).is_some() {
-                    return Err(usage(format!("`{name}` was given twice")));
-                }
-            }
-            "--full" if inline.is_none() => full = true,
-            "sync" if command.is_none() => command = Some(()),
-            _ if name.starts_with('-') => return Err(usage("unknown option".to_owned())),
-            _ => return Err(usage("unknown command".to_owned())),
+            "sync" => sync = true,
+            "--db" => db = args.next(),
+            "--user" => user = args.next(),
+            "--full" => full = true,
+            _ => return Err(Error::Refused("unknown argument; try `scrobl --help`")),
         }
     }
-
-    if command.is_none() {
-        return Err(usage("no command was given".to_owned()));
+    match db {
+        Some(db) if sync => Ok(Command::Sync(SyncArgs {
+            db: PathBuf::from(db),
+            user,
+            full,
+        })),
+        _ => Err(Error::Refused(
+            "expected `scrobl sync --db <file>`; try `scrobl --help`",
+        )),
     }
-    let db = db
-        .filter(|db| !db.is_empty())
-        .ok_or_else(|| usage("`sync` needs `--db <file>`".to_owned()))?;
-    let user = user
-        .map(|user| {
-            user.into_string()
-                .map_err(|_| usage("the user name is not valid Unicode".to_owned()))
-        })
-        .transpose()?;
-    Ok(Command::Sync(SyncArgs {
-        db: PathBuf::from(db),
-        user,
-        full,
-    }))
 }
 
-/// Runs the tool and returns its exit code. Results go to `out`, progress
-/// and errors to `err`.
+/// Runs the tool and returns its exit code: 0, or 1 when it failed. Results
+/// go to `out`, progress and errors to `err`.
+///
+/// The API key is the value of `SCROBL_API_KEY`. It is never taken from the
+/// command line, where other users of the machine could see it.
 pub async fn run(
-    args: impl IntoIterator<Item = OsString>,
-    environment: &Environment,
+    args: impl IntoIterator<Item = String>,
+    api_key: Option<ApiKey>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
-    match try_run(args, environment, out, err).await {
-        Ok(code) => code,
+    match try_run(args, api_key, out, err).await {
+        Ok(()) => 0,
         Err(error) => {
             // Nothing useful can be done if the terminal is gone.
             let _ = writeln!(err, "scrobl: {error}");
-            error.exit_code()
+            1
         }
     }
 }
 
 async fn try_run(
-    args: impl IntoIterator<Item = OsString>,
-    environment: &Environment,
+    args: impl IntoIterator<Item = String>,
+    api_key: Option<ApiKey>,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<u8, Error> {
+) -> Result<(), Error> {
     match parse(args)? {
         Command::Help => {
             let _ = out.write_all(USAGE.as_bytes());
-            Ok(0)
         }
         Command::Version => {
             let _ = writeln!(out, "scrobl {}", env!("CARGO_PKG_VERSION"));
-            Ok(0)
         }
         Command::Sync(args) => {
-            let key = environment
-                .api_key
-                .clone()
-                .filter(|key| !key.expose().is_empty())
-                .ok_or_else(|| {
-                    Error::Usage(format!("set {API_KEY_VARIABLE} to your Last.fm API key"))
-                })?;
+            let key =
+                api_key.ok_or(Error::Refused("set SCROBL_API_KEY to your Last.fm API key"))?;
             let client = Client::builder(key).user_agent(USER_AGENT).build()?;
-            sync_command(
-                &args,
-                &client,
-                environment.now,
-                Options::default(),
-                out,
-                err,
-            )
-            .await
+            sync_command(&args, &client, time::now(), out, err).await?;
         }
     }
+    Ok(())
 }
 
 /// `scrobl sync` with a client already built: opens the database, makes it
 /// agree with the history before `now`, reports, and then reads the loved
-/// tracks afresh. `--full` switches [`Options::full`] on.
-///
-/// `now` is this machine's clock and nothing checks it, because nothing a
-/// sync stores depends on it: a clock that runs behind leaves the newest
-/// scrobbles to a later sync, and one that runs ahead reads all there is.
-///
-/// Returns 0, or [`EXIT_MISMATCH`] when the sync finished but the database
-/// and Last.fm still count the older history differently.
-///
-/// # Errors
-///
-/// [`Error::Usage`] when no user was given and the database has none yet,
-/// and any error of [`Store::open`], [`sync::sync`] and [`sync::loved`].
-/// The history stored before an error stays stored.
+/// tracks afresh.
 pub async fn sync_command(
     args: &SyncArgs,
     client: &Client,
     now: u64,
-    options: Options,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<u8, Error> {
+) -> Result<(), Error> {
     let mut store = Store::open(&args.db)?;
     let user = match (&args.user, store.user()?) {
         (Some(user), _) => user.clone(),
         (None, Some(user)) => user,
         (None, None) => {
-            return Err(Error::Usage(
-                "the database is new; say whose history it holds with `--user <name>`".to_owned(),
+            return Err(Error::Refused(
+                "the database is new; say whose history it holds with `--user <name>`",
             ));
         }
     };
 
-    let mut options = options;
-    options.full |= args.full;
-    let report = sync::sync(client, &mut store, &user, now, options, |span: Stored| {
+    let options = Options {
+        full: args.full,
+        ..Options::default()
+    };
+    let change = sync::sync(client, &mut store, &user, now, options, |span: Stored| {
         let mut line = format!(
             "{} to {}: {} scrobbles",
             time::utc(span.from),
@@ -262,34 +177,20 @@ pub async fn sync_command(
     let _ = writeln!(
         out,
         "{} scrobbles up to {}, {} of them new.",
-        report.stored,
-        time::utc(report.to),
-        report.added
+        store.count(0, now)?,
+        time::utc(now),
+        change.added
     );
-    if report.removed > 0 {
+    if change.removed > 0 {
         let _ = writeln!(
             out,
             "Last.fm no longer lists {} of the scrobbles the file held. The table `removed` \
              keeps every one.",
-            report.removed
+            change.removed
         );
     }
-    let code = if report.matches() {
-        0
-    } else {
-        let _ = writeln!(
-            out,
-            "Before {} Last.fm counts {} scrobbles and the file holds {}, after every period \
-             whose count differed was read again. If the next sync says the same, the counts at \
-             Last.fm do not add up.",
-            time::utc(report.recent_from),
-            report.reported,
-            report.older
-        );
-        EXIT_MISMATCH
-    };
 
-    let loved = sync::loved(client, &mut store, &user, options.loved_page_size).await?;
+    let loved = sync::loved(client, &mut store, &user).await?;
     let _ = writeln!(out, "{loved} loved tracks.");
-    Ok(code)
+    Ok(())
 }
