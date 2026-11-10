@@ -16,6 +16,7 @@
 - A write is never retried or sent twice.
 - A bug fix comes with a test that fails without it. A new public item has documentation and a test.
 - A new dependency needs a reason. Prefer none.
+- A new check or guard needs three answers: how likely the failure is, whether the next run puts it right by itself, and what the user would see. A review that asks for one gives them, or its finding is a question and not a change to make.
 - The table in `docs/endpoints.md` is generated: `SCROBL_BLESS=1 cargo test --test inventory`.
 - Every fixture is listed with its source in `crates/scrobl/fixtures/README.md`.
 - Tests never call Last.fm. `tests/live.rs` runs only when the owner asks, and what it captures stays in `.scratch/`.
