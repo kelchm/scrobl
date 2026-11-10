@@ -1,0 +1,23 @@
+# Dependabot opens security fixes only. Version updates are Renovate's, in
+# `renovate.json5`.
+#
+# The security fixes are a repository setting, not this file, and they reach
+# crates that no manifest names, which Renovate's do not. This file is what
+# they read their title prefix from, so that the title check accepts them.
+# A limit of 0 is how Dependabot is told to open no version updates.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: build
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: ci
