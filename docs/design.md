@@ -376,7 +376,7 @@ Equal counts do not prove equal rows, and the newest history is where that matte
 
 The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. With the newest history always read, what a count is left to show is a scrobble deleted from older history and a span an interrupted import never reached. A count that is wrong costs a read that was not needed, or leaves a span as it is until a later count is right, which for a deletion means the file keeps a scrobble a while longer. Whether Last.fm's counts for the parts of a history always add up to its count for the whole is known for one history on one day: on 2026-11-10 a file put together from 74 spans, each read by itself, agreed with Last.fm's count for everything older than what every sync reads. If they did not add up, every sync would read some spans for nothing, and that is all that would show it.
 
-A scrobble that arrives in a span while it is read can make its pages disagree, and then the scan refuses them. That is no fault where the span reaches the present, so the span is read again, three times in all, before the sync fails with the file as it was.
+A scrobble that arrives in a span while it is read can make its pages disagree, and then the scan refuses them. That is no fault where the span reaches the present, so the span is read again, three times in all, before the sync fails, leaving that span as it was.
 
 Pages are asked for in the plain form, without `extended=1`: the extended form sends every artist's `mbid` empty, and what it adds is the loved flag, which is not a fact about one scrobble. A track's `mbid` is stored as sent and is not always a MusicBrainz recording: of 24 sampled from one real history, six were, and the twelve others looked up each named a track on one particular release.
 
@@ -416,7 +416,7 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method but one. The command-line tool's first real sync, on 2026-11-10, read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method but one. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
 
 Order of typing, most costly to get wrong first:
 
