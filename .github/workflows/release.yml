@@ -40,8 +40,6 @@ jobs:
       - run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GITHUB_TOKEN"
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      # The runner's default builder cannot attach provenance.
-      - run: docker buildx create --use
       - run: >
           docker buildx build --push --platform linux/amd64 --provenance=mode=max
           --file Dockerfile

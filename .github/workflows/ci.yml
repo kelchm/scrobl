@@ -71,7 +71,8 @@ jobs:
           docker run --name sync --read-only --network none --env SCROBL_API_KEY=none \
             --volume data:/data scrobl:ci sync --db /data/history.db --user nobody || status=$?
           test "$status" -eq 1
-          docker cp sync:/data/history.db - | tar -xOf - | head -c 15 | grep -qx 'SQLite format 3'
+          docker cp sync:/data/history.db .
+          head -c 15 history.db | grep -qx 'SQLite format 3'
 
   msrv:
     runs-on: ubuntu-latest
