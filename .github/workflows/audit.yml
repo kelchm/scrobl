@@ -1,0 +1,30 @@
+name: Audit
+
+# A new advisory is news about `main`, not about whichever pull request is
+# open that day. Checked in every pull request, one advisory failed them all,
+# the ones that had nothing to do with it included. So it is checked here:
+# daily, and when the locked dependencies on `main` change.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - deny.toml
+      - .github/workflows/audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - run: cargo deny check advisories
