@@ -14,7 +14,7 @@ Early development. Not affiliated with or endorsed by Last.fm.
 
 The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs.
 
-What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and a typed read of a user's loved tracks. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
+What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and a typed read of a user's loved tracks. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only those two reads have been run against the live service.
 
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
@@ -45,19 +45,13 @@ async fn backup() -> Result<(), scrobl::Error> {
 
     // The whole window, every page checked. Pages come as they are read, so
     // what the loop sees is provisional until `finish` succeeds.
-    let mut scan = client
-        .user("rj")
-        .recent_tracks()
-        .window(window)
-        .extended(true)
-        .scan()?;
+    let mut scan = client.user("rj").recent_tracks().window(window).scan()?;
     while let Some(page) = scan.next_page().await? {
-        let bytes = page.raw().body(); // stage these as Last.fm sent them
         for scrobble in page.scrobbles() {
             println!("{} {}", scrobble.timestamp(), scrobble.track().name());
         }
     }
-    // Only now is what you staged complete.
+    // Only now is what the loop saw known to be the whole window.
     let summary = scan.finish()?; // fails unless every rule held
     println!("{} scrobbles in {} pages", summary.total(), summary.pages());
     Ok(())

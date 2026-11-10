@@ -10,7 +10,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/kelchm/scrobl"
-# Nothing is published until the owner decides to release.
+# Not on crates.io until the owner decides to publish there.
 publish = false
 
 [workspace.lints.rust]
