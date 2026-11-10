@@ -2,33 +2,20 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
 
-  // Nothing here merges by itself.
-
-  // A fix for an advisory is opened as soon as it is known, whatever the
-  // day. This adds RustSec's advisories, which are what `audit.yml` goes by,
-  // to GitHub's. Renovate fixes only the crates a manifest names; the rest
-  // of the tree is Dependabot's, see `dependabot.yml`.
+  // Security fixes open at once. Everything else waits for Saturday before
+  // 06:00 UTC, which is Friday evening in the Americas.
   osvVulnerabilityAlerts: true,
-
-  // Everything else waits for one round a week: Saturday before 06:00 UTC,
-  // which is Friday evening in the Americas.
   schedule: ["before 6am on saturday"],
-
-  // `cargo update`, in that round. The crates no manifest names are most of
-  // the tree, and nothing else moves them.
   lockFileMaintenance: {
     enabled: true,
     schedule: ["before 6am on saturday"],
     semanticCommitType: "build",
   },
 
-  // A newer version a manifest already allows comes with that `cargo update`,
-  // not as a pull request of its own. One a manifest does not allow does.
+  // A version a manifest already allows comes with the weekly `cargo update`.
   rangeStrategy: "replace",
 
-  // Titles as `.github/workflows/pr-title.yml` wants them: `build: ...`, and
-  // `ci: ...` for a workflow. The actions come together, a new major version
-  // of one apart from the rest.
+  // Titles that pass `pr-title.yml`.
   semanticCommits: "enabled",
   semanticCommitScope: null,
   packageRules: [
