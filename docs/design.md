@@ -396,7 +396,7 @@ Every method gets a typed model for v1. Recorded responses exist so far only for
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
-- A derived model is promoted only when an approved live read confirms it.
+- A derived model is promoted only when an approved live pass confirms it.
 
 Levels:
 
