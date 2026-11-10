@@ -1,0 +1,27 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
+
+  // One round a week. A fix for an advisory does not wait for it.
+  schedule: ["before 6am on monday"],
+
+  // `cargo update`, weekly: the crates no manifest names are most of the
+  // tree, and nothing else moves them.
+  lockFileMaintenance: { enabled: true, semanticCommitType: "build" },
+
+  // A newer version a manifest already allows comes with that weekly update,
+  // not as a pull request of its own. One a manifest does not allow does.
+  rangeStrategy: "replace",
+
+  // RustSec's advisories, which are what `audit.yml` goes by.
+  osvVulnerabilityAlerts: true,
+
+  // Titles as `.github/workflows/pr-title.yml` wants them: `build: ...`, and
+  // `ci: ...` for a workflow.
+  semanticCommits: "enabled",
+  semanticCommitScope: null,
+  packageRules: [
+    { matchPackageNames: ["*"], semanticCommitType: "build" },
+    { matchManagers: ["github-actions"], semanticCommitType: "ci" },
+  ],
+}
