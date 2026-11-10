@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: 2026-10-10. Transport, coverage, license (MIT) and minimum Rust (1.88 for the library, 1.89 for the command-line tool) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
+Status: 2026-11-10. Transport, coverage, license (MIT) and minimum Rust (1.88 for the library, 1.89 for the command-line tool) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -40,10 +40,12 @@ crates/scrobl/
 crates/scrobl-cli/     the binary `scrobl`
   src/
     main.rs            the process: environment, runtime, exit code
+    lib.rs             the same code as a library, so the tests need no terminal
     cli.rs             arguments, output and the exit status
     sync.rs            which spans of time to read, and when
     store.rs           the SQLite file
     time.rs            the clock, and seconds as text
+    error.rs           the tool's one error type
   tests/               the same fake Last.fm, included from the library's tests by path
 ```
 
@@ -287,14 +289,13 @@ let client = scrobl::Client::builder(api_key)
 // until `finish()` succeeds: stage what you write, and mark it complete only then.
 let mut scan = client.user("rj").recent_tracks()
     .window(Window::new(from, to)?)
-    .extended(true)
     .scan()?;
 
+let mut pages = Vec::new();
 while let Some(page) = scan.next_page().await? {
-    archive.write(page.raw().body())?;       // the exact bytes Last.fm sent
-    for scrobble in page.scrobbles() { /* derived view */ }
+    pages.push(page);                        // page.scrobbles() are its rows, page.raw().body() the exact bytes
 }
-let summary = scan.finish()?;                // fails unless every rule held; now the staged pages are complete
+let summary = scan.finish()?;                // fails unless every rule held; now the pages are complete
 
 // A count probe: one request, the window's total.
 let total = client.user("rj").recent_tracks()
@@ -323,7 +324,7 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 
 `Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both: managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`; secrets never cross IPC because the library's types do not serialize them.
 
-Authentication and writes (stage 4; shape only):
+Authentication and writes (not built; shape only):
 
 ```rust
 // Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
@@ -346,7 +347,7 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 ## Command-line tool
 
-`scrobl-cli` builds the binary `scrobl`. It keeps one user's history in one SQLite file, and is the first consumer of the library. Today it has one command, `scrobl sync --db <file> [--user <name>] [--full]`, and reads the API key from `SCROBL_API_KEY`, never from the command line. It exits with status 0, or with 1 and one line that says why.
+`scrobl-cli` builds the binary `scrobl`. It keeps one user's history in one SQLite file, and is the first consumer of the library. Today it has one command, `scrobl sync --db <file> [--user <name>] [--full]`, and reads the API key from `SCROBL_API_KEY`, never from the command line. It exits with status 0, or with 1 and one line that says why. Each tagged version is a GitHub Release and a container image, `ghcr.io/kelchm/scrobl`, built from the `Dockerfile` at the root of the repository.
 
 ### The file
 
@@ -373,7 +374,7 @@ That one rule is the first import, the daily run and the repair of old history. 
 
 Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline. So every sync reads, whatever the counts say, from fourteen days before the newest scrobble the file holds up to the present, and reads that first, so that the newest history is in the file whatever becomes of the rest. Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back; Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was, and is read whatever its count says. A file that holds no scrobble yet, or one dated after the present, is read from fourteen days before the present instead, and a scrobble that arrived in a longer gap than that is found by its count, like a change to older history. The cost is that the fortnight before the newest scrobble is read by every sync, also when nothing has been played for months. `--full` reads every span that way.
 
-The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. With the newest history always read, what a count is left to show is a scrobble deleted from older history and a span an interrupted import never reached. A count that is wrong costs a read that was not needed, or leaves a span as it is until a later count is right, which for a deletion means the file keeps a scrobble a while longer. Whether Last.fm's counts for the parts of a history always add up to its count for the whole has not been checked against the live service; if they did not, every sync would read some spans for nothing, and that is all that would show it.
+The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. With the newest history always read, what a count is left to show is a scrobble deleted from older history and a span an interrupted import never reached. A count that is wrong costs a read that was not needed, or leaves a span as it is until a later count is right, which for a deletion means the file keeps a scrobble a while longer. Whether Last.fm's counts for the parts of a history always add up to its count for the whole is known for one history on one day: on 2026-11-10 a file put together from 74 spans, each read by itself, agreed with Last.fm's count for everything older than what every sync reads. If they did not add up, every sync would read some spans for nothing, and that is all that would show it.
 
 A scrobble that arrives in a span while it is read can make its pages disagree, and then the scan refuses them. That is no fault where the span reaches the present, so the span is read again, three times in all, before the sync fails with the file as it was.
 
@@ -415,7 +416,7 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method.
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method but one. The command-line tool's first real sync, on 2026-11-10, read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
 
 Order of typing, most costly to get wrong first:
 
@@ -445,7 +446,7 @@ The recorded fixtures are the owner's own captures of their own account. No cred
 |---|---|
 | Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
-| License | Decided: MIT. The workspace stays `publish = false` until the owner releases. |
+| License | Decided: MIT. The workspace stays `publish = false` until the owner publishes it to crates.io. |
 | Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See Rust version. |
-| Visibility | Decided: the repository is public. Nothing is published to crates.io yet. |
+| Visibility | Decided: the repository is public. Nothing is published to crates.io yet. A tagged version is released on GitHub, with a container image of the command-line tool. |
 | Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See Reading and writing. |

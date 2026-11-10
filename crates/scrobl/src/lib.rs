@@ -4,10 +4,11 @@
 //! Early development. Not affiliated with or endorsed by Last.fm.
 //!
 //! What works today: a raw, signed call to any of the 57 methods, the ten
-//! that change an account only through a `Writer`, and a typed, checked
-//! read of a user's scrobble history. Not built yet: typed
-//! models for the other methods, the authentication flows and typed
-//! scrobbling. Only the history read has been run against the live service.
+//! that change an account only through a `Writer`, a typed, checked read of
+//! a user's scrobble history, and a typed read of a user's loved tracks. Not
+//! built yet: typed models for the other methods, the authentication flows
+//! and typed scrobbling. Only those two reads have been run against the live
+//! service.
 //!
 //! The crate is built in layers:
 //!
