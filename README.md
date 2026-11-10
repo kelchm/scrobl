@@ -6,9 +6,9 @@ Early development. Not affiliated with or endorsed by Last.fm.
 
 | | What it is | Use it to |
 |---|---|---|
-| [The library](#the-library) | The Rust crate `scrobl` | Call the Last.fm API from a program of your own. It stores nothing |
-| [The command-line tool](#the-command-line-tool) | The program `scrobl`, built on the library | Keep one user's listening history in a SQLite file |
-| [The container image](#the-container-image) | The command-line tool, packaged | Run the tool under Docker or in a cluster, with nothing to install |
+| [`scrobl`](#the-library) | A Rust crate | Call the Last.fm API from a program of your own. It stores nothing |
+| [`scrobl-cli`](#the-command-line-tool) | A program named `scrobl`, built on the crate | Keep one user's listening history in a SQLite file |
+| [`ghcr.io/kelchm/scrobl`](#the-container-image) | That program as a container image | Run it under Docker or in a cluster, with nothing to install |
 
 ## The library
 
