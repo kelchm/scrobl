@@ -35,7 +35,8 @@ jobs:
       - run: cargo test --locked --no-default-features -p scrobl
       - run: cargo doc --locked --no-deps --all-features
       - run: cargo doc --locked --no-deps --no-default-features -p scrobl
-      - run: cargo deny check advisories licenses
+      # Advisories are checked in `audit.yml`.
+      - run: cargo deny check licenses
       # What would be published must build and pass its own tests, away from
       # the repository around it.
       - run: cargo package --locked -p scrobl
