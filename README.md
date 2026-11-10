@@ -1,17 +1,23 @@
 # scrobl
 
-The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs. Unofficial.
+A Rust library for the Last.fm API, and a command-line tool built on it that keeps a local copy of a listening history. Unofficial.
 
 Early development. Not affiliated with or endorsed by Last.fm.
+
+| | What it is | Use it to |
+|---|---|---|
+| [The library](#the-library) | The Rust crate `scrobl` | Call the Last.fm API from a program of your own. It stores nothing |
+| [The command-line tool](#the-command-line-tool) | The program `scrobl`, built on the library | Keep one user's listening history in a SQLite file |
+| [The container image](#the-container-image) | The command-line tool, packaged | Run the tool under Docker or in a cluster, with nothing to install |
+
+## The library
+
+The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs.
 
 What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and a typed read of a user's loved tracks. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
 
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
-
-The repository also holds [`scrobl`, a command-line tool](#the-command-line-tool) built on the library, which keeps a local copy of a listening history.
-
-## Usage
 
 The crate is not published yet, so depend on it from Git. The client runs on Tokio:
 
@@ -126,7 +132,7 @@ Scrobbles are never merged: two plays in the same second are two rows, and `ORDE
 
 ### The container image
 
-Each [release](https://github.com/kelchm/scrobl/releases) is also an image for `linux/amd64`, tagged with its version:
+Each [release](https://github.com/kelchm/scrobl/releases) of the tool is also an image for `linux/amd64`, tagged with its version. It holds the same program, which takes the same arguments:
 
 ```sh
 docker run --rm --read-only -e SCROBL_API_KEY -v scrobl:/data \
