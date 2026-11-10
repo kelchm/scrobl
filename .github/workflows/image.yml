@@ -1,8 +1,8 @@
 name: Image
 
 # Only for a change to what the image is built from, or to the tool's own
-# code. The library's code is compiled in `ci.yml`, and a dependency it gains
-# changes `Cargo.lock`.
+# code. A change to the library alone does not run it, so one that broke the
+# image would show at the next change that does.
 on:
   pull_request:
     paths:
