@@ -18,10 +18,13 @@
 //! that matters: a scrobble is dated when its track started and sent when it
 //! ended, or days later from a device that was offline. So the history is
 //! read every time, whatever the counts say, from [`Options::recent`]
-//! seconds before the newest scrobble the database holds: nothing that
-//! arrived since the last sync can be dated earlier than that. [`Options::full`]
-//! reads the whole history that way. A change that leaves a count as it was,
-//! in history older than that, waits for a full sync.
+//! seconds before the newest scrobble the database holds: a scrobble that
+//! arrived since the last sync is not dated earlier than that. A database
+//! that holds no scrobble, or one dated after the present, is read from that
+//! long before the present instead, and a scrobble that arrived in a longer
+//! gap than that is found by its count. [`Options::full`] reads the whole
+//! history that way. A change that leaves a count as it was, in history
+//! older than that, waits for a full sync.
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
@@ -110,7 +113,8 @@ pub async fn sync(
 
     // A scrobble that arrived since the last sync is dated no more than
     // `recent` before it arrived, and so no more than that before the
-    // newest scrobble that sync stored.
+    // newest scrobble that sync stored. With no scrobble stored, or with one
+    // dated after `now`, the reading starts `recent` before `now`.
     let newest = store.newest()?.map_or(now, |newest| newest.min(now));
     let recent_from = newest.saturating_sub(options.recent);
     let (mut added, mut removed) = (0, 0);
