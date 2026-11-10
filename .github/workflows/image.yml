@@ -1,8 +1,8 @@
 name: Image
 
 # Only for a change to what the image is built from, or to the tool's own
-# code. A change to the library alone does not run it, so one that broke the
-# image would show at the next change that does.
+# code. A change to the library's code alone does not run it, so one that
+# broke the image would show at the next change that does.
 on:
   pull_request:
     paths:
@@ -10,6 +10,7 @@ on:
       - .dockerignore
       - Cargo.toml
       - Cargo.lock
+      - crates/scrobl/Cargo.toml
       - crates/scrobl-cli/**
       - .github/workflows/image.yml
 
