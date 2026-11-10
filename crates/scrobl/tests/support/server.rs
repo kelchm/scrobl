@@ -350,12 +350,14 @@ impl Drop for FakeLastfm {
     }
 }
 
-/// A root URL nothing listens on: a port that was bound and released.
+/// A root URL nothing listens on.
+///
+/// Port 1 is not one the system gives to a server that asks for any free
+/// port. A port that is bound and released is: a server started by a test
+/// running at the same time was once given it, and received the requests
+/// this URL was meant to have refused.
 pub fn dead_base_url() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    format!("http://{addr}/2.0/")
+    "http://127.0.0.1:1/2.0/".to_owned()
 }
 
 async fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
