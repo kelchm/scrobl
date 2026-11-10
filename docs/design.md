@@ -40,7 +40,7 @@ crates/scrobl/
 crates/scrobl-cli/     the binary `scrobl`
   src/
     main.rs            the process: environment, runtime, exit code
-    cli.rs             arguments and output
+    cli.rs             arguments, output and the exit status
     sync.rs            which spans of time to read, and when
     store.rs           the SQLite file
     time.rs            the clock, and seconds as text

@@ -6,8 +6,8 @@
 //! The tool is the binary. This library is the same code, split so that it
 //! can be tested without a terminal:
 //!
-//! - [`store`] is the database: one row per scrobble, each with the row as
-//!   Last.fm sent it.
+//! - [`store`] is the database: one row per scrobble, and the scrobbles
+//!   Last.fm no longer lists.
 //! - [`sync`] makes the database agree with the history at Last.fm.
 //! - [`cli`] is the command line around the two.
 //!

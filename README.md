@@ -107,7 +107,7 @@ The file holds four tables:
 
 | Table | Holds |
 |---|---|
-| `scrobbles` | One row per scrobble: `timestamp` in Unix seconds, `artist`, `track`, `album`, and the `mbid` Last.fm sent for each |
+| `scrobbles` | One row per scrobble: `timestamp` in Unix seconds, `artist`, `track`, `album`, and the id Last.fm sent for each in `artist_mbid`, `track_mbid` and `album_mbid` |
 | `removed` | Scrobbles the file held that Last.fm no longer lists, because they were deleted or edited there, each with `removed_at` |
 | `loved` | The tracks the user has loved, each with `loved_at`, as the list stood at the last sync |
 | `meta` | The user, and when the history and the loved tracks were last read |
