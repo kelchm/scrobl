@@ -1,17 +1,23 @@
 # scrobl
 
-The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs. Unofficial.
+A Rust library for the Last.fm API, and a command-line tool built on it that keeps a local copy of a listening history. Unofficial.
 
 Early development. Not affiliated with or endorsed by Last.fm.
+
+| | What it is | Use it to |
+|---|---|---|
+| [`scrobl`](#the-library) | A Rust crate | Call the Last.fm API from a program of your own. It stores nothing |
+| [`scrobl-cli`](#the-command-line-tool) | A program named `scrobl`, built on the crate | Keep one user's listening history in a SQLite file |
+| [`ghcr.io/kelchm/scrobl`](#the-container-image) | That program as a container image | Run it under Docker or in a cluster, with nothing to install |
+
+## The library
+
+The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs.
 
 What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and a typed read of a user's loved tracks. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. Only the history read has been run against the live service.
 
 - [Design](docs/design.md)
 - [Endpoints](docs/endpoints.md): every method and how far it is verified
-
-The repository also holds [`scrobl`, a command-line tool](#the-command-line-tool) built on the library, which keeps a local copy of a listening history.
-
-## Usage
 
 The crate is not published yet, so depend on it from Git. The client runs on Tokio:
 
@@ -123,6 +129,17 @@ sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM 
 ```
 
 Scrobbles are never merged: two plays in the same second are two rows, and `ORDER BY timestamp, id` is the order of listening. The file keeps what was listened to and when. The addresses of a cover image and of a track's page, which Last.fm also sends with every scrobble, are not kept.
+
+### The container image
+
+Each [release](https://github.com/kelchm/scrobl/releases) of the tool is also an image for `linux/amd64`, tagged with its version. It holds the same program, which takes the same arguments:
+
+```sh
+docker run --rm --read-only -e SCROBL_API_KEY -v scrobl:/data \
+  ghcr.io/kelchm/scrobl:0.1.0 sync --db /data/history.db --user rj
+```
+
+It runs as user and group 1000 and writes only under `/data`, so the rest of its filesystem can be read-only. Mount a volume there that this user can write to.
 
 ## Last.fm's terms
 

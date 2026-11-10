@@ -54,6 +54,26 @@ jobs:
       # adds untested code fails here. Raise it as coverage rises.
       - run: cargo llvm-cov --locked --all-features --fail-under-lines 95
 
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --tag scrobl:ci .
+      - run: docker run --rm --read-only scrobl:ci --version
+      # As a cluster runs it: the image's own user, a read-only root and a
+      # volume at `/data`. Without a network the sync creates the database
+      # and then fails, so no request leaves the runner.
+      - run: |
+          status=0
+          docker run --name sync --read-only --network none --env SCROBL_API_KEY=none \
+            --volume data:/data scrobl:ci sync --db /data/history.db --user nobody || status=$?
+          test "$status" -eq 1
+          docker cp sync:/data/history.db .
+          head -c 15 history.db | grep -qx 'SQLite format 3'
+
   msrv:
     runs-on: ubuntu-latest
     timeout-minutes: 20
