@@ -27,7 +27,8 @@
   rangeStrategy: "replace",
 
   // Titles as `.github/workflows/pr-title.yml` wants them: `build: ...`, and
-  // `ci: ...` for a workflow. The actions come as one pull request.
+  // `ci: ...` for a workflow. The actions come together, a new major version
+  // of one apart from the rest.
   semanticCommits: "enabled",
   semanticCommitScope: null,
   packageRules: [
