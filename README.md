@@ -124,6 +124,17 @@ sqlite3 history.db "SELECT datetime(timestamp, 'unixepoch'), artist, track FROM 
 
 Scrobbles are never merged: two plays in the same second are two rows, and `ORDER BY timestamp, id` is the order of listening. The file keeps what was listened to and when. The addresses of a cover image and of a track's page, which Last.fm also sends with every scrobble, are not kept.
 
+### The container image
+
+Each [release](https://github.com/kelchm/scrobl/releases) is also an image for `linux/amd64`, tagged with its version:
+
+```sh
+docker run --rm --read-only -e SCROBL_API_KEY -v scrobl:/data \
+  ghcr.io/kelchm/scrobl:0.1.0 sync --db /data/history.db --user rj
+```
+
+It runs as user and group 1000 and writes only under `/data`, so the rest of its filesystem can be read-only. Mount a volume there that this user can write to.
+
 ## Last.fm's terms
 
 Using the Last.fm API is subject to Last.fm's [API Terms of Service](https://www.last.fm/api/tos). The MIT licence below covers this library, not the data the API returns. You need your own API key, which you can [create here](https://www.last.fm/api/account/create), and you should send a User-Agent that identifies your application (`ClientBuilder::user_agent`). The terms ask applications to cache responses according to the response headers; `Raw` keeps the ones a cache goes by (`cache-control`, `expires`, `etag`, `last-modified` and `age`), along with `date`, `retry-after` and `content-type`. Read the terms for the limits that apply to you.

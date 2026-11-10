@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # By hand, for a tag that has no release: one older than this workflow, or
+  # one whose run failed. The program comes from the tag, and the workflow and
+  # the Dockerfile from the branch the run starts on.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag, such as v0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/kelchm/scrobl
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          path: source
+          persist-credentials: false
+      # The image's tag is the version its `scrobl --version` prints.
+      - run: grep -qx "version = \"${TAG#v}\"" source/crates/scrobl-cli/Cargo.toml
+      - run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GITHUB_TOKEN"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # The runner's default builder cannot attach provenance.
+      - run: docker buildx create --use
+      - run: >
+          docker buildx build --push --platform linux/amd64 --provenance=mode=max
+          --file Dockerfile
+          --tag "$IMAGE:${TAG#v}"
+          --label "org.opencontainers.image.version=${TAG#v}"
+          --label "org.opencontainers.image.revision=$(git -C source rev-parse HEAD)"
+          source
+
+  release:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
