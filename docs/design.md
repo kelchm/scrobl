@@ -1,6 +1,6 @@
 # scrobl design
 
-Status: 2026-10-10. Transport, coverage, license (MIT) and minimum Rust (1.88) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
+Status: 2026-10-10. Transport, coverage, license (MIT) and minimum Rust (1.88 for the library, 1.89 for the command-line tool) are decided. See [decisions](#decisions). Code blocks are API sketches, not finished signatures.
 
 ## Scope
 
@@ -424,7 +424,7 @@ A live acceptance pass, under explicit owner approval and with the owner's own c
 
 ## Rust version
 
-The minimum is Rust 1.88, the lowest version that works: the code uses let chains, stable since 1.88, and the locked dependency tree needs 1.88 too. CI runs the whole test suite on it, with and without the client. Tauri 2 itself declares 1.90, so the music app will need more than the library does; the library does not adopt that, because the backup application and other users have no reason to be held to it. Raising it is allowed in a minor release, only when the code or a dependency needs it, and never past a version less than six months old.
+The library's minimum is Rust 1.88, the lowest version that works: the code uses let chains, stable since 1.88, and its locked dependencies need 1.88 too. The command-line tool's is 1.89, because `rusqlite` 0.41 declares it and is the first to bundle a SQLite without CVE-2026-119375. CI runs the library's tests on 1.88, with and without the client, and the tool's on 1.89. Tauri 2 itself declares 1.90, so the music app will need more than the library does; the library does not adopt that, because the backup application and other users have no reason to be held to it. Raising it is allowed in a minor release, only when the code or a dependency needs it, and never past a version less than six months old.
 
 ## Fixtures
 
@@ -443,6 +443,6 @@ The recorded fixtures are the owner's own captures of their own account. No cred
 | Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
 | License | Decided: MIT. The workspace stays `publish = false` until the owner releases. |
-| Minimum Rust | Decided: 1.88, tested in CI. See Rust version. |
+| Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See Rust version. |
 | Visibility | Decided: the repository is public. Nothing is published to crates.io yet. |
 | Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See Reading and writing. |

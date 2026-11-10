@@ -5,7 +5,9 @@ description = "Keeps a local SQLite copy of a Last.fm listening history, read an
 keywords = ["lastfm", "last-fm", "scrobble", "backup", "sqlite"]
 categories = ["command-line-utilities"]
 edition.workspace = true
-rust-version.workspace = true
+# More than the library's: `rusqlite` 0.41 declares it, and is the first to
+# bundle a SQLite without CVE-2026-119375.
+rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
@@ -24,7 +26,7 @@ doc = false
 [dependencies]
 # SQLite is compiled in ("bundled"), so the tool needs no system library and
 # the database format does not depend on the host.
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "fallible_uint"] }
 scrobl = { path = "../scrobl" }
 # The current-thread runtime the client is driven on.
 tokio = { version = "1.53.2", features = ["rt"] }

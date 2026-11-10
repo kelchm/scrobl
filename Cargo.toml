@@ -4,9 +4,9 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-# The lowest version the code (let chains) and the locked dependency tree
-# need. CI runs the whole test suite on it. See "Rust version" in
-# docs/design.md.
+# The lowest version the library's code (let chains) and its locked
+# dependencies need. CI runs the library's tests on it. The command-line
+# tool needs more and says so itself. See "Rust version" in docs/design.md.
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/kelchm/scrobl"
