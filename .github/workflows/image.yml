@@ -1,0 +1,42 @@
+name: Image
+
+# Only for a change to what the image is built from, or to the tool's own
+# code. The library's code is compiled in `ci.yml`, and a dependency it gains
+# changes `Cargo.lock`.
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/scrobl-cli/**
+      - .github/workflows/image.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --tag scrobl:ci .
+      - run: docker run --rm --read-only scrobl:ci --version
+      # As a cluster runs it: the image's own user, a read-only root and a
+      # volume at `/data`. Without a network the sync creates the database
+      # and then fails, so no request leaves the runner.
+      - run: |
+          status=0
+          docker run --name sync --read-only --network none --env SCROBL_API_KEY=none \
+            --volume data:/data scrobl:ci sync --db /data/history.db --user nobody || status=$?
+          test "$status" -eq 1
+          docker cp sync:/data/history.db .
+          head -c 15 history.db | grep -qx 'SQLite format 3'
