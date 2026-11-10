@@ -1,9 +1,7 @@
 name: Audit
 
-# A new advisory is news about `main`, not about whichever pull request is
-# open that day. Checked in every pull request, one advisory failed them all,
-# the ones that had nothing to do with it included. So it is checked here:
-# daily, and when the locked dependencies on `main` change.
+# Advisories are checked here, not in pull requests: a new one is news about
+# `main`, and would fail every pull request open that day.
 on:
   schedule:
     - cron: "23 5 * * *"

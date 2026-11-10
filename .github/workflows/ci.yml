@@ -35,8 +35,7 @@ jobs:
       - run: cargo test --locked --no-default-features -p scrobl
       - run: cargo doc --locked --no-deps --all-features
       - run: cargo doc --locked --no-deps --no-default-features -p scrobl
-      # A licence is a fact about the change. An advisory is news about `main`
-      # that arrives on its own day, so `audit.yml` checks those.
+      # Advisories are checked in `audit.yml`.
       - run: cargo deny check licenses
       # What would be published must build and pass its own tests, away from
       # the repository around it.
