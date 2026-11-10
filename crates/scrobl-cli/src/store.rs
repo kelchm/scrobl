@@ -1,10 +1,11 @@
 //! The database: one SQLite file holding one user's history.
 //!
-//! - `scrobbles`: one row per scrobble, and the table to query. `raw` is the
-//!   row as Last.fm sent it, as JSON. Rows are never merged: two scrobbles
-//!   of the same track in the same second are two rows.
+//! - `scrobbles`: one row per scrobble, and the table to query. Rows are
+//!   never merged: two scrobbles of the same track in the same second are
+//!   two rows.
 //! - `removed`: scrobbles the file held that a later reading of the same
-//!   time did not, each with when that was noticed.
+//!   time did not, each with when that was noticed. They are the one thing
+//!   here that cannot be read from Last.fm again.
 //! - `loved`: the tracks the user has loved, as they stood at the last
 //!   sync, in the order Last.fm lists them.
 //! - `meta`: whose history this is, and when it and the loved tracks were
@@ -30,7 +31,7 @@ use crate::Error;
 const APPLICATION_ID: i64 = 0x7363_626c;
 
 /// `PRAGMA user_version`, which says the file has the layout below.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -46,8 +47,7 @@ CREATE TABLE scrobbles (
     track       TEXT NOT NULL,
     track_mbid  TEXT,
     album       TEXT,
-    album_mbid  TEXT,
-    raw         TEXT NOT NULL
+    album_mbid  TEXT
 ) STRICT;
 
 CREATE INDEX scrobbles_timestamp ON scrobbles (timestamp);
@@ -61,8 +61,7 @@ CREATE TABLE removed (
     track       TEXT NOT NULL,
     track_mbid  TEXT,
     album       TEXT,
-    album_mbid  TEXT,
-    raw         TEXT NOT NULL
+    album_mbid  TEXT
 ) STRICT;
 
 CREATE TABLE loved (
@@ -71,8 +70,7 @@ CREATE TABLE loved (
     artist      TEXT NOT NULL,
     artist_mbid TEXT,
     track       TEXT NOT NULL,
-    track_mbid  TEXT,
-    raw         TEXT NOT NULL
+    track_mbid  TEXT
 ) STRICT;
 ";
 
@@ -95,8 +93,9 @@ pub struct Store {
 impl Store {
     /// Opens the database at `path`. A file with no tables is new and is set
     /// up. Any other file must carry both marks as this version writes them,
-    /// or it is refused and left as it was: nothing is upgraded, because the
-    /// history can be read again.
+    /// or it is refused and left as it was. An earlier layout is not upgraded,
+    /// because a history can be read again. What is in `removed` cannot, so
+    /// a later change to this layout has to upgrade the file where it is.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut connection = Connection::open(path)?;
         let tables: i64 =
@@ -143,6 +142,13 @@ impl Store {
                 Ok(())
             }
         }
+    }
+
+    /// The time of the newest scrobble stored, if there is one.
+    pub fn newest(&self) -> Result<Option<u64>, Error> {
+        Ok(self
+            .connection
+            .query_row("SELECT max(timestamp) FROM scrobbles", [], |row| row.get(0))?)
     }
 
     /// The number of scrobbles stored with a timestamp in `[from, to)`.
@@ -216,9 +222,9 @@ impl Store {
         {
             let mut set_aside = transaction.prepare(
                 "INSERT INTO removed (removed_at, timestamp, artist, artist_mbid, track,
-                     track_mbid, album, album_mbid, raw)
+                     track_mbid, album, album_mbid)
                  SELECT ?2, timestamp, artist, artist_mbid, track, track_mbid, album,
-                     album_mbid, raw
+                     album_mbid
                  FROM scrobbles WHERE id = ?1",
             )?;
             for (id, timestamp, artist, track) in &held {
@@ -240,8 +246,8 @@ impl Store {
         {
             let mut insert = transaction.prepare(
                 "INSERT INTO scrobbles (timestamp, artist, artist_mbid, track, track_mbid,
-                     album, album_mbid, raw)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     album, album_mbid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for scrobble in read() {
                 insert.execute(params![
@@ -252,7 +258,6 @@ impl Store {
                     scrobble.track().mbid(),
                     scrobble.album().title(),
                     scrobble.album().mbid(),
-                    scrobble.json().to_string(),
                 ])?;
             }
         }
@@ -274,8 +279,8 @@ impl Store {
         transaction.execute("DELETE FROM loved", [])?;
         {
             let mut insert = transaction.prepare(
-                "INSERT INTO loved (loved_at, artist, artist_mbid, track, track_mbid, raw)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO loved (loved_at, artist, artist_mbid, track, track_mbid)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             for loved in pages.iter().flat_map(|page| page.tracks()) {
                 insert.execute(params![
@@ -284,7 +289,6 @@ impl Store {
                     loved.artist().mbid(),
                     loved.track().name(),
                     loved.track().mbid(),
-                    loved.json().to_string(),
                 ])?;
             }
         }

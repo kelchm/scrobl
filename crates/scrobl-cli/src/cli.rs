@@ -36,8 +36,9 @@ Options:
   --db <file>      The SQLite database, created if it is missing
   --user <name>    The Last.fm user; needed the first time only
   --full           Read the whole history again. Without it a sync reads
-                   the last fourteen days, and any older period whose
-                   number of scrobbles differs from Last.fm's
+                   from fourteen days before the newest scrobble it holds,
+                   and any older period whose number of scrobbles differs
+                   from Last.fm's
   -h, --help       Show this help
   -V, --version    Show the version
 

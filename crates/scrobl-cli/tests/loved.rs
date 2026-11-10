@@ -63,23 +63,18 @@ async fn the_whole_list_is_read_page_after_page_and_stored_in_its_order() {
     assert_eq!(asked, ["1", "2", "3"].map(|page| Some(page.to_owned())));
     assert_eq!(tracks(&store), listed(2_001));
 
-    let (artist, artist_mbid, track_mbid, raw): (String, Option<String>, Option<String>, String) =
-        store
-            .connection()
-            .query_row(
-                "SELECT artist, artist_mbid, track_mbid, raw FROM loved ORDER BY id LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
+    let (artist, artist_mbid, track_mbid): (String, Option<String>, Option<String>) = store
+        .connection()
+        .query_row(
+            "SELECT artist, artist_mbid, track_mbid FROM loved ORDER BY id LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
     assert_eq!(artist, "Synthetic Artist");
     assert_eq!(artist_mbid.as_deref(), Some(support::ARTIST_MBID));
     // An empty mbid is stored as NULL.
     assert_eq!(track_mbid, None);
-    // The row as it was sent, whatever the columns leave out.
-    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(raw["name"], "Loved 2001");
-    assert_eq!(raw["url"], "https://example.invalid/music/Artist/_/Loved");
 
     let read_at: String = store
         .connection()

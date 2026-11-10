@@ -16,10 +16,12 @@
 //!
 //! Equal counts do not prove equal rows, and the newest history is where
 //! that matters: a scrobble is dated when its track started and sent when it
-//! ended, or days later from a device that was offline. So the last
-//! [`Options::recent`] seconds are read every time, whatever the counts say,
-//! and [`Options::full`] reads the whole history that way. A change that
-//! leaves a count as it was, in history that is not recent, waits for that.
+//! ended, or days later from a device that was offline. So the history is
+//! read every time, whatever the counts say, from [`Options::recent`]
+//! seconds before the newest scrobble the database holds: nothing that
+//! arrived since the last sync can be dated earlier than that. [`Options::full`]
+//! reads the whole history that way. A change that leaves a count as it was,
+//! in history older than that, waits for a full sync.
 //!
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
@@ -43,7 +45,9 @@ const LOVED_PAGE: u32 = 1000;
 /// halving.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
-    /// How much of the newest history every sync reads again, in seconds.
+    /// How long after its own time a scrobble may still arrive, in seconds.
+    /// Every sync reads again from this long before the newest scrobble the
+    /// database holds.
     pub recent: u64,
     /// A span in which Last.fm counts more scrobbles than this is halved,
     /// unless it is a single second.
@@ -86,7 +90,11 @@ pub struct Stored {
 /// Makes `store` agree with `user`'s history before `now`, and returns what
 /// that added to the file and removed from it. `stored` is called for each
 /// span once it is committed, and the spans stored before an error stay
-/// stored. A new database is tied to `user` first.
+/// stored.
+///
+/// A database that holds another user's history is refused before anything
+/// is asked. A new one is tied to `user` once Last.fm has answered for that
+/// name, so that a mistyped name does not claim the file.
 pub async fn sync(
     client: &Client,
     store: &mut Store,
@@ -95,8 +103,16 @@ pub async fn sync(
     options: Options,
     mut stored: impl FnMut(Stored),
 ) -> Result<Change, Error> {
+    if store.user()?.is_none() {
+        count(client, user, 0, now).await?;
+    }
     store.bind_user(user)?;
-    let recent_from = now.saturating_sub(options.recent);
+
+    // A scrobble that arrived since the last sync is dated no more than
+    // `recent` before it arrived, and so no more than that before the
+    // newest scrobble that sync stored.
+    let newest = store.newest()?.map_or(now, |newest| newest.min(now));
+    let recent_from = newest.saturating_sub(options.recent);
     let (mut added, mut removed) = (0, 0);
 
     // The last span pushed is the next one dealt with, so the recent part

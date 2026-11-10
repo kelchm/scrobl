@@ -352,18 +352,18 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 
 | Table | Holds |
 |---|---|
-| `scrobbles` | One row per scrobble: timestamp, artist, track, album, the `mbid` Last.fm sent for each, and in `raw` the row as Last.fm sent it, as JSON |
+| `scrobbles` | One row per scrobble: timestamp, artist, track, album, and the `mbid` Last.fm sent for each |
 | `removed` | Scrobbles the file held that a later reading of the same time did not: the same columns, and when that was noticed |
-| `loved` | One row per loved track, as the list stood at the last sync and in its order: when it was loved, artist, track, the `mbid` Last.fm sent for each, and `raw` |
+| `loved` | One row per loved track, as the list stood at the last sync and in its order: when it was loved, artist, track, and the `mbid` Last.fm sent for each |
 | `meta` | The user the file belongs to, and when the history and the loved tracks were last read |
 
-- **The rows are the record.** `raw` is each row as the library decoded it, the same JSON though not the same bytes, so a column can be added or filled in again without asking Last.fm. The page a row came on is not kept.
+- **The file keeps what was listened to, not what Last.fm sent.** A history can be read again in minutes, so nothing is kept in case it is wanted: not the pages, and not each row's JSON, which an earlier layout kept and which was most of the file. Beyond the columns, a row as Last.fm sends it holds four addresses of one cover image, the address of the track's page, the time once more as text, and a flag that was 0 in every row recorded. A column that is wanted later costs one `--full`.
 - **Nothing in the file says how it was read:** no windows, no mark of how far a sync got, nothing called done. A span of time `[from, to)` is written by one operation, which makes the file hold exactly what one finished scan read for it, in one transaction, so spans can be written twice and in any order. An earlier version read each period once and called it final, which made every mistake permanent and every check against one look necessary. Here whatever a sync leaves wrong, the next finds by its count or reads again because it is recent, so there is no lock, no check of the clock and nothing to resume.
 - **Rows are never merged.** Two plays in one second are two rows. A span is replaced whole, oldest row first, so `ORDER BY timestamp, id` is the order of listening, and an `id` is not a lasting name for a scrobble.
 - **Time, artist and track tell two scrobbles apart,** counting rows that share all three. The ids and the album are what Last.fm says about a scrobble, not which scrobble it is.
-- **The file follows Last.fm and keeps what Last.fm drops.** A scrobble the file has and a new reading lacks was most likely deleted or edited at Last.fm. It leaves `scrobbles` and is copied to `removed` with the time, because a deletion made by mistake should not vanish from a backup overnight. `removed` is a log of what a reading lacked, and nothing prunes it.
-- **One user to a file,** named by the first sync and checked by every later one.
-- **A file is used only as this version wrote it.** It carries an `application_id` and a layout version in `user_version`, now 4. A file with no tables is new; any other without both marks is refused and left as it is, an earlier version's included. Nothing is upgraded, because the history can be read again into a new file.
+- **The file follows Last.fm and keeps what Last.fm drops.** A scrobble the file has and a new reading lacks was most likely deleted or edited at Last.fm. It leaves `scrobbles` and is copied to `removed` with the time, because a deletion made by mistake should not vanish from a backup overnight, and a scrobble more than about two weeks old cannot be sent to Last.fm again. `removed` is a log of what a reading lacked, and nothing prunes it. It is the one thing in the file that cannot be read again. The loved tracks have no such table: a track can be loved again.
+- **One user to a file,** named by the first sync and checked by every later one. A new file takes the name once Last.fm has answered for it, so a mistyped name does not claim the file.
+- **A file is used only as this version wrote it.** It carries an `application_id` and a layout version in `user_version`, now 5. A file with no tables is new; any other without both marks is refused and left as it is, an earlier version's included, because its history can be read again into a new file. What is in `removed` cannot, so a later change to this layout has to upgrade a file where it is.
 
 ### A sync
 
@@ -371,9 +371,9 @@ A sync reads up to the present, by this machine's clock, and has one way of deal
 
 That one rule is the first import, the daily run and the repair of old history. A new file agrees with Last.fm only where the history is empty, so everything is read, and years of silence cost a few counts. A sync that fails keeps every span it stored, and the next reads the rest. A scrobble added to or removed from a year long past changes that year's count, and the halving leads to it.
 
-Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline. So the last fourteen days are read by every sync whatever the counts say, and read first, so that the newest history is in the file whatever becomes of the rest. `--full` reads every span that way. Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back; Last.fm documents no number.
+Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline. So every sync reads, whatever the counts say, from fourteen days before the newest scrobble the file holds up to the present, and reads that first, so that the newest history is in the file whatever becomes of the rest. Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back; Last.fm documents no number. If that holds, nothing that arrived since the last sync is dated earlier than where the reading starts, however long ago that sync was, so a new scrobble never waits on a count. `--full` reads every span that way.
 
-The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. A count that is wrong costs a read that was not needed, or leaves a span unread until a later count is right. Whether Last.fm's counts for the parts of a history always add up to its count for the whole has not been checked against the live service; if they did not, every sync would read some spans for nothing, and that is all that would show it.
+The count only decides where a sync looks; what is stored comes from a scan, which the library checks in full. So nothing checks a count, and a sync does not count again when it is done. With the newest history always read, what a count is left to show is a scrobble deleted from older history and a span an interrupted import never reached. A count that is wrong costs a read that was not needed, or leaves a span as it is until a later count is right, which for a deletion means the file keeps a scrobble a while longer. Whether Last.fm's counts for the parts of a history always add up to its count for the whole has not been checked against the live service; if they did not, every sync would read some spans for nothing, and that is all that would show it.
 
 A scrobble that arrives in a span while it is read can make its pages disagree, and then the scan refuses them. That is no fault where the span reaches the present, so the span is read again, three times in all, before the sync fails with the file as it was.
 
@@ -383,7 +383,7 @@ Last, a sync reads the loved tracks, a thousand to a page, and replaces the file
 
 ### What it does not do yet
 
-- It does not see a change that leaves a count as it was, outside the last fourteen days: a scrobble removed and another added in one span, or an old play that was edited. `--full` reads everything and finds it, and nothing runs that on its own.
+- It does not see a change that leaves a count as it was, in history older than what every sync reads: a scrobble removed and another added in one span, or an old play that was edited. `--full` reads everything and finds it, and nothing runs that on its own.
 - It does not ask before following a large loss. If Last.fm stopped listing part of a history, those rows would move to `removed`, and come back when Last.fm listed them again.
 - It reads a public history only. A hidden one needs the signed read, which is unverified.
 - It keeps the loved tracks as they are now, not their history.

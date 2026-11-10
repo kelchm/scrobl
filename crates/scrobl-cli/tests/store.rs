@@ -189,12 +189,11 @@ fn a_span_is_stored_as_it_was_read() {
         Option<String>,
         Option<String>,
         Option<String>,
-        String,
     );
     let kept: Vec<Row> = store
         .connection()
         .prepare(
-            "SELECT timestamp, artist, artist_mbid, track, track_mbid, album, album_mbid, raw
+            "SELECT timestamp, artist, artist_mbid, track, track_mbid, album, album_mbid
              FROM scrobbles ORDER BY timestamp DESC, id DESC",
         )
         .unwrap()
@@ -207,7 +206,6 @@ fn a_span_is_stored_as_it_was_read() {
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
-                row.get(7)?,
             ))
         })
         .unwrap()
@@ -216,7 +214,7 @@ fn a_span_is_stored_as_it_was_read() {
     let read: Vec<_> = pages.iter().flat_map(|page| page.scrobbles()).collect();
     assert_eq!(kept.len(), read.len());
     for (kept, read) in kept.iter().zip(read) {
-        let (timestamp, artist, artist_mbid, track, track_mbid, album, album_mbid, raw) = kept;
+        let (timestamp, artist, artist_mbid, track, track_mbid, album, album_mbid) = kept;
         assert_eq!(*timestamp, read.timestamp());
         assert_eq!(artist, "Synthetic Artist");
         assert_eq!(artist_mbid.as_deref(), Some(support::ARTIST_MBID));
@@ -225,21 +223,7 @@ fn a_span_is_stored_as_it_was_read() {
         assert_eq!(album.as_deref(), Some("Synthetic Album"));
         // An empty mbid is stored as NULL.
         assert_eq!(*album_mbid, None);
-        // The row as it was sent, whatever the columns leave out.
-        let raw: serde_json::Value = serde_json::from_str(raw).unwrap();
-        assert_eq!(&raw, read.json());
-        assert_eq!(raw["url"], "https://example.invalid/music/Artist/_/Track");
     }
-    // And it can be asked as JSON where it lies.
-    let url: String = store
-        .connection()
-        .query_row(
-            "SELECT json_extract(raw, '$.url') FROM scrobbles LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(url, "https://example.invalid/music/Artist/_/Track");
 }
 
 #[test]
@@ -335,17 +319,35 @@ fn a_scrobble_the_reading_lacks_is_moved_to_removed() {
     );
     assert_eq!(times(&store, "scrobbles"), dataset_times(&after));
     assert_eq!(times(&store, "removed"), [BASE + 30, BASE + 80]);
-    let (removed_at, track, raw): (u64, String, String) = store
+    // What went is kept as it was held, with when it was noticed.
+    type Removed = (u64, String, Option<String>, String, Option<String>);
+    let removed: Removed = store
         .connection()
         .query_row(
-            "SELECT removed_at, track, raw FROM removed WHERE timestamp = ?1",
+            "SELECT removed_at, artist, artist_mbid, track, album FROM removed
+             WHERE timestamp = ?1",
             [BASE + 30],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
-    assert_eq!((removed_at, track), (200, format!("At {}", BASE + 30)));
-    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(raw["date"]["uts"], (BASE + 30).to_string());
+    assert_eq!(
+        removed,
+        (
+            200,
+            "Synthetic Artist".to_owned(),
+            Some(support::ARTIST_MBID.to_owned()),
+            format!("At {}", BASE + 30),
+            Some("Synthetic Album".to_owned()),
+        )
+    );
 
     // It was noticed once: the next reading has nothing more to remove.
     assert_eq!(replace(&mut store, &after, window, 300), Change::default());

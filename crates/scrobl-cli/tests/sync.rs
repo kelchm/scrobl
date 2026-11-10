@@ -23,12 +23,14 @@ use scrobl_cli::sync::{Options, Stored, sync};
 const DAY: u64 = 86_400;
 
 /// A sync on a small scale, so that a few dozen scrobbles are a history
-/// worth halving: the last hundred seconds are read every time, a scan
-/// holds ten scrobbles at most and a page four.
+/// worth halving: every sync reads again from a hundred seconds before the
+/// newest scrobble held, a scan holds twelve scrobbles at most and a page
+/// four. Twelve, so that the eleven a hundred seconds can hold here, and one
+/// that arrives late among them, are still one scan.
 fn options() -> Options {
     Options {
         recent: 100,
-        chunk: 10,
+        chunk: 12,
         page_size: 4,
         full: false,
     }
@@ -153,7 +155,7 @@ async fn a_first_sync_stores_the_whole_history_newest_first() {
     for (newer, older) in stored.iter().zip(stored.iter().skip(1)) {
         assert!(older.to <= newer.from, "{stored:?}");
     }
-    assert!(stored.iter().all(|span| span.scrobbles <= 10));
+    assert!(stored.iter().all(|span| span.scrobbles <= 12));
     assert_eq!(stored.iter().map(|span| span.scrobbles).sum::<u64>(), 50);
 }
 
@@ -225,9 +227,11 @@ async fn a_sync_that_fails_keeps_what_it_stored_and_the_next_one_finishes() {
     )
     .await;
 
-    // Last.fm gives out half way through.
+    // Last.fm gives out when three of the five spans are stored. A stop
+    // sooner would save the next sync no reading at this scale, where what
+    // it always reads again is two spans of the five.
     let server = FakeLastfm::start(dataset.clone()).await.script(
-        std::iter::repeat_n(Behaviour::Normal, whole.request_count() / 2)
+        std::iter::repeat_n(Behaviour::Normal, whole.request_count() * 3 / 5)
             .chain([Behaviour::html(503)]),
     );
     let mut first = Vec::new();
@@ -265,7 +269,7 @@ async fn a_sync_that_fails_keeps_what_it_stored_and_the_next_one_finishes() {
         .filter(|span| span.to != later)
         .map(|span| span.scrobbles - span.added)
         .sum();
-    assert!(again <= 10, "{second:?}");
+    assert!(again <= 12, "{second:?}");
     assert!(pages_asked(&server) < pages_asked(&whole));
 }
 
@@ -274,15 +278,19 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
     let scratch = Scratch::new();
     let mut store = Store::open(scratch.db()).unwrap();
     let options = Options {
+        chunk: 100,
         page_size: 200,
         ..options()
     };
-    let first_now = BASE + 205;
-    let (_server, result, _) = run(&Dataset::distinct(20), &mut store, first_now, options).await;
-    result.unwrap();
+    // Twenty scrobbles, the newest at BASE + 200.
+    let first = named((1..=20).map(|i| BASE + 10 * i));
+    run(&first, &mut store, BASE + 205, options)
+        .await
+        .1
+        .unwrap();
 
-    // Ten more scrobbles since, all in the last hundred seconds.
-    let dataset = Dataset::distinct(30);
+    // Ten more since.
+    let dataset = named((1..=30).map(|i| BASE + 10 * i));
     let now = BASE + 305;
     let (server, result, stored) = run(&dataset, &mut store, now, options).await;
 
@@ -293,20 +301,20 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
             removed: 0
         }
     );
+    // Read from a hundred seconds before the newest scrobble the file held:
+    // the eleven it had from then on, and the ten that are new.
+    let recent_from = BASE + 100;
     assert_eq!(
         stored,
         [Stored {
-            from: now - 100,
+            from: recent_from,
             to: now,
-            scrobbles: 10,
+            scrobbles: 21,
             added: 10,
             removed: 0
         }]
     );
-    assert_eq!(
-        timestamps(&store, "scrobbles"),
-        dataset.expected_timestamps(Window::before(now))
-    );
+    assert_eq!(timestamps(&store, "scrobbles"), times(&dataset));
 
     // How many are recent, and a page of them; and how many are older, which
     // is as many as the file holds.
@@ -325,9 +333,9 @@ async fn a_later_sync_reads_the_recent_part_and_counts_the_rest() {
     assert_eq!(
         asked,
         [
-            (text(1), text(now - 100), text(now)),
-            (text(200), text(now - 100), text(now)),
-            (text(1), None, text(now - 100)),
+            (text(1), text(recent_from), text(now)),
+            (text(200), text(recent_from), text(now)),
+            (text(1), None, text(recent_from)),
         ]
     );
 }
@@ -455,8 +463,43 @@ async fn an_empty_history_is_no_error() {
 
     assert_eq!(result.unwrap(), Change::default());
     assert_eq!(stored.len(), 1);
-    assert_eq!(server.request_count(), 3);
+    // Whether Last.fm knows the user, how many scrobbles are recent, a
+    // reading of them, and how many are older.
+    assert_eq!(server.request_count(), 4);
     assert!(timestamps(&store, "scrobbles").is_empty());
+    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
+}
+
+#[tokio::test]
+async fn a_mistyped_user_does_not_claim_a_new_database() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let dataset = Dataset::distinct(3);
+    let now = BASE + 100;
+    let server = FakeLastfm::start(dataset.clone()).await;
+
+    // Last.fm knows nobody of this name.
+    let result = sync(
+        &client(&server),
+        &mut store,
+        "rj_Synthetik",
+        now,
+        options(),
+        |_| {},
+    )
+    .await;
+
+    let Err(Error::Lastfm(error)) = result else {
+        panic!("expected a Last.fm error, got {result:?}");
+    };
+    assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+    assert_eq!(server.request_count(), 1);
+    assert_eq!(store.user().unwrap(), None);
+
+    // So the name can be put right, in the same file.
+    let (_server, result, _) = run(&dataset, &mut store, now, options()).await;
+    assert_eq!(result.unwrap().added, 3);
+    assert_eq!(store.user().unwrap().as_deref(), Some(USER));
 }
 
 #[tokio::test]
@@ -497,9 +540,13 @@ async fn a_span_that_is_disturbed_while_it_is_read_is_read_again() {
         &Dataset::from_timestamps(longer),
         &question(now - 1_000, now, 2, 1),
     );
-    let server = FakeLastfm::start(dataset.clone())
-        .await
-        .script([Behaviour::Normal, Behaviour::status(200, body)]);
+    // It comes third: after the question whether Last.fm knows the user, and
+    // the count of the span.
+    let server = FakeLastfm::start(dataset.clone()).await.script([
+        Behaviour::Normal,
+        Behaviour::Normal,
+        Behaviour::status(200, body),
+    ]);
     let result = sync(&client(&server), &mut store, USER, now, options, |_| {}).await;
 
     assert_eq!(result.unwrap().added, 6);
@@ -724,6 +771,35 @@ async fn a_change_that_leaves_the_count_as_it_was_waits_for_a_full_sync() {
 }
 
 #[tokio::test]
+async fn a_change_made_while_no_sync_ran_is_read_whatever_the_counts_say() {
+    let scratch = Scratch::new();
+    let mut store = Store::open(scratch.db()).unwrap();
+    let before = synced(&mut store).await;
+
+    // No sync runs for far longer than a scrobble can be late. In that time
+    // a play from shortly before the last sync arrives, and another of that
+    // time is deleted, so every count is as it was.
+    let now = BASE + 100_000;
+    let after = changed(&before, &[BASE + 150], &[BASE + 155]);
+    let (_server, result, stored) = run(&after, &mut store, now, options()).await;
+
+    // A hundred seconds before now there is nothing. What is read is from a
+    // hundred seconds before the newest scrobble the file held, which is as
+    // far back as anything that arrived since can be dated.
+    assert_eq!(
+        result.unwrap(),
+        Change {
+            added: 1,
+            removed: 1
+        }
+    );
+    assert_eq!(stored.len(), 1);
+    assert_eq!((stored[0].from, stored[0].to), (BASE + 100, now));
+    assert_eq!(timestamps(&store, "scrobbles"), times(&after));
+    assert_eq!(timestamps(&store, "removed"), [BASE + 150]);
+}
+
+#[tokio::test]
 async fn two_syncs_at_once_leave_one_copy_of_everything() {
     let scratch = Scratch::new();
     let mut first = Store::open(scratch.db()).unwrap();
@@ -758,8 +834,8 @@ async fn a_clock_that_runs_ahead_leaves_nothing_wrong_behind() {
     assert_eq!(result.unwrap().added, 20);
 
     // Two tracks are played at times the wrong clock had already passed.
-    // Then the clock is put right, and the next sync has both: one because
-    // it is recent, one because the count before the recent part moved.
+    // Then the clock is put right, and the next sync has both, because it
+    // reads from a hundred seconds before the newest play the file holds.
     let now = truly + 200;
     let after = changed(&before, &[], &[truly + 60, truly + 120]);
     let (_server, result, _) = run(&after, &mut store, now, options()).await;

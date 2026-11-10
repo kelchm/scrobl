@@ -177,7 +177,8 @@ async fn a_sync_reports_its_spans_and_its_counts() {
         "2023-10-31T22:16:41Z to 2023-11-14T22:16:41Z: 20 scrobbles, 20 new\n"
     );
 
-    // The same again, a minute later: read, and nothing in it new.
+    // The same again, a minute later: read from fourteen days before the
+    // newest scrobble the file holds, and nothing in it new.
     let (result, out, err, _) =
         sync_with(Dataset::distinct(20).with_loved(3), &args, now + 60).await;
 
@@ -189,7 +190,7 @@ async fn a_sync_reports_its_spans_and_its_counts() {
     );
     assert_eq!(
         err,
-        "2023-10-31T22:17:41Z to 2023-11-14T22:17:41Z: 20 scrobbles\n"
+        "2023-10-31T22:16:40Z to 2023-11-14T22:17:41Z: 20 scrobbles\n"
     );
 }
 
@@ -250,7 +251,7 @@ async fn what_changed_at_last_fm_is_followed_and_reported() {
     );
     assert_eq!(
         err,
-        "2023-10-31T22:17:41Z to 2023-11-14T22:17:41Z: 20 scrobbles, 1 new, 1 gone\n"
+        "2023-10-31T22:16:40Z to 2023-11-14T22:17:41Z: 20 scrobbles, 1 new, 1 gone\n"
     );
     let store = Store::open(scratch.db()).unwrap();
     let removed: u64 = store
@@ -270,12 +271,13 @@ async fn full_reads_the_whole_history_again() {
     let (result, ..) = sync_with(dataset.clone(), &args, now).await;
     result.unwrap();
 
-    // Without `--full`, the last fourteen days.
+    // Without `--full`, from fourteen days before the newest play: that
+    // play, and the one of each day back to the one fourteen days before it.
     let (result, out, err, _) = sync_with(dataset.clone(), &args, now).await;
     result.unwrap();
     assert!(out.starts_with("30 scrobbles up to "), "{out}");
     assert_eq!(err.lines().count(), 1, "{err}");
-    assert!(err.ends_with(": 14 scrobbles\n"), "{err}");
+    assert!(err.ends_with(": 15 scrobbles\n"), "{err}");
 
     // With it, those and everything before them.
     let full = SyncArgs { full: true, ..args };
@@ -284,7 +286,7 @@ async fn full_reads_the_whole_history_again() {
     assert!(out.contains(", 0 of them new.\n"), "{out}");
     let read: Vec<&str> = err.lines().collect();
     assert_eq!(read.len(), 2, "{err}");
-    assert!(read[0].ends_with(": 14 scrobbles"), "{err}");
+    assert!(read[0].ends_with(": 15 scrobbles"), "{err}");
     assert!(read[1].starts_with("1970-01-01T00:00:00Z to "), "{err}");
-    assert!(read[1].ends_with(": 16 scrobbles"), "{err}");
+    assert!(read[1].ends_with(": 15 scrobbles"), "{err}");
 }
