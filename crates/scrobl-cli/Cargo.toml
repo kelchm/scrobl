@@ -1,6 +1,6 @@
 [package]
 name = "scrobl-cli"
-version = "0.0.0"
+version = "0.1.0"
 description = "Keeps a local SQLite copy of a Last.fm listening history, read and checked page by page. Unofficial."
 keywords = ["lastfm", "last-fm", "scrobble", "backup", "sqlite"]
 categories = ["command-line-utilities"]
