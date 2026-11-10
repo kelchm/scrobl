@@ -396,7 +396,7 @@ Every method gets a typed model for v1. Recorded responses exist so far only for
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
-- A derived model is promoted only when an approved live read confirms it.
+- A derived model is promoted only when an approved live pass confirms it.
 
 Levels:
 
@@ -418,11 +418,11 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 
 Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method but one. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
 
-Order of typing, most costly to get wrong first:
+Order of typing, what can be checked live without changing an account first:
 
-1. The authentication replies. A session key in a reply is modelled as `SessionKey`, so it is redacted like one the caller supplied.
-2. The scrobble reply, with the checks described under Errors. A wrong model here loses data silently.
-3. The read models. Those are written with shared helpers over the `de` primitives; a wrong one never blocks a caller, because the exact response is always there.
+1. The read models, the `user` reads first. They are written with shared helpers over the `de` primitives, which take their shape there. A wrong one never blocks a caller, because the exact response is always there, and its live pass changes nothing.
+2. The authentication replies. A session key in a reply is modelled as `SessionKey`, so it is redacted like one the caller supplied.
+3. The scrobble reply, with the checks described under Errors, and then the other writes. A wrong model here loses data silently, and its live pass changes the owner's account.
 
 A live acceptance pass, under explicit owner approval and with the owner's own captures as fixtures, comes before each remaining model is promoted.
 
