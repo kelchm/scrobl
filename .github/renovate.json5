@@ -1,0 +1,29 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
+
+  // Security fixes open at once. Everything else waits for Saturday before
+  // 06:00 UTC, which is Friday evening in the Americas.
+  osvVulnerabilityAlerts: true,
+  schedule: ["before 6am on saturday"],
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on saturday"],
+    semanticCommitType: "build",
+  },
+
+  // A version a manifest already allows comes with the weekly `cargo update`.
+  rangeStrategy: "replace",
+
+  // Titles that pass `pr-title.yml`.
+  semanticCommits: "enabled",
+  semanticCommitScope: null,
+  packageRules: [
+    { matchPackageNames: ["*"], semanticCommitType: "build" },
+    {
+      matchManagers: ["github-actions"],
+      semanticCommitType: "ci",
+      groupName: "actions",
+    },
+  ],
+}
