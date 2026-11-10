@@ -1,12 +1,12 @@
 //! Gates for the async client, over a real socket.
 //!
-//! Every test talks to the fake Last.fm in `support::server`, which listens
-//! on `127.0.0.1` and serves the synthetic dataset of `support`. Each gate
-//! exists because an audited Last.fm crate gets the case wrong in a way that
-//! looks right: configuration that never reaches the wire, a retry that
+//! Every test talks to the fake Last.fm in `support::fake_lastfm`, which
+//! listens on `127.0.0.1` and serves the synthetic dataset of `support`. Each
+//! gate exists because an audited Last.fm crate gets the case wrong in a way
+//! that looks right: configuration that never reaches the wire, a retry that
 //! resends a write, a rate limiter that every sleeping caller resets, a
-//! redirect that carries the API key somewhere else, an error that prints
-//! the URL.
+//! redirect that carries the API key somewhere else, an error that prints the
+//! URL.
 //!
 //! The suite stays fast by using millisecond intervals and delays. Waits are
 //! asserted as lower bounds only; the one upper bound is a generous hang
@@ -38,7 +38,7 @@ use scrobl::{
     ApiErrorCode, ApiKey, ApiSecret, Client, ClientBuilder, Delivery, Error, ErrorKind, Response,
     Retry, SessionKey, Writer,
 };
-use support::server::{Behaviour, FakeLastfm, Recorded, dead_base_url};
+use support::fake_lastfm::{Behaviour, FakeLastfm, Recorded, dead_base_url};
 use support::*;
 use tokio::task::JoinSet;
 

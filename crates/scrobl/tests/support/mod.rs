@@ -21,7 +21,7 @@
 //! out on the raw bounds, not with `Window::contains`, so the oracle and the
 //! code under test cannot be wrong together.
 //!
-//! [`server`] puts the same function behind a real socket.
+//! [`fake_lastfm`] puts the same function behind a real socket.
 
 #![allow(
     dead_code,
@@ -33,7 +33,7 @@
 )]
 
 #[cfg(feature = "client")]
-pub mod server;
+pub mod fake_lastfm;
 
 use scrobl::history::Window;
 use scrobl::protocol::HttpRequest;

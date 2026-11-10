@@ -32,7 +32,7 @@ crates/scrobl/
     response.rs        Response<T>: a typed value next to the exact response
     client/            feature "client": reqwest executor, pacing, retries, typed history access
   tests/               integration tests
-    support/           synthetic dataset (pure) and server.rs, the fake Last.fm on a real socket
+    support/           synthetic dataset (pure) and fake_lastfm.rs, the fake Last.fm on a real socket
   fixtures/            labelled recorded / derived / synthetic
 ```
 

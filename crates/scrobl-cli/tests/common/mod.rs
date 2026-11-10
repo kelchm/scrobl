@@ -4,8 +4,9 @@
 //! provenance: synthetic. The fake service generates every response.
 //!
 //! The fake is included from `crates/scrobl/tests/support` by path, not
-//! copied, so both crates are tested against the same service. `server.rs`
-//! reaches the dataset through `super`, which here is this module.
+//! copied, so both crates are tested against the same service.
+//! `fake_lastfm.rs` reaches the dataset through `super`, which here is this
+//! module.
 
 #![allow(
     dead_code,
@@ -23,15 +24,15 @@
 #[path = "../../../scrobl/tests/support/mod.rs"]
 pub mod support;
 
-#[path = "../../../scrobl/tests/support/server.rs"]
-pub mod server;
+#[path = "../../../scrobl/tests/support/fake_lastfm.rs"]
+pub mod fake_lastfm;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+pub use fake_lastfm::{Behaviour, FakeLastfm};
 use scrobl::{ApiKey, Client};
-pub use server::{Behaviour, FakeLastfm};
 pub use support::{BASE, Dataset, Faults, Pages, respond_to};
 
 /// The user of every synthetic dataset, in the service's own spelling.
