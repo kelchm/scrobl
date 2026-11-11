@@ -6,7 +6,7 @@ Every fixture is listed here with where it came from. The kinds are defined in [
 - **derived**: written from official documentation or a recorded fixture, with the source named.
 - **synthetic**: invented, including everything the fake server generates.
 
-The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture, and no test calls Last.fm.
+The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture. No test calls Last.fm except `tests/live.rs`, which runs only when the owner asks.
 
 | Path | Kind | Source | Notes |
 |---|---|---|---|
