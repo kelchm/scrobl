@@ -134,8 +134,9 @@ impl fmt::Debug for Artist {
 /// An album, as named in a row. A row without an album decodes to an album
 /// with no title, no mbid and no url.
 ///
-/// Every field is `None` when missing or an empty string. `url` is sent
-/// only where the row is itself an album, as in a list of top albums.
+/// Every field is `None` when missing or an empty string, but where the
+/// row is itself an album, as in a list of top albums, a missing name is an
+/// error. `url` is sent only in such a row.
 #[derive(Clone)]
 pub struct Album {
     title: Option<String>,

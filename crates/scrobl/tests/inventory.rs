@@ -274,6 +274,15 @@ fn by_name_ignores_ascii_case() {
     assert!(methods::by_name("").is_none());
 }
 
+#[test]
+fn every_level_is_of_a_method_in_the_table() {
+    // `level` answers `inventoried` for a name it does not find, so a
+    // misspelled row would lower a method's status without a word.
+    for (name, ..) in LEVELS {
+        assert!(methods::by_name(name).is_some(), "{name}: no such method");
+    }
+}
+
 fn level(method: &str) -> (&'static str, &'static str) {
     LEVELS
         .iter()
