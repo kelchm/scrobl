@@ -283,6 +283,7 @@ pub use builder::ClientBuilder;
 pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
 pub use lists::{
     LibraryArtistsQuery, Period, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
+    WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery, WeeklyTrackChartQuery,
 };
 
 use crate::error::{Error, Retry};

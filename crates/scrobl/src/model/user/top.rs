@@ -434,7 +434,7 @@ fn rank(row: &Map<String, Value>, at: &str) -> Result<u64, Error> {
         .ok_or_else(|| missing_or(&format!("{at}.@attr.rank"), "an unsigned integer"))
 }
 
-fn top_artist(row: Map<String, Value>, at: &str) -> Result<TopArtist, Error> {
+pub(super) fn top_artist(row: Map<String, Value>, at: &str) -> Result<TopArtist, Error> {
     Ok(TopArtist {
         rank: rank(&row, at)?,
         playcount: shared::required_uint(&row, at, "playcount")?,
@@ -443,7 +443,7 @@ fn top_artist(row: Map<String, Value>, at: &str) -> Result<TopArtist, Error> {
     })
 }
 
-fn top_album(row: Map<String, Value>, at: &str) -> Result<TopAlbum, Error> {
+pub(super) fn top_album(row: Map<String, Value>, at: &str) -> Result<TopAlbum, Error> {
     Ok(TopAlbum {
         rank: rank(&row, at)?,
         playcount: shared::required_uint(&row, at, "playcount")?,
@@ -453,7 +453,7 @@ fn top_album(row: Map<String, Value>, at: &str) -> Result<TopAlbum, Error> {
     })
 }
 
-fn top_track(row: Map<String, Value>, at: &str) -> Result<TopTrack, Error> {
+pub(super) fn top_track(row: Map<String, Value>, at: &str) -> Result<TopTrack, Error> {
     Ok(TopTrack {
         rank: rank(&row, at)?,
         playcount: shared::required_uint(&row, at, "playcount")?,

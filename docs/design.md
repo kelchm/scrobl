@@ -392,7 +392,7 @@ Last, a sync reads the loved tracks, a thousand to a page, and replaces the file
 
 ## Coverage
 
-Every method gets a typed model for v1. Seven have one so far. Six are tested against responses the owner recorded from their own account and have been read from the live service through the client: `user.getRecentTracks`, the four lists of what a user plays and tags most (`user.getTopArtists`, `user.getTopAlbums`, `user.getTopTracks`, `user.getTopTags`) and `library.getArtists`. The seventh, `user.getLovedTracks`, follows a recorded response too, but is tested against a fixture with that structure and invented values. A model can also be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. Eleven have one so far. Ten are tested against responses the owner recorded from their own account and have been read from the live service through the client: `user.getRecentTracks`, the four lists of what a user plays and tags most (`user.getTopArtists`, `user.getTopAlbums`, `user.getTopTracks`, `user.getTopTags`), `library.getArtists`, the three weekly charts (`user.getWeeklyArtistChart`, `user.getWeeklyAlbumChart`, `user.getWeeklyTrackChart`) and `user.getWeeklyChartList`, whose fixture is four weeks of the 1134 recorded. The eleventh, `user.getLovedTracks`, follows a recorded response too, but is tested against a fixture with that structure and invented values. A model can also be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
@@ -427,6 +427,14 @@ What the live pass of 2026-11-10 showed for the lists of a user, with an API key
 - `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400. Its message names the parameter and its range, but a message is text the network chose, which no error of this library prints. So the client refuses a 0 itself, naming the parameter. It sets no upper bound: the ranges differ by method, and `library.getArtists` applied `limit=2000`.
 - 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `TopTrack::duration()` reads it as `None`.
 - The `@attr` of `user.getTopTags` holds the user and nothing else: no page and no total.
+
+And for the weekly charts, the same day:
+
+- The chart list held 1134 weeks of seven days, each ending where the next begins, on a Sunday at noon UTC. It starts in February 2005, before the account existed, and a week without a scrobble is an empty array.
+- The three charts of one week hold the same plays: 217 as 158 artists, as 184 albums and as 204 tracks.
+- Without `from` and `to` the service chose the seven days up to the last noon UTC, which is not a listed week. `from` alone got the same answer.
+- The week after the last listed one, still in progress, had a chart. A `from` later than the `to` was an empty array, not an error.
+- The charts apply a `limit` although their pages document none. The three recorded fixtures were made with `limit=3`; the client sends none.
 
 Order of typing, what can be checked live without changing an account first:
 

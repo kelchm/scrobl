@@ -1,9 +1,12 @@
-//! Typed reads of a user's lists: what they play and tag most, and the
-//! artists in their library.
+//! Typed reads of a user's lists: what they play and tag most, of all time
+//! or in one week, and the artists in their library.
 
 use super::{Client, User};
 use crate::error::Error;
-use crate::model::{LibraryArtistsPage, TopAlbumsPage, TopArtistsPage, TopTags, TopTracksPage};
+use crate::model::{
+    LibraryArtistsPage, TopAlbumsPage, TopArtistsPage, TopTags, TopTracksPage, WeeklyAlbumChart,
+    WeeklyArtistChart, WeeklyChartList, WeeklyTrackChart,
+};
 use crate::protocol::{MethodSpec, Raw, Request, methods};
 use crate::response::Response;
 
@@ -71,6 +74,34 @@ impl User {
         }
     }
 
+    /// Starts a `user.getWeeklyChartList` query for this user.
+    pub fn weekly_chart_list(&self) -> WeeklyChartListQuery {
+        WeeklyChartListQuery {
+            list: List::of(self),
+        }
+    }
+
+    /// Starts a `user.getWeeklyArtistChart` query for this user.
+    pub fn weekly_artist_chart(&self) -> WeeklyArtistChartQuery {
+        WeeklyArtistChartQuery {
+            list: List::of(self),
+        }
+    }
+
+    /// Starts a `user.getWeeklyAlbumChart` query for this user.
+    pub fn weekly_album_chart(&self) -> WeeklyAlbumChartQuery {
+        WeeklyAlbumChartQuery {
+            list: List::of(self),
+        }
+    }
+
+    /// Starts a `user.getWeeklyTrackChart` query for this user.
+    pub fn weekly_track_chart(&self) -> WeeklyTrackChartQuery {
+        WeeklyTrackChartQuery {
+            list: List::of(self),
+        }
+    }
+
     /// Starts a `library.getArtists` query for this user.
     pub fn library_artists(&self) -> LibraryArtistsQuery {
         LibraryArtistsQuery {
@@ -87,6 +118,7 @@ struct List {
     limit: Option<u32>,
     page: Option<u32>,
     period: Option<Period>,
+    range: Option<(u64, u64)>,
 }
 
 impl List {
@@ -97,6 +129,7 @@ impl List {
             limit: None,
             page: None,
             period: None,
+            range: None,
         }
     }
 
@@ -124,6 +157,9 @@ impl List {
         }
         if let Some(page) = self.page {
             request = request.param("page", page);
+        }
+        if let Some((from, to)) = self.range {
+            request = request.param("from", from).param("to", to);
         }
         let raw = self.client.call(&request).await?;
         let value = decode(&raw)?;
@@ -363,6 +399,153 @@ impl LibraryArtistsQuery {
     pub async fn send(self) -> Result<Response<LibraryArtistsPage>, Error> {
         self.list
             .send(&methods::LIBRARY_GET_ARTISTS, LibraryArtistsPage::decode)
+            .await
+    }
+}
+
+/// A `user.getWeeklyChartList` query: the weeks a user's charts can be
+/// asked for. Made by [`User::weekly_chart_list`].
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct WeeklyChartListQuery {
+    list: List,
+}
+
+impl WeeklyChartListQuery {
+    /// Reads the list. The exact response is on the result, next to the
+    /// typed list.
+    ///
+    /// # Errors
+    ///
+    /// Any error of [`Client::call`], and
+    /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
+    /// expected shape.
+    pub async fn send(self) -> Result<Response<WeeklyChartList>, Error> {
+        self.list
+            .send(
+                &methods::USER_GET_WEEKLY_CHART_LIST,
+                WeeklyChartList::decode,
+            )
+            .await
+    }
+}
+
+/// A `user.getWeeklyArtistChart` query: the artists a user played in one
+/// week. Made by [`User::weekly_artist_chart`].
+///
+/// ```no_run
+/// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+/// let user = client.user("rj");
+/// let weeks = user.weekly_chart_list().send().await?;
+/// if let Some(week) = weeks.ranges().last() {
+///     let chart = user
+///         .weekly_artist_chart()
+///         .range(week.from(), week.to())
+///         .send()
+///         .await?;
+///     for top in chart.artists() {
+///         println!("{}. {} ({})", top.rank(), top.artist().name(), top.playcount());
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct WeeklyArtistChartQuery {
+    list: List,
+}
+
+impl WeeklyArtistChartQuery {
+    /// Sets `from` and `to`, the week to chart, in seconds since the Unix
+    /// epoch: a week of [`WeeklyChartList`]. Without them the service
+    /// chooses a recent span of seven days, which need not be one of the
+    /// listed weeks.
+    pub fn range(mut self, from: u64, to: u64) -> Self {
+        self.list.range = Some((from, to));
+        self
+    }
+
+    /// Reads the chart. The exact response is on the result, next to the
+    /// typed chart.
+    ///
+    /// # Errors
+    ///
+    /// Any error of [`Client::call`], and
+    /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
+    /// expected shape.
+    pub async fn send(self) -> Result<Response<WeeklyArtistChart>, Error> {
+        self.list
+            .send(
+                &methods::USER_GET_WEEKLY_ARTIST_CHART,
+                WeeklyArtistChart::decode,
+            )
+            .await
+    }
+}
+
+/// A `user.getWeeklyAlbumChart` query: the albums a user played in one
+/// week. Made by [`User::weekly_album_chart`]. It is set and sent as a
+/// [`WeeklyArtistChartQuery`] is.
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct WeeklyAlbumChartQuery {
+    list: List,
+}
+
+impl WeeklyAlbumChartQuery {
+    /// Sets `from` and `to`, the week to chart, as
+    /// [`WeeklyArtistChartQuery::range`] does.
+    pub fn range(mut self, from: u64, to: u64) -> Self {
+        self.list.range = Some((from, to));
+        self
+    }
+
+    /// Reads the chart. The exact response is on the result, next to the
+    /// typed chart.
+    ///
+    /// # Errors
+    ///
+    /// As [`WeeklyArtistChartQuery::send`].
+    pub async fn send(self) -> Result<Response<WeeklyAlbumChart>, Error> {
+        self.list
+            .send(
+                &methods::USER_GET_WEEKLY_ALBUM_CHART,
+                WeeklyAlbumChart::decode,
+            )
+            .await
+    }
+}
+
+/// A `user.getWeeklyTrackChart` query: the tracks a user played in one
+/// week. Made by [`User::weekly_track_chart`]. It is set and sent as a
+/// [`WeeklyArtistChartQuery`] is.
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct WeeklyTrackChartQuery {
+    list: List,
+}
+
+impl WeeklyTrackChartQuery {
+    /// Sets `from` and `to`, the week to chart, as
+    /// [`WeeklyArtistChartQuery::range`] does.
+    pub fn range(mut self, from: u64, to: u64) -> Self {
+        self.list.range = Some((from, to));
+        self
+    }
+
+    /// Reads the chart. The exact response is on the result, next to the
+    /// typed chart.
+    ///
+    /// # Errors
+    ///
+    /// As [`WeeklyArtistChartQuery::send`].
+    pub async fn send(self) -> Result<Response<WeeklyTrackChart>, Error> {
+        self.list
+            .send(
+                &methods::USER_GET_WEEKLY_TRACK_CHART,
+                WeeklyTrackChart::decode,
+            )
             .await
     }
 }

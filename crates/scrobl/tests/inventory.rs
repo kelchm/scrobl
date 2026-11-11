@@ -56,6 +56,26 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::TopTracksPage`",
         "live-verified",
     ),
+    (
+        "user.getWeeklyAlbumChart",
+        "`model::WeeklyAlbumChart`",
+        "live-verified",
+    ),
+    (
+        "user.getWeeklyArtistChart",
+        "`model::WeeklyArtistChart`",
+        "live-verified",
+    ),
+    (
+        "user.getWeeklyChartList",
+        "`model::WeeklyChartList`",
+        "live-verified",
+    ),
+    (
+        "user.getWeeklyTrackChart",
+        "`model::WeeklyTrackChart`",
+        "live-verified",
+    ),
 ];
 
 const BEGIN: &str = "<!-- BEGIN GENERATED -->";

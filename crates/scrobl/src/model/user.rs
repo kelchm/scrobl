@@ -4,10 +4,14 @@
 
 mod loved;
 mod top;
+mod weekly;
 
 pub use loved::{LovedTrack, LovedTracksPage};
 pub use top::{
     TopAlbum, TopAlbumsPage, TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
+};
+pub use weekly::{
+    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartList, WeeklyChartRange, WeeklyTrackChart,
 };
 
 use std::fmt;
