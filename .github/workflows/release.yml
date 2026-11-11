@@ -34,7 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      # A version is a commit of `main`. A tag put anywhere else would
+      # publish what was never merged, and that could not be taken back.
+      - run: git merge-base --is-ancestor HEAD origin/main
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       # The tag is the one version every crate has.
       - run: >
