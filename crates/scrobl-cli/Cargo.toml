@@ -2,8 +2,6 @@
 name = "scrobl-cli"
 version.workspace = true
 description = "Keeps a local SQLite copy of a Last.fm listening history, read and checked page by page. Unofficial."
-# The project README, which cargo copies into the package.
-readme = "../../README.md"
 keywords = ["lastfm", "last-fm", "scrobble", "backup", "sqlite"]
 categories = ["command-line-utilities"]
 edition.workspace = true

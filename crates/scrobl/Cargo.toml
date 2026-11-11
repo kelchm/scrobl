@@ -2,8 +2,6 @@
 name = "scrobl"
 version.workspace = true
 description = "The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs. Unofficial."
-# The project README, which cargo copies into the package.
-readme = "../../README.md"
 keywords = ["lastfm", "last-fm", "scrobble", "music", "api"]
 categories = ["api-bindings", "web-programming::http-client"]
 edition.workspace = true
