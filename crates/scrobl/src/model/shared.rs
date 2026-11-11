@@ -68,6 +68,9 @@ impl fmt::Debug for PageAttr {
 /// every response recorded the list runs from the smallest to the largest:
 /// `small`, `medium`, `large`, `extralarge` and, for an artist, `mega`.
 ///
+/// What a picture shows is the service's choice. Every artist recorded on
+/// 2026-11-10 had the same one, a placeholder; albums had their covers.
+///
 /// ```
 /// use scrobl::model::TopArtistsPage;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};

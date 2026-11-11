@@ -124,6 +124,7 @@ for scrobble in page.scrobbles() {
     scrobble.track().name();
     scrobble.artist().mbid();    // None when missing or empty
     scrobble.loved();            // None unless the page was requested with extended=1
+    scrobble.track().images();   // &[Image]: each a size and an address, in the service's order
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
@@ -136,6 +137,7 @@ Decoding rules for every model:
 - A field that can be one object or an array of them decodes to a list either way.
 - A malformed value is an error naming the field, such as `recenttracks.track[3].date.uts`. It is never dropped or defaulted.
 - An object that repeats a member name, at any depth, is a decode error, not a silent last-one-wins. The error gives a line and column and never the name.
+- A track, an artist, an album and a user each carry their pictures as `images()`: the `image` member, which is a list of sizes. An entry with an empty address is left out, as an empty id reads as none.
 - `Debug` on a model leaves out the response text.
 
 And for a page of the history:
@@ -597,6 +599,11 @@ The profile, the friends, the tagged items and the loved tracks, the same day:
 - `user.getFriends` answered with the same bytes with `recenttracks=1` and without, so the client does not offer it. A page beyond the last is error 6 with HTTP 400, where `user.getTopArtists`, `library.getArtists` and `user.getPersonalTags` send an empty page. Its `limit` runs from 1 to 500.
 - `user.getPersonalTags` nests its rows by kind (`taggings.artists.artist`, `taggings.albums.album`, `taggings.tracks.track`), and one reply holds one kind. Every tagged track recorded has the word `FIXME` as its `duration`, which the model leaves alone. Without a `taggingtype`, or with one it does not know, the method answers error 6.
 - `user.getLovedTracks` refuses a `limit` of 0 with error 6, as the top lists do.
+
+Pictures, in the same captures (77 replies, 9,961 rows, 35,542 pictures):
+
+- An artist has five sizes (`small`, `medium`, `large`, `extralarge`, `mega`), an album, a track and a user four, and a track of a weekly chart three. The rows of the weekly artist and album charts have none.
+- All 1000 most played artists, all 1000 library artists and all 1000 most played tracks have the same picture, a placeholder. Albums have covers of their own: 979 of the 1000 most played, and the other 21 have empty addresses.
 
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
