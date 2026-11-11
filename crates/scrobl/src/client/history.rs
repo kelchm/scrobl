@@ -7,8 +7,8 @@ use crate::model::{LovedTracksPage, RecentTracksPage};
 use crate::protocol::{Request, methods};
 use crate::response::Response;
 
-/// One user, to read with typed methods: their history here, and what they
-/// play and tag most. Made by [`Client::user`].
+/// One user, to read with typed methods: their history, their profile and
+/// their lists. Made by [`Client::user`].
 ///
 /// The handle owns a clone of the client, so it can be moved into a task.
 #[derive(Debug, Clone)]

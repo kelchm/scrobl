@@ -282,8 +282,10 @@ use tokio::time::sleep;
 pub use builder::ClientBuilder;
 pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
 pub use lists::{
-    LibraryArtistsQuery, Period, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
-    WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery, WeeklyTrackChartQuery,
+    FriendsQuery, LibraryArtistsQuery, Period, TaggedAlbumsQuery, TaggedArtistsQuery,
+    TaggedTracksQuery, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
+    UserInfoQuery, WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery,
+    WeeklyTrackChartQuery,
 };
 
 use crate::error::{Error, Retry};
@@ -430,8 +432,8 @@ impl Client {
         }
     }
 
-    /// A handle for the user `name`, to read their history and their lists
-    /// with typed methods.
+    /// A handle for the user `name`, to read their history, their profile
+    /// and their lists with typed methods.
     ///
     /// The handle is a cheap value that holds a clone of this client.
     pub fn user(&self, name: impl Into<String>) -> User {

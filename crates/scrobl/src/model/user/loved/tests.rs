@@ -20,6 +20,9 @@ use crate::protocol::{self, HttpResponse, Request};
 // - Everything else is built here from that shape. synthetic.
 
 const PAGE: &[u8] = include_bytes!("../../../../fixtures/derived/loved-tracks-page.json");
+/// Two loved tracks, recorded by the repository owner from their own
+/// account on 2026-11-10 and kept byte for byte. recorded.
+const RECORDED: &[u8] = include_bytes!("../../../../fixtures/recorded/kelchm-loved-tracks.json");
 
 /// A string that appears in no error and no `Debug` output.
 const SECRET: &str = "SYNTHETIC-RESPONSE-TEXT";
@@ -107,6 +110,44 @@ fn the_derived_page_decodes() {
     // What the model does not name is still in the row.
     assert_eq!(first.json()["streamable"]["fulltrack"], "0");
     assert_eq!(first.json()["mbid"], "");
+}
+
+#[test]
+fn the_recorded_page_decodes() {
+    let page = LovedTracksPage::decode(&raw(RECORDED)).unwrap();
+    let attr = page.attr();
+    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(
+        (
+            attr.page(),
+            attr.per_page(),
+            attr.total_pages(),
+            attr.total()
+        ),
+        (1, 2, 130, 259)
+    );
+    let rows: Vec<_> = page
+        .tracks()
+        .iter()
+        .map(|t| (t.loved_at(), t.track().name(), t.artist().name()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1_717_821_545, "68", "Nolan Taylor"),
+            (1_715_748_724, "& (Audiotree Live Version)", "Pinegrove")
+        ]
+    );
+    let first = &page.tracks()[0];
+    assert_eq!(first.track().mbid(), None);
+    assert_eq!(
+        first.artist().mbid(),
+        Some("5be29c0c-1a6f-481d-bab0-8c805e63ba68")
+    );
+    assert_eq!(
+        first.track().url(),
+        Some("https://www.last.fm/music/Nolan+Taylor/_/68")
+    );
 }
 
 #[test]

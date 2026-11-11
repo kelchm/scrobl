@@ -67,10 +67,10 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `track.unlove` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
 | `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | — | inventoried |
 | **user** | | | | | | | |
-| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | — | inventoried |
-| `user.getInfo` | GET | API key | — | — | _user_ | — | inventoried |
-| `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LovedTracksPage` | typed-derived |
-| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | — | inventoried |
+| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::FriendsPage` | live-verified |
+| `user.getInfo` | GET | API key | — | — | _user_ | `model::UserInfo` | live-verified |
+| `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LovedTracksPage` | live-verified |
+| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | `model::TaggedArtistsPage`, `model::TaggedAlbumsPage`, `model::TaggedTracksPage` | live-verified |
 | `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::RecentTracksPage` | live-verified |
 | `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopAlbumsPage` | live-verified |
 | `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopArtistsPage` | live-verified |

@@ -1,12 +1,18 @@
 //! The `user` package: [`RecentTracksPage`], the reply to
-//! `user.getRecentTracks`, and [`LovedTracksPage`], the reply to
-//! `user.getLovedTracks`.
+//! `user.getRecentTracks`, here, and the replies to its other reads in the
+//! modules below.
 
+mod info;
 mod loved;
+mod tagged;
 mod top;
 mod weekly;
 
+pub use info::{FriendsPage, UserInfo};
 pub use loved::{LovedTrack, LovedTracksPage};
+pub use tagged::{
+    TaggedAlbum, TaggedAlbumsPage, TaggedArtist, TaggedArtistsPage, TaggedTrack, TaggedTracksPage,
+};
 pub use top::{
     TopAlbum, TopAlbumsPage, TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
 };
