@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::de;
 use crate::error::Error;
-use crate::model::shared::{self, PageAttr, missing_or};
+use crate::model::shared::{self, Image, PageAttr, missing_or};
 use crate::protocol::{Raw, methods};
 
 /// A user's profile: the reply to `user.getInfo`, and a row of
@@ -53,6 +53,7 @@ pub struct UserInfo {
     track_count: Option<u64>,
     registered: u64,
     subscriber: Option<bool>,
+    images: Vec<Image>,
     json: Value,
 }
 
@@ -128,6 +129,12 @@ impl UserInfo {
     /// this too from the friend's own profile.
     pub fn subscriber(&self) -> Option<bool> {
         self.subscriber
+    }
+
+    /// The user's picture in the sizes the service sent, in its order.
+    /// Empty when it sent none; an entry without an address is left out.
+    pub fn images(&self) -> &[Image] {
+        &self.images
     }
 
     /// The profile exactly as decoded.
@@ -225,6 +232,7 @@ fn parse(user: Map<String, Value>, at: &str) -> Result<UserInfo, Error> {
         track_count: shared::optional_uint(&user, at, "track_count")?,
         registered,
         subscriber,
+        images: shared::parse_images(&user, at)?,
         json: Value::Object(user),
     })
 }

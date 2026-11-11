@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::Image;
 use crate::protocol::{self, HttpResponse, MethodSpec, Request};
 
 // Fixtures. Provenance for each:
@@ -521,4 +522,137 @@ fn debug_leaves_out_the_text_of_the_response() {
     assert!(!shown.contains("rj"), "{shown}");
     assert!(shown.contains("playcount: 7"), "{shown}");
     assert!(shown.contains("duration: Some(180)"), "{shown}");
+}
+
+/// What the service calls each of `images`.
+fn sizes(images: &[Image]) -> Vec<Option<&str>> {
+    images.iter().map(Image::size).collect()
+}
+
+/// A page whose one artist has `image` under that name, or no such member.
+fn artist_with(image: Option<Value>) -> Result<TopArtistsPage, Error> {
+    let mut row = artist_row("1", "A");
+    if let Some(image) = image {
+        row["image"] = image;
+    }
+    artists(&paged("topartists", "artist", json!([row]), 1))
+}
+
+#[test]
+fn the_recorded_rows_carry_their_pictures() {
+    let artists = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let images = artists.artists()[0].artist().images();
+    assert_eq!(
+        sizes(images),
+        ["small", "medium", "large", "extralarge", "mega"].map(Some)
+    );
+    assert_eq!(
+        images[0].url(),
+        "https://lastfm-img.freetls.fastly.net/i/u/34s/2a96cbd8b46e442fc41c2b86b821562f.png"
+    );
+
+    let albums = TopAlbumsPage::decode(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
+    let images = albums.albums()[0].album().images();
+    assert_eq!(
+        sizes(images),
+        ["small", "medium", "large", "extralarge"].map(Some)
+    );
+    assert_eq!(
+        images[3].url(),
+        "https://lastfm-img.freetls.fastly.net/i/u/300x300/26b6daf514da76b731dbfb02ffe23325.jpg"
+    );
+    // The artist of an album is a name, an id and a page: no picture.
+    assert!(albums.albums()[0].artist().images().is_empty());
+
+    let tracks = TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!(tracks.tracks()[0].track().images().len(), 4);
+    assert!(tracks.tracks()[0].artist().images().is_empty());
+}
+
+#[test]
+fn pictures_may_be_a_list_one_object_or_none() {
+    for none in [None, Some(json!("")), Some(json!([]))] {
+        let page = artist_with(none).unwrap();
+        assert!(page.artists()[0].artist().images().is_empty());
+    }
+
+    let one = json!({"size": "large", "#text": "https://example.invalid/l.png"});
+    for image in [json!([one.clone()]), one] {
+        let page = artist_with(Some(image)).unwrap();
+        let [only] = page.artists()[0].artist().images() else {
+            panic!("one picture expected");
+        };
+        assert_eq!(only.size(), Some("large"));
+        assert_eq!(only.url(), "https://example.invalid/l.png");
+    }
+}
+
+#[test]
+fn a_picture_without_an_address_is_left_out() {
+    let page = artist_with(Some(json!([
+        {"size": "small", "#text": ""},
+        {"size": "medium"},
+        {"size": "", "#text": "https://example.invalid/x.png"},
+        {"#text": "https://example.invalid/y.png"}
+    ])))
+    .unwrap();
+    let row = &page.artists()[0];
+    let images = row.artist().images();
+    assert_eq!(sizes(images), [None, None]);
+    assert_eq!(
+        (images[0].url(), images[1].url()),
+        (
+            "https://example.invalid/x.png",
+            "https://example.invalid/y.png"
+        )
+    );
+    // The row still holds all four.
+    assert_eq!(row.json()["image"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn a_malformed_picture_names_the_field() {
+    for (image, field) in [
+        (json!(5), "topartists.artist[0].image"),
+        (json!(SECRET), "topartists.artist[0].image"),
+        (json!([SECRET]), "topartists.artist[0].image[0]"),
+        (
+            json!([{"size": "small", "#text": 5}]),
+            "topartists.artist[0].image[0].#text",
+        ),
+        (
+            json!([{"size": [SECRET], "#text": ""}]),
+            "topartists.artist[0].image[0].size",
+        ),
+    ] {
+        names(artist_with(Some(image)), field);
+    }
+
+    // The same holds for an album, for a track and for the artist a row names.
+    let mut album = album_row("1", "A");
+    album["image"] = json!(5);
+    names(
+        albums(&paged("topalbums", "album", json!([album]), 1)),
+        "topalbums.album[0].image",
+    );
+    let mut track = track_row("1", "T");
+    track["image"] = json!([5]);
+    names(
+        tracks(&paged("toptracks", "track", json!([track]), 1)),
+        "toptracks.track[0].image[0]",
+    );
+    let mut track = track_row("1", "T");
+    track["artist"]["image"] = json!(SECRET);
+    names(
+        tracks(&paged("toptracks", "track", json!([track]), 1)),
+        "toptracks.track[0].artist.image",
+    );
+}
+
+#[test]
+fn debug_of_a_picture_leaves_out_its_text() {
+    let page = artist_with(Some(json!([{"size": SECRET, "#text": SECRET}]))).unwrap();
+    let image = &page.artists()[0].artist().images()[0];
+    assert_eq!(image.url(), SECRET);
+    assert!(!format!("{image:?} {page:?}").contains(SECRET));
 }
