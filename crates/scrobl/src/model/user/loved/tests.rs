@@ -183,6 +183,17 @@ fn a_malformed_row_names_the_field() {
 }
 
 #[test]
+fn a_row_with_nothing_in_it_names_its_first_field() {
+    // The track, then the artist, then the date: the order of the checks is
+    // the order of the errors.
+    decode_error(&page(json!([{}]), 1), "lovedtracks.track[0].name");
+    decode_error(
+        &page(json!([{"name": "A"}]), 1),
+        "lovedtracks.track[0].artist",
+    );
+}
+
+#[test]
 fn a_repeated_member_is_an_error() {
     let body = r#"{"lovedtracks": {"track": [], "track": [],
         "@attr": {"user": "rj", "page": "1", "perPage": "50",

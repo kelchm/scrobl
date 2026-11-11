@@ -139,6 +139,8 @@ fn parse(mut loved: Map<String, Value>) -> Result<LovedTracksPage, Error> {
 }
 
 fn parse_row(row: Map<String, Value>, at: &str) -> Result<LovedTrack, Error> {
+    let track = shared::parse_track(&row, at)?;
+    let artist = shared::parse_artist(&row, at)?;
     let path = format!("{at}.date.uts");
     let loved_at = row
         .get("date")
@@ -147,8 +149,8 @@ fn parse_row(row: Map<String, Value>, at: &str) -> Result<LovedTrack, Error> {
         .ok_or_else(|| missing_or(&path, "an unsigned integer"))?;
     Ok(LovedTrack {
         loved_at,
-        track: shared::parse_track(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
+        track,
+        artist,
         json: Value::Object(row),
     })
 }
