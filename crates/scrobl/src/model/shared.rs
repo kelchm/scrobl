@@ -146,8 +146,8 @@ impl Track {
     }
 
     /// The track's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty is left
-    /// out; the row's own `json` still holds it.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -190,8 +190,8 @@ impl Artist {
     }
 
     /// The artist's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty is left
-    /// out; the row's own `json` still holds it.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -234,8 +234,8 @@ impl Album {
     }
 
     /// The album's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty is left
-    /// out; the row's own `json` still holds it.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
