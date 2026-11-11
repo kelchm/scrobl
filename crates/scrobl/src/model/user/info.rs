@@ -95,7 +95,9 @@ impl UserInfo {
         self.country.as_deref()
     }
 
-    /// How many scrobbles the user has.
+    /// How many scrobbles the user has. In a row of a friends list the
+    /// service has sent 0 here whatever the friend has scrobbled, so read it
+    /// from the friend's own profile.
     pub fn playcount(&self) -> u64 {
         self.playcount
     }
@@ -121,7 +123,9 @@ impl UserInfo {
         self.registered
     }
 
-    /// Whether the user pays for a subscription, where the service says.
+    /// Whether the user pays for a subscription, where the service says. In
+    /// a row of a friends list it has said no for every friend, so read
+    /// this too from the friend's own profile.
     pub fn subscriber(&self) -> Option<bool> {
         self.subscriber
     }

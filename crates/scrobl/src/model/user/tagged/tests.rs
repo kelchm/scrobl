@@ -18,8 +18,9 @@ use crate::protocol::{self, HttpResponse, Request};
 //   The owner has tagged no album, so the album body is an empty page.
 //   recorded.
 // - `tagged-albums-page.json` follows a response recorded the same day for
-//   another user's public tag: member names and order, nesting and value
-//   types. Every value is invented. derived.
+//   another user's public tag: member names and order, nesting, value
+//   types and the counts. Every value that says whose it is or what was
+//   tagged is invented. derived.
 // - Everything else is built here from those shapes. synthetic.
 
 const ARTISTS: &[u8] = include_bytes!("../../../../fixtures/recorded/kelchm-tagged-artists.json");
@@ -151,6 +152,8 @@ fn the_derived_tagged_albums_decode() {
         page.albums()[0].album().url(),
         Some("https://example.invalid/music/Tagged+Artist/Album+1")
     );
+    // What the model does not name is still in the row.
+    assert_eq!(page.albums()[0].json()["image"][0]["size"], "small");
 }
 
 #[test]

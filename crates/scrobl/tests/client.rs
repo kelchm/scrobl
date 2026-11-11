@@ -2956,6 +2956,7 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
         let albums = user
             .tagged_albums("synthetic tag")
             .limit(2)
+            .page(1)
             .send()
             .await
             .unwrap();
@@ -2994,7 +2995,8 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
                     ("user", USER),
                     ("tag", "synthetic tag"),
                     ("taggingtype", "album"),
-                    ("limit", "2")
+                    ("limit", "2"),
+                    ("page", "1")
                 ]),
                 pairs(&[
                     ("method", "user.getPersonalTags"),
