@@ -2746,6 +2746,46 @@ fn every_period_has_the_value_the_service_documents() {
 }
 
 #[tokio::test]
+async fn a_list_query_that_cannot_be_built_sends_nothing() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let user = client(&server).user(USER);
+
+        let errors = [
+            user.top_artists().limit(0).send().await.map(drop),
+            user.top_artists().page(0).send().await.map(drop),
+            user.top_albums().limit(0).send().await.map(drop),
+            user.top_tracks().page(0).send().await.map(drop),
+            user.top_tags().limit(0).send().await.map(drop),
+            user.library_artists().page(0).send().await.map(drop),
+        ];
+        let shown = errors.map(|result| {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            let parameter = if error.to_string().contains("`limit`") {
+                "limit"
+            } else {
+                "page"
+            };
+            (error.method(), parameter)
+        });
+        assert_eq!(
+            shown,
+            [
+                (Some("user.getTopArtists"), "limit"),
+                (Some("user.getTopArtists"), "page"),
+                (Some("user.getTopAlbums"), "limit"),
+                (Some("user.getTopTracks"), "page"),
+                (Some("user.getTopTags"), "limit"),
+                (Some("library.getArtists"), "page"),
+            ]
+        );
+        assert_eq!(server.request_count(), 0);
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_list_that_fails_is_an_error_of_its_method() {
     bounded(async {
         let server = serve(

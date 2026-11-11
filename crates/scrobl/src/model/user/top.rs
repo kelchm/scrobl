@@ -298,8 +298,8 @@ impl TopTrack {
     }
 
     /// The length of the track in seconds. `None` when the row has no
-    /// `duration` or gives 0, which is what the service sends for a length
-    /// it does not know; [`json`](Self::json) tells the two apart.
+    /// `duration` or gives 0, which is read as a length the service does
+    /// not know; [`json`](Self::json) tells the two apart.
     pub fn duration(&self) -> Option<u64> {
         self.duration
     }

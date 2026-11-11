@@ -107,6 +107,14 @@ impl List {
         spec: &'static MethodSpec,
         decode: fn(&Raw) -> Result<T, Error>,
     ) -> Result<Response<T>, Error> {
+        // The service refuses a 0 too, but its answer is error 6 with the
+        // reason in a message this library never prints.
+        if self.limit == Some(0) {
+            return Err(Error::invalid_request(spec, "`limit` starts at 1"));
+        }
+        if self.page == Some(0) {
+            return Err(Error::invalid_request(spec, "`page` starts at 1"));
+        }
         let mut request = Request::new(spec).param("user", &self.user);
         if let Some(period) = self.period {
             request = request.param("period", period.as_str());
@@ -157,7 +165,7 @@ impl TopArtistsQuery {
     }
 
     /// Sets `limit`, the page size, from 1 to 1000. The service answers a
-    /// size outside that range with
+    /// larger one with
     /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
@@ -175,8 +183,9 @@ impl TopArtistsQuery {
     ///
     /// # Errors
     ///
-    /// Any error of [`Client::call`], which is where a `limit` or a `page`
-    /// the service refuses arrives, as
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` or a
+    /// `page` of 0, before anything is sent; any error of [`Client::call`],
+    /// which is where a `limit` the service finds too large arrives, as
     /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS); and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the page is not the
     /// expected shape.
@@ -303,7 +312,8 @@ impl TopTagsQuery {
     ///
     /// # Errors
     ///
-    /// Any error of [`Client::call`], and
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` of 0,
+    /// before anything is sent; any error of [`Client::call`]; and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
     pub async fn send(self) -> Result<Response<TopTags>, Error> {

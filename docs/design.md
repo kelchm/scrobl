@@ -416,7 +416,7 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any method that has no typed model yet. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and, through the client, any method that has no typed model yet. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
 
 What the live pass of 2026-11-10 showed for the lists of a user, with an API key only: the four top lists and `library.getArtists`, read through the client by `tests/live.rs` and recorded with `curl`:
 
@@ -424,7 +424,7 @@ What the live pass of 2026-11-10 showed for the lists of a user, with an API key
 - `library.getArtists` answers `limit=1` with `artist` as a single object. The top lists answer it with an array of one.
 - A page far beyond the last is HTTP 200 with an empty array and the true `total` and `totalPages`, not an error.
 - `@attr.rank` counts through the whole list: page 2 at `limit=5` holds ranks 6 to 10.
-- `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400, and the message names the parameter and its range. `library.getArtists` applied `limit=2000`. The ranges differ by method and the service states them, so the client checks neither itself.
+- `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400. Its message names the parameter and its range, but a message is text the network chose, which no error of this library prints. So the client refuses a 0 itself, naming the parameter. It sets no upper bound: the ranges differ by method, and `library.getArtists` applied `limit=2000`.
 - 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `TopTrack::duration()` reads it as `None`.
 - The `@attr` of `user.getTopTags` holds the user and nothing else: no page and no total.
 
