@@ -64,7 +64,7 @@ A program you can run is in [`examples/recent_tracks.rs`](https://github.com/kel
 - Retries a read that failed in a way worth repeating. Never retries a write.
 - Limits how long it waits and how much of a response it keeps.
 - Keeps each response body exactly as the service sent it.
-- Shows no credential in an error or in `Debug` output.
+- Shows no credential in an error message or in `Debug` output. `Error::body()` is the raw response, which can hold one.
 
 The [`client` module](https://docs.rs/scrobl/latest/scrobl/client/index.html) has the details.
 
