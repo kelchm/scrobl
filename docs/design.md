@@ -475,5 +475,5 @@ The recorded fixtures are the owner's own captures of their own account. No cred
 | License | Decided: MIT. |
 | Versions | Decided: one version for the library, the tool and its image, set in the workspace manifest, and one tag, `v` and the version, for a release. Before 1.0 a change that breaks the library's API raises the middle number and anything else the last. A release gives both crates the new number even when only one of them changed. |
 | Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See Rust version. |
-| Visibility | Decided: the repository is public. Nothing is published to crates.io yet. A tagged version is released on GitHub, with a container image of the command-line tool. |
+| Visibility | Decided: the repository is public. Each version is published to crates.io as both crates, by hand for now, and its tag releases it on GitHub with a container image of the command-line tool. |
 | Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See Reading and writing. |

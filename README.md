@@ -19,11 +19,11 @@ What works today: a raw, signed call to any of the 57 methods, the ten that chan
 - [Design](https://github.com/kelchm/scrobl/blob/main/docs/design.md)
 - [Endpoints](https://github.com/kelchm/scrobl/blob/main/docs/endpoints.md): every method and how far it is verified
 
-The crate is not published yet, so depend on it from Git. The client runs on Tokio:
+The crate is [on crates.io](https://crates.io/crates/scrobl). The client runs on Tokio:
 
 ```toml
 [dependencies]
-scrobl = { git = "https://github.com/kelchm/scrobl" }
+scrobl = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -60,7 +60,7 @@ async fn backup() -> Result<(), scrobl::Error> {
 
 `Client::call` makes a raw call to any method that reads or authenticates. The client sends over HTTPS only, follows no redirect, keeps at least a second between requests by default (measured when each is admitted to the transport, however late the runtime polls it; the pacing is per client and its clones, and the second is this library's conservative choice, not a limit Last.fm documents), sends and decodes no compressed responses so the body is exactly what the service sent, retries reads that failed in a way worth repeating, never retries a write, and bounds how long it waits and how much of a response it keeps. A failed write says whether it can have happened (`Error::delivery`). The module documentation of `scrobl::client` has the details. Without the `client` feature the crate is the I/O-free protocol core, for use with any other HTTP client.
 
-A scan yields pages before it can know the whole window is consistent, so what it has yielded is provisional until `finish()` succeeds. Stage what you write and mark it complete only then. The section "What a completed scan does not prove" in the documentation of `scrobl::history::WindowScan` says what success does and does not mean. Run `cargo doc --open` for it until the crate is published.
+A scan yields pages before it can know the whole window is consistent, so what it has yielded is provisional until `finish()` succeeds. Stage what you write and mark it complete only then. The section "What a completed scan does not prove" in the documentation of `scrobl::history::WindowScan` says what success does and does not mean. The documentation is [on docs.rs](https://docs.rs/scrobl).
 
 An example that prints a user's ten most recent scrobbles is in `crates/scrobl/examples/recent_tracks.rs`. It calls the live service with your own API key.
 
@@ -93,7 +93,7 @@ A `Writer` dereferences to a `Client`, so it reads too, and code given a `&Clien
 `crates/scrobl-cli` builds a binary named `scrobl` that keeps one user's listening history in a SQLite file. It reads with a `Client`, so it cannot change the account, and it needs only an API key, which is enough for a history that is public.
 
 ```sh
-cargo install --git https://github.com/kelchm/scrobl scrobl-cli
+cargo install scrobl-cli
 export SCROBL_API_KEY=your-api-key
 scrobl sync --db history.db --user rj    # the first time
 scrobl sync --db history.db              # every time after
@@ -130,7 +130,7 @@ Each [release](https://github.com/kelchm/scrobl/releases) of the tool is also an
 
 ```sh
 docker run --rm --read-only -e SCROBL_API_KEY -v scrobl:/data \
-  ghcr.io/kelchm/scrobl:0.1.0 sync --db /data/history.db --user rj
+  ghcr.io/kelchm/scrobl:0.1.1 sync --db /data/history.db --user rj
 ```
 
 It runs as user and group 1000 and writes only under `/data`, so the rest of its filesystem can be read-only. Mount a volume there that this user can write to.
