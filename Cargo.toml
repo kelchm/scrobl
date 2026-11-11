@@ -6,7 +6,7 @@ members = ["crates/*"]
 # One version for the library, the tool and its image. To release, raise
 # it here and under `workspace.dependencies` below, and tag that commit
 # `v` and the version.
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # The lowest version the library's code (let chains) and its locked
 # dependencies need. CI runs the library's tests on it. The command-line
@@ -17,7 +17,7 @@ repository = "https://github.com/kelchm/scrobl"
 
 [workspace.dependencies]
 # The tool is built with the library of its own version and no other.
-scrobl = { path = "crates/scrobl", version = "=0.1.0" }
+scrobl = { path = "crates/scrobl", version = "=0.1.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
