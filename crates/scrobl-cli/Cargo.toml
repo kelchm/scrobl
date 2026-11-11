@@ -1,7 +1,9 @@
 [package]
 name = "scrobl-cli"
-version = "0.1.0"
+version.workspace = true
 description = "Keeps a local SQLite copy of a Last.fm listening history, read and checked page by page. Unofficial."
+# The project README, which cargo copies into the package.
+readme = "../../README.md"
 keywords = ["lastfm", "last-fm", "scrobble", "backup", "sqlite"]
 categories = ["command-line-utilities"]
 edition.workspace = true
@@ -10,7 +12,9 @@ edition.workspace = true
 rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+# The tests take the fake Last.fm from the library's tests by path, which
+# a package cannot hold. They run from the repository.
+exclude = ["tests/"]
 
 [lib]
 name = "scrobl_cli"
@@ -27,7 +31,7 @@ doc = false
 # SQLite is compiled in ("bundled"), so the tool needs no system library and
 # the database format does not depend on the host.
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "fallible_uint"] }
-scrobl = { path = "../scrobl" }
+scrobl.workspace = true
 # The current-thread runtime the client is driven on.
 tokio = { version = "1.53.2", features = ["rt"] }
 

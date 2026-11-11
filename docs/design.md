@@ -472,7 +472,8 @@ The recorded fixtures are the owner's own captures of their own account. No cred
 |---|---|
 | Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
-| License | Decided: MIT. The workspace stays `publish = false` until the owner publishes it to crates.io. |
+| License | Decided: MIT. |
+| Versions | Decided: one version for the library, the tool and its image, set in the workspace manifest, and one tag, `v` and the version, for a release. Before 1.0 a change that breaks the library's API raises the middle number and anything else the last. A release gives both crates the new number even when only one of them changed. |
 | Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See Rust version. |
 | Visibility | Decided: the repository is public. Nothing is published to crates.io yet. A tagged version is released on GitHub, with a container image of the command-line tool. |
 | Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See Reading and writing. |

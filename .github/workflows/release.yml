@@ -36,7 +36,7 @@ jobs:
           path: source
           persist-credentials: false
       # The image's tag is the version its `scrobl --version` prints.
-      - run: grep -qx "version = \"${TAG#v}\"" source/crates/scrobl-cli/Cargo.toml
+      - run: grep -qx "version = \"${TAG#v}\"" source/Cargo.toml
       - run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GITHUB_TOKEN"
         env:
           GITHUB_TOKEN: ${{ github.token }}
