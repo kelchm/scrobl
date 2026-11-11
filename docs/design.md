@@ -30,7 +30,7 @@ crates/scrobl/
     model/             typed views, one module per API package
     history.rs         Window, RecentTracks, WindowScan: the validated recent-tracks scan, I/O-free
     response.rs        Response<T>: a typed value next to the exact response
-    client/            feature "client": reqwest executor, pacing, retries, typed history access
+    client/            feature "client": reqwest executor, pacing, retries, typed reads
   tests/               integration tests
     support/           synthetic dataset (pure) and fake_lastfm.rs, the fake Last.fm on a real socket
   fixtures/            labelled recorded / derived / synthetic
@@ -392,7 +392,7 @@ Last, a sync reads the loved tracks, a thousand to a page, and replaces the file
 
 ## Coverage
 
-Every method gets a typed model for v1. Recorded responses exist so far only for `user.getRecentTracks`. Two methods have a typed model: that one, and `user.getLovedTracks`, whose model follows a response the owner recorded from their own account and is tested against a fixture with that structure and invented values. Most models will be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. Seven have one so far. Six are tested against responses the owner recorded from their own account and have been read from the live service through the client: `user.getRecentTracks`, the four lists of what a user plays and tags most (`user.getTopArtists`, `user.getTopAlbums`, `user.getTopTracks`, `user.getTopTags`) and `library.getArtists`. The seventh, `user.getLovedTracks`, follows a recorded response too, but is tested against a fixture with that structure and invented values. A model can also be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
@@ -416,7 +416,17 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and any other method but one. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and, through the client, any method that has no typed model yet. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
+
+What the live pass of 2026-11-10 showed for the lists of a user, with an API key only: the four top lists and `library.getArtists`, read through the client by `tests/live.rs` and recorded with `curl`:
+
+- A page of 1000 artists, albums, tracks and library artists decodes: every row has what its model requires.
+- `library.getArtists` answers `limit=1` with `artist` as a single object. The top lists answer it with an array of one.
+- A page far beyond the last is HTTP 200 with an empty array and the true `total` and `totalPages`, not an error.
+- `@attr.rank` counts through the whole list: page 2 at `limit=5` holds ranks 6 to 10.
+- `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400. Its message names the parameter and its range, but a message is text the network chose, which no error of this library prints. So the client refuses a 0 itself, naming the parameter. It sets no upper bound: the ranges differ by method, and `library.getArtists` applied `limit=2000`.
+- 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `TopTrack::duration()` reads it as `None`.
+- The `@attr` of `user.getTopTags` holds the user and nothing else: no page and no total.
 
 Order of typing, what can be checked live without changing an account first:
 

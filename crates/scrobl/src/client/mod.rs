@@ -269,6 +269,7 @@
 mod builder;
 mod cause;
 mod history;
+mod lists;
 mod pacing;
 
 use std::fmt;
@@ -280,6 +281,9 @@ use tokio::time::sleep;
 
 pub use builder::ClientBuilder;
 pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
+pub use lists::{
+    LibraryArtistsQuery, Period, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
+};
 
 use crate::error::{Error, Retry};
 use crate::protocol::{
@@ -425,7 +429,8 @@ impl Client {
         }
     }
 
-    /// A handle for `name`'s history, to read it with typed methods.
+    /// A handle for the user `name`, to read their history and their lists
+    /// with typed methods.
     ///
     /// The handle is a cheap value that holds a clone of this client.
     pub fn user(&self, name: impl Into<String>) -> User {

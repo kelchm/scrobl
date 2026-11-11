@@ -26,6 +26,11 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
 const LEVELS: &[(&str, &str, &str)] = &[
     (
+        "library.getArtists",
+        "`model::LibraryArtistsPage`",
+        "live-verified",
+    ),
+    (
         "user.getLovedTracks",
         "`model::LovedTracksPage`",
         "typed-derived",
@@ -33,6 +38,22 @@ const LEVELS: &[(&str, &str, &str)] = &[
     (
         "user.getRecentTracks",
         "`model::RecentTracksPage`",
+        "live-verified",
+    ),
+    (
+        "user.getTopAlbums",
+        "`model::TopAlbumsPage`",
+        "live-verified",
+    ),
+    (
+        "user.getTopArtists",
+        "`model::TopArtistsPage`",
+        "live-verified",
+    ),
+    ("user.getTopTags", "`model::TopTags`", "live-verified"),
+    (
+        "user.getTopTracks",
+        "`model::TopTracksPage`",
         "live-verified",
     ),
 ];
@@ -251,6 +272,15 @@ fn by_name_ignores_ascii_case() {
     }
     assert!(methods::by_name("user.getNothing").is_none());
     assert!(methods::by_name("").is_none());
+}
+
+#[test]
+fn every_level_is_of_a_method_in_the_table() {
+    // `level` answers `inventoried` for a name it does not find, so a
+    // misspelled row would lower a method's status without a word.
+    for (name, ..) in LEVELS {
+        assert!(methods::by_name(name).is_some(), "{name}: no such method");
+    }
 }
 
 fn level(method: &str) -> (&'static str, &'static str) {

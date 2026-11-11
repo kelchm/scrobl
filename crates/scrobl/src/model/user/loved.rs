@@ -2,12 +2,11 @@
 
 use std::fmt;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::{Artist, PageAttr, Track, missing_or, optional_str, parse_artist, parse_attr};
-use super::{check_rows_may_be_absent, required_str};
 use crate::de;
 use crate::error::Error;
+use crate::model::shared::{self, Artist, PageAttr, Track, missing_or};
 use crate::protocol::{Raw, methods};
 
 const ROOT: &str = "lovedtracks";
@@ -66,16 +65,7 @@ impl LovedTracksPage {
     /// field, such as `lovedtracks.track[3].date.uts`, and never repeats
     /// response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        if raw.method() != methods::USER_GET_LOVED_TRACKS.name() {
-            return Err(Error::decode("the response is for a different method")
-                .with_method(raw.spec())
-                .with_response(raw.status(), raw.body()));
-        }
-        let root = raw.json_strict()?;
-        parse(root).map_err(|e| {
-            e.with_method(raw.spec())
-                .with_response(raw.status(), raw.body())
-        })
+        shared::decode(raw, &methods::USER_GET_LOVED_TRACKS, ROOT, parse)
     }
 
     /// The paging attributes.
@@ -142,53 +132,17 @@ impl fmt::Debug for LovedTrack {
     }
 }
 
-fn parse(root: Value) -> Result<LovedTracksPage, Error> {
-    let Value::Object(mut root) = root else {
-        return Err(Error::decode("the body is not a JSON object"));
-    };
-    let Some(Value::Object(mut loved)) = root.remove(ROOT) else {
-        return Err(missing_or(ROOT, "an object"));
-    };
-    let attr = match loved.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(ROOT, &attr)?,
-        _ => return Err(missing_or("lovedtracks.@attr", "an object")),
-    };
-
-    let rows = match loved.remove("track") {
-        None => Vec::new(),
-        Some(Value::String(s)) if s.is_empty() => Vec::new(),
-        Some(value) => de::one_or_many(value).ok_or_else(|| {
-            Error::decode_field(
-                "lovedtracks.track",
-                "expected an array, an object or an empty string",
-            )
-        })?,
-    };
-    if rows.is_empty() {
-        check_rows_may_be_absent(ROOT, &attr)?;
-    }
-
-    let tracks = rows
-        .into_iter()
-        .enumerate()
-        .map(|(index, row)| parse_row(index, row))
-        .collect::<Result<_, _>>()?;
+fn parse(mut loved: Map<String, Value>) -> Result<LovedTracksPage, Error> {
+    let (attr, rows) = shared::page(&mut loved, ROOT, "track")?;
+    let tracks = shared::each(rows, "lovedtracks.track", parse_row)?;
     Ok(LovedTracksPage { attr, tracks })
 }
 
-fn parse_row(index: usize, json: Value) -> Result<LovedTrack, Error> {
-    let at = format!("lovedtracks.track[{index}]");
-    let Value::Object(map) = &json else {
-        return Err(Error::decode_field(&at, "the row is not an object"));
-    };
-    let track = Track {
-        name: required_str(map, &at, "name")?.to_owned(),
-        mbid: optional_str(map, &at, "mbid")?,
-        url: optional_str(map, &at, "url")?,
-    };
-    let artist = parse_artist(map, &at)?;
+fn parse_row(row: Map<String, Value>, at: &str) -> Result<LovedTrack, Error> {
+    let track = shared::parse_track(&row, at)?;
+    let artist = shared::parse_artist(&row, at)?;
     let path = format!("{at}.date.uts");
-    let loved_at = map
+    let loved_at = row
         .get("date")
         .and_then(|date| date.get("uts"))
         .and_then(de::uint)
@@ -197,7 +151,7 @@ fn parse_row(index: usize, json: Value) -> Result<LovedTrack, Error> {
         loved_at,
         track,
         artist,
-        json,
+        json: Value::Object(row),
     })
 }
 
