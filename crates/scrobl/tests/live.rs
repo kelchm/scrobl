@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The three tests send about forty key-only requests between them, a
+//! The four tests send about sixty key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -472,4 +472,108 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
     capture("weekly-track-chart-first", oldest.raw());
     assert_eq!((oldest.from(), oldest.to()), (first.from(), first.to()));
     println!("first listed week: {} tracks", oldest.tracks().len());
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
+async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let name = env("SCROBL_LIVE_USER");
+    let user = client(&key).user(&name);
+
+    // The profile, and how its counts sit beside the totals of the lists.
+    // They are printed, not compared: a scrobble between two requests moves
+    // one and not the other.
+    let info = user.info().send().await.unwrap();
+    capture("user-info", info.raw());
+    assert!(info.name().eq_ignore_ascii_case(&name));
+    assert!(info.registered() > 0);
+    let artists = user.top_artists().limit(1).send().await.unwrap();
+    let albums = user.top_albums().limit(1).send().await.unwrap();
+    let tracks = user.top_tracks().limit(1).send().await.unwrap();
+    println!(
+        "profile: {} scrobbles; artists {:?} (top list {}), albums {:?} ({}), tracks {:?} ({})",
+        info.playcount(),
+        info.artist_count(),
+        artists.attr().total(),
+        info.album_count(),
+        albums.attr().total(),
+        info.track_count(),
+        tracks.attr().total()
+    );
+
+    // Friends: a page decodes, and a page past the last is an error.
+    let friends = user.friends().limit(2).send().await.unwrap();
+    capture("friends", friends.raw());
+    assert!(friends.attr().user().eq_ignore_ascii_case(&name));
+    assert_eq!(friends.attr().per_page(), 2);
+    assert!(friends.users().len() <= 2);
+    println!(
+        "friends: {} in all; on the page, playcounts {:?}, counts of artists {:?}",
+        friends.attr().total(),
+        friends
+            .users()
+            .iter()
+            .map(|u| u.playcount())
+            .collect::<Vec<_>>(),
+        friends
+            .users()
+            .iter()
+            .map(|u| u.artist_count())
+            .collect::<Vec<_>>()
+    );
+    let past = u32::try_from(friends.attr().total_pages()).unwrap() + 1;
+    let error = user.friends().limit(2).page(past).send().await.unwrap_err();
+    println!(
+        "friends, a page past the last: {error} (http {:?})",
+        error.http_status()
+    );
+    assert_eq!(error.kind(), ErrorKind::Api);
+    assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+
+    // Loved tracks, newest first.
+    let loved = user.loved_tracks().limit(2).send().await.unwrap();
+    capture("loved-tracks", loved.raw());
+    assert!(loved.attr().user().eq_ignore_ascii_case(&name));
+    assert!(
+        loved
+            .tracks()
+            .windows(2)
+            .all(|pair| pair[0].loved_at() >= pair[1].loved_at()),
+        "loved tracks: newest first"
+    );
+    println!("loved tracks: {}", loved.attr().total());
+
+    // What the user gave each of their three most used tags.
+    let tags = user.top_tags().limit(3).send().await.unwrap();
+    for tag in tags.tags() {
+        let artists = user
+            .tagged_artists(tag.name())
+            .limit(2)
+            .send()
+            .await
+            .unwrap();
+        let albums = user
+            .tagged_albums(tag.name())
+            .limit(2)
+            .send()
+            .await
+            .unwrap();
+        let tracks = user
+            .tagged_tracks(tag.name())
+            .limit(2)
+            .send()
+            .await
+            .unwrap();
+        assert!(artists.tag().eq_ignore_ascii_case(tag.name()));
+        assert!(artists.attr().user().eq_ignore_ascii_case(&name));
+        assert_eq!(artists.attr().per_page(), 2);
+        println!(
+            "a tag used {} times: {} artists, {} albums, {} tracks",
+            tag.count(),
+            artists.attr().total(),
+            albums.attr().total(),
+            tracks.attr().total()
+        );
+    }
 }

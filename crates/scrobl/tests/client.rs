@@ -12,9 +12,9 @@
 //! asserted as lower bounds only; the one upper bound is a generous hang
 //! guard around each test.
 //!
-//! provenance: synthetic, and recorded for the lists of a user. The fake
-//! service generates every response but those, which are bodies the
-//! repository owner recorded from their own account; the credentials are
+//! provenance: synthetic, and recorded or derived for the lists and the
+//! profile of a user. The fake service generates every response but those,
+//! which are fixtures listed in `fixtures/README.md`; the credentials are
 //! obvious sentinels.
 
 #![cfg(feature = "client")]
@@ -2914,6 +2914,109 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
                 pairs(&[("method", "user.getWeeklyArtistChart"), ("user", USER)]),
             ]
         );
+    })
+    .await;
+}
+
+const USER_INFO: &[u8] = include_bytes!("../fixtures/recorded/kelchm-user-info.json");
+const FRIENDS: &[u8] = include_bytes!("../fixtures/derived/friends-page.json");
+const TAGGED_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-tagged-artists.json");
+const TAGGED_ALBUMS: &[u8] = include_bytes!("../fixtures/derived/tagged-albums-page.json");
+const TAGGED_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-tagged-tracks.json");
+
+#[tokio::test]
+async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            USER_INFO,
+            FRIENDS,
+            TAGGED_ARTISTS,
+            TAGGED_ALBUMS,
+            TAGGED_TRACKS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let info = user.info().send().await.unwrap();
+        assert_eq!(info.raw().body(), USER_INFO);
+        assert_eq!((info.name(), info.playcount()), ("kelchm", 242_328));
+
+        let friends = user.friends().limit(3).page(1).send().await.unwrap();
+        assert_eq!(friends.raw().body(), FRIENDS);
+        assert_eq!(friends.users()[2].country(), Some("Iceland"));
+
+        let artists = user.tagged_artists("indie").send().await.unwrap();
+        assert_eq!(artists.raw().body(), TAGGED_ARTISTS);
+        assert_eq!(artists.artists()[0].artist().name(), "Panic at the Disco");
+
+        let albums = user
+            .tagged_albums("synthetic tag")
+            .limit(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(albums.raw().body(), TAGGED_ALBUMS);
+        assert_eq!(albums.albums()[1].album().title(), Some("Second Album"));
+
+        let tracks = user
+            .tagged_tracks(String::from("interesting"))
+            .limit(3)
+            .page(1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(tracks.raw().body(), TAGGED_TRACKS);
+        assert_eq!(tracks.tracks()[0].track().name(), "Bedroom in Hell");
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "user.getInfo"), ("user", USER)]),
+                pairs(&[
+                    ("method", "user.getFriends"),
+                    ("user", USER),
+                    ("limit", "3"),
+                    ("page", "1")
+                ]),
+                pairs(&[
+                    ("method", "user.getPersonalTags"),
+                    ("user", USER),
+                    ("tag", "indie"),
+                    ("taggingtype", "artist")
+                ]),
+                pairs(&[
+                    ("method", "user.getPersonalTags"),
+                    ("user", USER),
+                    ("tag", "synthetic tag"),
+                    ("taggingtype", "album"),
+                    ("limit", "2")
+                ]),
+                pairs(&[
+                    ("method", "user.getPersonalTags"),
+                    ("user", USER),
+                    ("tag", "interesting"),
+                    ("taggingtype", "track"),
+                    ("limit", "3"),
+                    ("page", "1")
+                ]),
+            ]
+        );
+
+        // A 0 is refused here as for the other lists, and nothing is sent.
+        for result in [
+            user.friends().limit(0).send().await.map(drop),
+            user.tagged_artists("indie").page(0).send().await.map(drop),
+            user.tagged_albums("indie").limit(0).send().await.map(drop),
+            user.tagged_tracks("indie").page(0).send().await.map(drop),
+        ] {
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidRequest);
+        }
+        assert_eq!(server.request_count(), 5);
     })
     .await;
 }

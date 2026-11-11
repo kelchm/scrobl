@@ -1,10 +1,12 @@
-//! Typed reads of a user's lists: what they play and tag most, of all time
-//! or in one week, and the artists in their library.
+//! Typed reads of a user's profile and lists: what they play and tag most,
+//! of all time or in one week, what they gave a tag, their friends, and
+//! the artists in their library.
 
 use super::{Client, User};
 use crate::error::Error;
 use crate::model::{
-    LibraryArtistsPage, TopAlbumsPage, TopArtistsPage, TopTags, TopTracksPage, WeeklyAlbumChart,
+    FriendsPage, LibraryArtistsPage, TaggedAlbumsPage, TaggedArtistsPage, TaggedTracksPage,
+    TopAlbumsPage, TopArtistsPage, TopTags, TopTracksPage, UserInfo, WeeklyAlbumChart,
     WeeklyArtistChart, WeeklyChartList, WeeklyTrackChart,
 };
 use crate::protocol::{MethodSpec, Raw, Request, methods};
@@ -46,6 +48,44 @@ impl Period {
 }
 
 impl User {
+    /// Starts a `user.getInfo` query for this user.
+    pub fn info(&self) -> UserInfoQuery {
+        UserInfoQuery {
+            list: List::of(self),
+        }
+    }
+
+    /// Starts a `user.getFriends` query for this user.
+    pub fn friends(&self) -> FriendsQuery {
+        FriendsQuery {
+            list: List::of(self),
+        }
+    }
+
+    /// Starts a `user.getPersonalTags` query for the artists this user has
+    /// given `tag`.
+    pub fn tagged_artists(&self, tag: impl Into<String>) -> TaggedArtistsQuery {
+        TaggedArtistsQuery {
+            list: List::tagged(self, tag.into(), "artist"),
+        }
+    }
+
+    /// Starts a `user.getPersonalTags` query for the albums this user has
+    /// given `tag`.
+    pub fn tagged_albums(&self, tag: impl Into<String>) -> TaggedAlbumsQuery {
+        TaggedAlbumsQuery {
+            list: List::tagged(self, tag.into(), "album"),
+        }
+    }
+
+    /// Starts a `user.getPersonalTags` query for the tracks this user has
+    /// given `tag`.
+    pub fn tagged_tracks(&self, tag: impl Into<String>) -> TaggedTracksQuery {
+        TaggedTracksQuery {
+            list: List::tagged(self, tag.into(), "track"),
+        }
+    }
+
     /// Starts a `user.getTopArtists` query for this user.
     pub fn top_artists(&self) -> TopArtistsQuery {
         TopArtistsQuery {
@@ -119,6 +159,8 @@ struct List {
     page: Option<u32>,
     period: Option<Period>,
     range: Option<(u64, u64)>,
+    /// The tag and the `taggingtype` of a `user.getPersonalTags` query.
+    tagged: Option<(String, &'static str)>,
 }
 
 impl List {
@@ -130,6 +172,14 @@ impl List {
             page: None,
             period: None,
             range: None,
+            tagged: None,
+        }
+    }
+
+    fn tagged(user: &User, tag: String, kind: &'static str) -> Self {
+        Self {
+            tagged: Some((tag, kind)),
+            ..Self::of(user)
         }
     }
 
@@ -149,6 +199,9 @@ impl List {
             return Err(Error::invalid_request(spec, "`page` starts at 1"));
         }
         let mut request = Request::new(spec).param("user", &self.user);
+        if let Some((tag, kind)) = &self.tagged {
+            request = request.param("tag", tag).param("taggingtype", *kind);
+        }
         if let Some(period) = self.period {
             request = request.param("period", period.as_str());
         }
@@ -546,6 +599,194 @@ impl WeeklyTrackChartQuery {
                 &methods::USER_GET_WEEKLY_TRACK_CHART,
                 WeeklyTrackChart::decode,
             )
+            .await
+    }
+}
+
+/// A `user.getInfo` query: a user's profile. Made by [`User::info`].
+///
+/// ```no_run
+/// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+/// let user = client.user("rj").info().send().await?;
+/// println!("{} has {} scrobbles", user.name(), user.playcount());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct UserInfoQuery {
+    list: List,
+}
+
+impl UserInfoQuery {
+    /// Reads the profile. The exact response is on the result, next to the
+    /// typed profile.
+    ///
+    /// # Errors
+    ///
+    /// Any error of [`Client::call`], and
+    /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
+    /// expected shape.
+    pub async fn send(self) -> Result<Response<UserInfo>, Error> {
+        self.list
+            .send(&methods::USER_GET_INFO, UserInfo::decode)
+            .await
+    }
+}
+
+/// A `user.getFriends` query: the users a user follows. Made by
+/// [`User::friends`].
+///
+/// The method's `recenttracks` parameter is not offered: the service
+/// answered with the same bytes with it and without.
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct FriendsQuery {
+    list: List,
+}
+
+impl FriendsQuery {
+    /// Sets `limit`, the page size, from 1 to 500. The service answers a
+    /// larger one with
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.list.limit = Some(limit);
+        self
+    }
+
+    /// Sets `page`, from 1. The service answers a page beyond the last
+    /// with [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS),
+    /// not with an empty page.
+    pub fn page(mut self, page: u32) -> Self {
+        self.list.page = Some(page);
+        self
+    }
+
+    /// Reads one page. The exact response is on the result, next to the
+    /// typed page.
+    ///
+    /// # Errors
+    ///
+    /// As [`TopArtistsQuery::send`].
+    pub async fn send(self) -> Result<Response<FriendsPage>, Error> {
+        self.list
+            .send(&methods::USER_GET_FRIENDS, FriendsPage::decode)
+            .await
+    }
+}
+
+/// A `user.getPersonalTags` query for artists: the artists a user has given
+/// one tag. Made by [`User::tagged_artists`].
+///
+/// ```no_run
+/// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+/// let page = client.user("rj").tagged_artists("rock").send().await?;
+/// for tagged in page.artists() {
+///     println!("{}", tagged.artist().name());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct TaggedArtistsQuery {
+    list: List,
+}
+
+impl TaggedArtistsQuery {
+    /// Sets `limit`, the page size, from 1 to 1000. The service answers a
+    /// larger one with
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.list.limit = Some(limit);
+        self
+    }
+
+    /// Sets `page`, from 1.
+    pub fn page(mut self, page: u32) -> Self {
+        self.list.page = Some(page);
+        self
+    }
+
+    /// Reads one page. The exact response is on the result, next to the
+    /// typed page.
+    ///
+    /// # Errors
+    ///
+    /// As [`TopArtistsQuery::send`].
+    pub async fn send(self) -> Result<Response<TaggedArtistsPage>, Error> {
+        self.list
+            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedArtistsPage::decode)
+            .await
+    }
+}
+
+/// A `user.getPersonalTags` query for albums: the albums a user has given
+/// one tag. Made by [`User::tagged_albums`]. It is set and sent as a
+/// [`TaggedArtistsQuery`] is.
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct TaggedAlbumsQuery {
+    list: List,
+}
+
+impl TaggedAlbumsQuery {
+    /// Sets `limit`, the page size, as [`TaggedArtistsQuery::limit`] does.
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.list.limit = Some(limit);
+        self
+    }
+
+    /// Sets `page`, from 1.
+    pub fn page(mut self, page: u32) -> Self {
+        self.list.page = Some(page);
+        self
+    }
+
+    /// Reads one page. The exact response is on the result, next to the
+    /// typed page.
+    ///
+    /// # Errors
+    ///
+    /// As [`TopArtistsQuery::send`].
+    pub async fn send(self) -> Result<Response<TaggedAlbumsPage>, Error> {
+        self.list
+            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedAlbumsPage::decode)
+            .await
+    }
+}
+
+/// A `user.getPersonalTags` query for tracks: the tracks a user has given
+/// one tag. Made by [`User::tagged_tracks`]. It is set and sent as a
+/// [`TaggedArtistsQuery`] is.
+#[derive(Debug, Clone)]
+#[must_use = "a query does nothing until it is sent"]
+pub struct TaggedTracksQuery {
+    list: List,
+}
+
+impl TaggedTracksQuery {
+    /// Sets `limit`, the page size, as [`TaggedArtistsQuery::limit`] does.
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.list.limit = Some(limit);
+        self
+    }
+
+    /// Sets `page`, from 1.
+    pub fn page(mut self, page: u32) -> Self {
+        self.list.page = Some(page);
+        self
+    }
+
+    /// Reads one page. The exact response is on the result, next to the
+    /// typed page.
+    ///
+    /// # Errors
+    ///
+    /// As [`TopArtistsQuery::send`].
+    pub async fn send(self) -> Result<Response<TaggedTracksPage>, Error> {
+        self.list
+            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedTracksPage::decode)
             .await
     }
 }

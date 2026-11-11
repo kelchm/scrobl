@@ -392,7 +392,7 @@ Last, a sync reads the loved tracks, a thousand to a page, and replaces the file
 
 ## Coverage
 
-Every method gets a typed model for v1. Eleven have one so far. Ten are tested against responses the owner recorded from their own account and have been read from the live service through the client: `user.getRecentTracks`, the four lists of what a user plays and tags most (`user.getTopArtists`, `user.getTopAlbums`, `user.getTopTracks`, `user.getTopTags`), `library.getArtists`, the three weekly charts (`user.getWeeklyArtistChart`, `user.getWeeklyAlbumChart`, `user.getWeeklyTrackChart`) and `user.getWeeklyChartList`, whose fixture is four weeks of the 1134 recorded. The eleventh, `user.getLovedTracks`, follows a recorded response too, but is tested against a fixture with that structure and invented values. A model can also be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
+Every method gets a typed model for v1. Fourteen have one so far: the thirteen reads of the `user` package and `library.getArtists`. All fourteen have been read from the live service through the client, and each is tested against a response the owner recorded from their own account, with three exceptions. A friends list names other people and the owner has tagged no album, so the fixture of `user.getFriends` and the page of tagged albums of `user.getPersonalTags` follow a recording with every value invented; and the fixture of `user.getWeeklyChartList` is four weeks of the 1134 recorded. A model can also be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
 - `endpoints.md` records the level each method has reached, and that table is the release claim. A model checked against a recorded response is at a different level from one derived from documentation.
 - The exact response is always reachable next to the typed view, so a model that fails to decode never blocks a caller.
@@ -416,7 +416,7 @@ What the live pass of 2026-10-08 showed for `user.getRecentTracks`, with an API 
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and, through the client, any method that has no typed model yet. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page. Nothing was recorded from that read, so the method stays `typed-derived`.
+Not yet seen live: a signed read (`as_user`), a hidden history, a now-playing row, several scrobbles in one second across a page boundary, rate limiting and `Retry-After`, and, through the client, any method that has no typed model yet. The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
 What the live pass of 2026-11-10 showed for the lists of a user, with an API key only: the four top lists and `library.getArtists`, read through the client by `tests/live.rs` and recorded with `curl`:
 
@@ -435,6 +435,14 @@ And for the weekly charts, the same day:
 - Without `from` and `to` the service chose the seven days up to the last noon UTC, which is not a listed week. `from` alone got the same answer.
 - The week after the last listed one, still in progress, had a chart. A `from` later than the `to` was an empty array, not an error.
 - The charts apply a `limit` although their pages document none. The three recorded fixtures were made with `limit=3`; the client sends none.
+
+And for the profile, the friends, the tagged items and the loved tracks:
+
+- The three counts of a profile are the totals of the three top lists: 10105 artists, 21774 albums and 47059 tracks.
+- A row of `user.getFriends` is a shorter profile: no counts of artists, albums or tracks, and `playcount` and `subscriber` were 0 in all 26 rows recorded, of two users' friends. Its `registered.#text` is a date as text, where `user.getInfo` sends a number. A user who gives no country has the word `None` there, which the model reads as none.
+- `user.getFriends` answered with the same bytes with `recenttracks=1` and without, so the client does not offer it. A page beyond the last is error 6 with HTTP 400, where `user.getTopArtists`, `library.getArtists` and `user.getPersonalTags` send an empty page. Its `limit` runs from 1 to 500.
+- `user.getPersonalTags` nests its rows by kind (`taggings.artists.artist`, `taggings.albums.album`, `taggings.tracks.track`), and one reply holds one kind. Every tagged track recorded has the word `FIXME` as its `duration`, which the model leaves alone. Without a `taggingtype`, or with one it does not know, the method answers error 6.
+- `user.getLovedTracks` refuses a `limit` of 0 with error 6, as the top lists do.
 
 Order of typing, what can be checked live without changing an account first:
 

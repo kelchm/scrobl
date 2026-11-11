@@ -201,29 +201,45 @@ pub(super) fn decode<T>(
 
 /// The paging attributes and the rows of a list: `list.@attr` and
 /// `list.<key>`, where `root` is the name of `list` for the error.
-///
-/// The rows are an array, a single object when there is exactly one, and
-/// for an empty page absent, `[]` or `""`. Those three are accepted only
-/// when `@attr` allows no rows: nothing matches (`total` is 0) or the page
-/// lies beyond the last one. Otherwise the rows are missing, not absent.
 pub(super) fn page(
     list: &mut Map<String, Value>,
     root: &str,
     key: &str,
 ) -> Result<(PageAttr, Vec<Value>), Error> {
-    let attr = match list.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(root, &attr)?,
-        _ => return Err(missing_or(&format!("{root}.@attr"), "an object")),
-    };
-    let path = format!("{root}.{key}");
-    let rows = rows(list, &path, key)?;
+    let attr = page_attr(list, root)?;
+    let rows = promised_rows(list, &attr, &format!("{root}.{key}"), key)?;
+    Ok((attr, rows))
+}
+
+/// The paging attributes of a list, at `list.@attr`.
+pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<PageAttr, Error> {
+    match list.remove("@attr") {
+        Some(Value::Object(attr)) => parse_attr(root, &attr),
+        _ => Err(missing_or(&format!("{root}.@attr"), "an object")),
+    }
+}
+
+/// The rows of a page, at `list.<key>`, where `path` names them for the
+/// error.
+///
+/// The rows are an array, a single object when there is exactly one, and
+/// for an empty page absent, `[]` or `""`. Those three are accepted only
+/// when `attr` allows no rows: nothing matches (`total` is 0) or the page
+/// lies beyond the last one. Otherwise the rows are missing, not absent.
+pub(super) fn promised_rows(
+    list: &mut Map<String, Value>,
+    attr: &PageAttr,
+    path: &str,
+    key: &str,
+) -> Result<Vec<Value>, Error> {
+    let rows = rows(list, path, key)?;
     if rows.is_empty() && attr.total != 0 && attr.page <= attr.total_pages {
         return Err(Error::decode_field(
-            &path,
+            path,
             "absent or empty, but `@attr` says the page holds rows",
         ));
     }
-    Ok((attr, rows))
+    Ok(rows)
 }
 
 /// The rows under `key`: an array, a single object, or none when the member

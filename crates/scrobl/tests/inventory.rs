@@ -30,10 +30,17 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::LibraryArtistsPage`",
         "live-verified",
     ),
+    ("user.getFriends", "`model::FriendsPage`", "live-verified"),
+    ("user.getInfo", "`model::UserInfo`", "live-verified"),
     (
         "user.getLovedTracks",
         "`model::LovedTracksPage`",
-        "typed-derived",
+        "live-verified",
+    ),
+    (
+        "user.getPersonalTags",
+        "`model::TaggedArtistsPage`, `model::TaggedAlbumsPage`, `model::TaggedTracksPage`",
+        "live-verified",
     ),
     (
         "user.getRecentTracks",
