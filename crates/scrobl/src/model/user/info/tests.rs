@@ -166,7 +166,7 @@ fn a_malformed_profile_names_the_field() {
             &methods::USER_GET_INFO,
             json!({"other": SECRET}).to_string(),
         )),
-        "user",
+        "`user`",
     );
     names(info(&with(&|u| u["name"] = json!(7))), "user.name");
     names(

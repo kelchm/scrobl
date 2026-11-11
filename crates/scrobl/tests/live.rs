@@ -489,8 +489,11 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     assert!(info.name().eq_ignore_ascii_case(&name));
     assert!(info.registered() > 0);
     let artists = user.top_artists().limit(1).send().await.unwrap();
+    capture("top-artists-1", artists.raw());
     let albums = user.top_albums().limit(1).send().await.unwrap();
+    capture("top-albums-1", albums.raw());
     let tracks = user.top_tracks().limit(1).send().await.unwrap();
+    capture("top-tracks-1", tracks.raw());
     println!(
         "profile: {} scrobbles; artists {:?} (top list {}), albums {:?} ({}), tracks {:?} ({})",
         info.playcount(),
@@ -546,25 +549,29 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
 
     // What the user gave each of their three most used tags.
     let tags = user.top_tags().limit(3).send().await.unwrap();
-    for tag in tags.tags() {
+    capture("top-tags-3", tags.raw());
+    for (index, tag) in tags.tags().iter().enumerate() {
         let artists = user
             .tagged_artists(tag.name())
             .limit(2)
             .send()
             .await
             .unwrap();
+        capture(&format!("tagged-artists-{index}"), artists.raw());
         let albums = user
             .tagged_albums(tag.name())
             .limit(2)
             .send()
             .await
             .unwrap();
+        capture(&format!("tagged-albums-{index}"), albums.raw());
         let tracks = user
             .tagged_tracks(tag.name())
             .limit(2)
             .send()
             .await
             .unwrap();
+        capture(&format!("tagged-tracks-{index}"), tracks.raw());
         assert!(artists.tag().eq_ignore_ascii_case(tag.name()));
         assert!(artists.attr().user().eq_ignore_ascii_case(&name));
         assert_eq!(artists.attr().per_page(), 2);
