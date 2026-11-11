@@ -66,7 +66,8 @@ impl fmt::Debug for PageAttr {
 ///
 /// The service sends a picture as a list of these, one for each size. In
 /// every response recorded the list runs from the smallest to the largest:
-/// `small`, `medium`, `large`, `extralarge` and, for an artist, `mega`.
+/// `small`, `medium` and `large`, then `extralarge` in most lists, then
+/// `mega` where the row is itself an artist.
 ///
 /// What a picture shows is the service's choice. Every artist recorded on
 /// 2026-11-10 had the same one, a placeholder; albums had their covers.
@@ -145,7 +146,8 @@ impl Track {
     }
 
     /// The pictures the service sent with the track, in its order. Empty
-    /// when it sent none; an entry without an address is left out.
+    /// when it sent none. An entry whose address is missing or empty is left
+    /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -188,7 +190,8 @@ impl Artist {
     }
 
     /// The pictures the service sent with the artist, in its order. Empty
-    /// when it sent none; an entry without an address is left out.
+    /// when it sent none. An entry whose address is missing or empty is left
+    /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -231,7 +234,8 @@ impl Album {
     }
 
     /// The pictures the service sent with the album, in its order. Empty
-    /// when it sent none; an entry without an address is left out.
+    /// when it sent none. An entry whose address is missing or empty is left
+    /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -458,7 +462,11 @@ pub(super) fn parse_album(row: &Map<String, Value>, at: &str) -> Result<Album, E
 
 /// The pictures of whatever `map` is, under `image`: an array of sizes, a
 /// single one, or none when the member is absent or `""`, as the rows of a
-/// page are read. An entry whose address is missing or empty is left out.
+/// page are read.
+///
+/// An entry whose address is missing or empty is left out, as a missing or
+/// empty `mbid` reads as none: the service sends an empty address where it
+/// has no picture. An address or a size of another type is an error.
 pub(super) fn parse_images(map: &Map<String, Value>, at: &str) -> Result<Vec<Image>, Error> {
     let path = format!("{at}.image");
     let entries = match map.get("image") {

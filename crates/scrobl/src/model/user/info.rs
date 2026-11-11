@@ -132,7 +132,8 @@ impl UserInfo {
     }
 
     /// The user's picture in the sizes the service sent, in its order.
-    /// Empty when it sent none; an entry without an address is left out.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; [`json`](Self::json) still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
