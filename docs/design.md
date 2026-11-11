@@ -169,11 +169,11 @@ A scan is made only by `RecentTracks::scan`, from the builder's user, window, `e
 - It never uses a timestamp as a cursor and never removes duplicates, so same-second and identical scrobbles survive.
 - It never issues a request with altered bounds.
 
-`accept` first checks that the response answers the outstanding request, by comparing `Raw::request` with it. A response to any other request, for another window, page, user, limit or `extended`, is `ErrorKind::Inconsistent` ("the response answers a different request") and is refused without being decoded. Each page must then satisfy all of the following. Any failure is `ErrorKind::Inconsistent` naming the rule, after which the scan yields nothing further:
+`accept` first checks that the response answers the outstanding request, by comparing `Raw::request` with it. A response to any other request, for another window, page, user, limit or `extended`, is `ErrorKind::Inconsistent` ("the response answers a different request") and is refused without being decoded. The page is then decoded, and one that does not decode, for want of a total for instance, is `ErrorKind::Decode`. A decoded page must satisfy all of the following, and a failure is `ErrorKind::Inconsistent` naming the rule. After either error the scan yields nothing further:
 
 1. `@attr.user` equals the requested user, ignoring case.
 2. `@attr.page` equals the requested page and `@attr.perPage` equals the requested limit.
-3. `@attr.total` and `@attr.totalPages` are present and identical on every page of the scan, and `totalPages` equals `ceil(total / perPage)`; when `total` is 0 it may be 0 or 1.
+3. `@attr.total` and `@attr.totalPages` are identical on every page of the scan, and `totalPages` equals `ceil(total / perPage)`; when `total` is 0 it may be 0 or 1.
 4. The number of scrobbles on the page is exactly what the totals imply: `perPage` on every page but the last, the remainder on the last. A now-playing row is not a scrobble and is not counted.
 5. Every scrobble timestamp lies in `[from, to)`: `from` inclusive, `to` exclusive.
 6. Timestamps never increase, within a page or from one page to the next.
@@ -191,7 +191,7 @@ The client drives the scan as `Scan`:
 
 - `next_page` sends the outstanding request through the same paced, retried `call` as any read and hands the result to `accept`.
 - An error from the transport or the API leaves the page outstanding, so calling `next_page` again sends the identical request.
-- An error from `accept` kills the scan. Later calls fail with `Inconsistent` and send nothing. The core by itself would offer no further request, which looks like completion, so `Scan` remembers the failure and reports it.
+- An error from `accept` kills the scan, whichever of the two kinds it is. Later calls fail with `Inconsistent` and send nothing. The core by itself would offer no further request, which looks like completion, so `Scan` remembers the failure and reports it.
 - A page the scan has yielded is provisional until `finish` succeeds, because a later page or `finish` itself can still fail a rule. A consumer stages what it writes and marks it complete only then.
 
 #### What a completed scan does not prove
@@ -245,7 +245,7 @@ impl ClientBuilder {   // each setting has a default; build() fails with ErrorKi
 
 impl User {
     pub fn recent_tracks(&self) -> RecentTracksQuery;     // the history: one page, or a checked scan
-    pub fn loved_tracks(&self) -> LovedTracksQuery;       // limit 1 to 1000
+    pub fn loved_tracks(&self) -> LovedTracksQuery;       // one page, newest first; limit 1 to 1000
     pub fn info(&self) -> UserInfoQuery;
     pub fn friends(&self) -> FriendsQuery;
     pub fn top_artists(&self) -> TopArtistsQuery;         // also top_albums, top_tracks, top_tags
@@ -254,7 +254,7 @@ impl User {
     pub fn tagged_artists(&self, tag: impl Into<String>) -> TaggedArtistsQuery;   // also tagged_albums, tagged_tracks
     pub fn library_artists(&self) -> LibraryArtistsQuery;
 }
-impl TopArtistsQuery {   // every list query has this shape
+impl TopArtistsQuery {   // the shape of a list query
     pub fn period(self, Period) -> Self;   // the top lists of artists, albums and tracks
     pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;   // where the method pages
     pub async fn send(self) -> Result<Response<TopArtistsPage>, Error>;   // one page
@@ -274,7 +274,7 @@ impl Scan {
 pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; .into_value() -> T; .into_parts() -> (T, Raw)
 ```
 
-**List queries.** A weekly chart takes `range(from, to)` in place of a period. A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) have an upper bound on `limit`. The others have none, because the service's ranges differ by method ([Coverage](#coverage) has what was seen).
+**List queries.** `limit` and `page` exist where the method pages. A weekly chart takes only `range(from, to)`, and the profile and the list of weekly charts take nothing. A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) have an upper bound on `limit`. The others have none, because the service's ranges differ by method ([Coverage](#coverage) has what was seen).
 
 **`Response<T>`** is how every typed call returns its result: the typed value next to the exact `Raw`, so the bytes can be archived and a field the model lacks stays reachable. `value` and `into_value` reach the typed value without `Deref`, for a method of `T` that a method of `Response` would shadow. `Debug` of `Response`, `Raw` and `HttpResponse` shows header names and never header values, which are text the network chose; `header()` still returns them.
 
@@ -283,7 +283,7 @@ pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; 
 #### Fixed behaviour
 
 - **HTTPS only.** The client refuses a plain-HTTP URL before connecting. It uses rustls, keeps no cookies and switches `reqwest`'s own retries off.
-- **No redirects.** A 3xx is returned to `decode` and becomes `ErrorKind::Http`. The target of a `Location` receives nothing.
+- **No redirects.** A 3xx is returned to `decode`, which treats it as any status that is not 2xx: `ErrorKind::Http`, or `Api` when it carries an error envelope. The target of a `Location` receives nothing.
 - **No decompression.** Every `reqwest` decoder (`gzip`, `brotli`, `deflate`, `zstd`) is switched off explicitly. Cargo unifies features, so another crate in the program could otherwise turn one on, and then the client would send `Accept-Encoding` and `Raw::body` would not be the bytes the service sent.
 - **Proxies.** The environment variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are honoured. Through an HTTP proxy only a `CONNECT` naming the host and port is visible to the proxy, and the key stays inside TLS. `ClientBuilder::no_proxy` opts out.
 - **The test root.** The one hook that changes the root, `ClientBuilder::base_url` (hidden, for tests), accepts only a literal loopback address with no user information, query or fragment. So it cannot turn HTTPS-only off for a real host or send a key elsewhere. Anything else is a `Config` error that does not repeat the URL, and `Debug` says only whether a root is set.
@@ -326,7 +326,7 @@ One attempt is: wait for admission, send, read the body up to the cap, `decode`.
 - A failure to connect is `Transport` and certainly sent nothing. A failure after the request may have left is `Transport` with a possibly-sent request.
 - The URL is stripped. The cause kept on the `source()` chain is a snapshot of the `Display` of each link, because the `Debug` of some errors underneath prints the address connected to.
 - Each message is scrubbed before it is kept. Every occurrence of the client's own API key, secret and session key (and their form-encoded spellings) and of the prepared request's query string and body becomes `<redacted>`, and control characters are dropped. The message is cut to 256 bytes last, so a cut cannot leave half a credential.
-- So whatever a dependency prints, no credential the client holds appears on the chain, and no error text contains a URL or response text.
+- So whatever a dependency prints, no credential the client holds, and no query string or body it sent, appears on the chain. A dependency's message can still name the host.
 
 #### Cancellation
 
@@ -490,7 +490,7 @@ A scrobble reply is checked against the request: one outcome per item, `accepted
 - **Time, artist and track tell two scrobbles apart,** counting rows that share all three. The ids and the album are what Last.fm says about a scrobble, not which scrobble it is.
 - **The file follows Last.fm and keeps what Last.fm drops.** A scrobble the file has and a new reading lacks was most likely deleted or edited at Last.fm. It leaves `scrobbles` and is copied to `removed` with the time, because a deletion made by mistake should not vanish from a backup overnight, and a scrobble more than about two weeks old cannot be sent to Last.fm again. Nothing prunes `removed`. It is the one thing in the file that cannot be read again. The loved tracks have no such table: a track can be loved again.
 - **One user to a file,** named by the first sync and checked by every later one. A new file takes the name once Last.fm has answered for it, so a mistyped name does not claim the file.
-- **A file is used only as this version wrote it.** It carries an `application_id` and a layout version in `user_version`, now 5. A file with no tables is new. Any other without both marks is refused and left as it is, an earlier version's included, because its history can be read again into a new file. What is in `removed` cannot, so a later change to this layout has to upgrade a file where it is.
+- **A file is used only as this version wrote it.** It carries an `application_id` and a layout version in `user_version`, now 5. A file with nothing in it is new. Any other without both marks is refused and left as it is, an earlier version's included, because its history can be read again into a new file. What is in `removed` cannot, so a later change to this layout has to upgrade a file where it is.
 
 ### A sync
 
@@ -561,7 +561,7 @@ Each of the fourteen is tested against a response the owner recorded from their 
 
 ### What the live passes showed
 
-Each pass used an API key only. `tests/live.rs` repeats the reads through the client on request, and some of what follows comes from requests made with `curl` beside it.
+Each pass used an API key only. `tests/live.rs` repeats the reads through the client on request.
 
 `user.getRecentTracks` on the owner's public history, on 2026-10-08:
 
@@ -571,7 +571,7 @@ Each pass used an API key only. `tests/live.rs` repeats the reads through the cl
 - An empty window answers `total` 0 and `totalPages` 0.
 - An unknown user is error 6 with HTTP 404, and a bad key is error 10 with HTTP 403: the envelope arrives on a non-2xx status.
 
-The four top lists and `library.getArtists`, on 2026-11-10:
+The four top lists and `library.getArtists`, on 2026-11-10, read through the client by `tests/live.rs` and recorded with `curl`:
 
 - A page of 1000 artists, albums, tracks and library artists decodes: every row has what its model requires.
 - `library.getArtists` answers `limit=1` with `artist` as a single object. The top lists answer it with an array of one.
@@ -632,7 +632,7 @@ Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
 - **derived**: written from official documentation or a recorded fixture, with the source named.
 - **synthetic**: invented, including everything the fake server generates.
 
-The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture, and no test calls Last.fm.
+The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture. No test calls Last.fm except `tests/live.rs`, which runs only when the owner asks.
 
 ## Decisions
 
