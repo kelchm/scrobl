@@ -95,7 +95,7 @@ fn the_recorded_profile_decodes() {
 }
 
 #[test]
-fn a_profile_without_a_picture_has_none_and_a_malformed_one_names_the_field() {
+fn a_profile_without_an_image_has_none_and_a_malformed_one_names_the_field() {
     // Every address in the derived page is empty.
     let page = FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
     assert!(page.users().iter().all(|user| user.images().is_empty()));

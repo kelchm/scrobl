@@ -108,7 +108,7 @@ fn the_first_extended_page_decodes() {
     assert_eq!(scrobbles[1].artist().name(), "Dave Matthews Band");
     assert!(scrobbles.iter().all(|s| s.loved() == Some(false)));
 
-    // The row's pictures are the track's. With `extended` the artist has
+    // The row's images are the track's. With `extended` the artist has
     // its own, and an album never does.
     let images = first.track().images();
     assert_eq!(images.len(), 4);

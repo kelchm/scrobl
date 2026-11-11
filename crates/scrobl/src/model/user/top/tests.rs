@@ -539,7 +539,7 @@ fn artist_with(image: Option<Value>) -> Result<TopArtistsPage, Error> {
 }
 
 #[test]
-fn the_recorded_rows_carry_their_pictures() {
+fn the_recorded_rows_carry_their_images() {
     let artists = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
     let images = artists.artists()[0].artist().images();
     assert_eq!(
@@ -561,7 +561,7 @@ fn the_recorded_rows_carry_their_pictures() {
         images[3].url(),
         "https://lastfm-img.freetls.fastly.net/i/u/300x300/26b6daf514da76b731dbfb02ffe23325.jpg"
     );
-    // The artist of an album is a name, an id and a page: no picture.
+    // The artist of an album is a name, an id and a page: no image.
     assert!(albums.albums()[0].artist().images().is_empty());
 
     let tracks = TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
@@ -570,7 +570,7 @@ fn the_recorded_rows_carry_their_pictures() {
 }
 
 #[test]
-fn pictures_may_be_a_list_one_object_or_none() {
+fn images_may_be_a_list_one_object_or_none() {
     for none in [None, Some(json!("")), Some(json!([]))] {
         let page = artist_with(none).unwrap();
         assert!(page.artists()[0].artist().images().is_empty());
@@ -580,7 +580,7 @@ fn pictures_may_be_a_list_one_object_or_none() {
     for image in [json!([one.clone()]), one] {
         let page = artist_with(Some(image)).unwrap();
         let [only] = page.artists()[0].artist().images() else {
-            panic!("one picture expected");
+            panic!("one image expected");
         };
         assert_eq!(only.size(), Some("large"));
         assert_eq!(only.url(), "https://example.invalid/l.png");
@@ -588,7 +588,7 @@ fn pictures_may_be_a_list_one_object_or_none() {
 }
 
 #[test]
-fn a_picture_without_an_address_is_left_out() {
+fn an_image_without_an_address_is_left_out() {
     let page = artist_with(Some(json!([
         {"size": "small", "#text": ""},
         {"size": "medium"},
@@ -611,7 +611,7 @@ fn a_picture_without_an_address_is_left_out() {
 }
 
 #[test]
-fn a_malformed_picture_names_the_field() {
+fn a_malformed_image_names_the_field() {
     for (image, field) in [
         (json!(5), "topartists.artist[0].image"),
         (json!(SECRET), "topartists.artist[0].image"),
@@ -650,7 +650,7 @@ fn a_malformed_picture_names_the_field() {
 }
 
 #[test]
-fn debug_of_a_picture_leaves_out_its_text() {
+fn debug_of_an_image_leaves_out_its_text() {
     let page = artist_with(Some(json!([{"size": SECRET, "#text": SECRET}]))).unwrap();
     let image = &page.artists()[0].artist().images()[0];
     assert_eq!(image.url(), SECRET);

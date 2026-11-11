@@ -1,5 +1,5 @@
 //! What the packages share: the paging attributes, a track, an artist and an
-//! album as a list names them, their pictures, and the decoding every list
+//! album as a list names them, their images, and the decoding every list
 //! goes through.
 
 use std::fmt;
@@ -62,14 +62,14 @@ impl fmt::Debug for PageAttr {
     }
 }
 
-/// One address of a picture, in one of the sizes the service offers.
+/// One address of an image, in one of the sizes the service offers.
 ///
-/// The service sends a picture as a list of these, one for each size. In
+/// The service sends an image as a list of these, one for each size. In
 /// every response recorded the list runs from the smallest to the largest:
 /// `small`, `medium` and `large`, then `extralarge` in most lists, then
 /// `mega` where the row is itself an artist.
 ///
-/// What a picture shows is the service's choice. Every artist recorded on
+/// What an image shows is the service's choice. Every artist recorded on
 /// 2026-11-10 had the same one, a placeholder; albums had their covers.
 ///
 /// ```
@@ -105,7 +105,7 @@ impl Image {
         self.size.as_deref()
     }
 
-    /// The address of the picture. Never empty.
+    /// The address of the image. Never empty.
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -145,8 +145,8 @@ impl Track {
         self.url.as_deref()
     }
 
-    /// The pictures the service sent with the track, in its order. Empty
-    /// when it sent none. An entry whose address is missing or empty is left
+    /// The track's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty is left
     /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
@@ -189,8 +189,8 @@ impl Artist {
         self.url.as_deref()
     }
 
-    /// The pictures the service sent with the artist, in its order. Empty
-    /// when it sent none. An entry whose address is missing or empty is left
+    /// The artist's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty is left
     /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
@@ -204,7 +204,7 @@ impl fmt::Debug for Artist {
 }
 
 /// An album, as named in a row. A row without an album decodes to an album
-/// with no title, no mbid, no url and no pictures.
+/// with no title, no mbid, no url and no images.
 ///
 /// Every field is `None` when missing or an empty string, but where the
 /// row is itself an album, as in a list of top albums, a missing name is an
@@ -233,8 +233,8 @@ impl Album {
         self.url.as_deref()
     }
 
-    /// The pictures the service sent with the album, in its order. Empty
-    /// when it sent none. An entry whose address is missing or empty is left
+    /// The album's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty is left
     /// out; the row's own `json` still holds it.
     pub fn images(&self) -> &[Image] {
         &self.images
@@ -460,13 +460,13 @@ pub(super) fn parse_album(row: &Map<String, Value>, at: &str) -> Result<Album, E
     }
 }
 
-/// The pictures of whatever `map` is, under `image`: an array of sizes, a
+/// The image of whatever `map` is, under `image`: an array of sizes, a
 /// single one, or none when the member is absent or `""`, as the rows of a
 /// page are read.
 ///
 /// An entry whose address is missing or empty is left out, as a missing or
 /// empty `mbid` reads as none: the service sends an empty address where it
-/// has no picture. An address or a size of another type is an error.
+/// has no image. An address or a size of another type is an error.
 pub(super) fn parse_images(map: &Map<String, Value>, at: &str) -> Result<Vec<Image>, Error> {
     let path = format!("{at}.image");
     let entries = match map.get("image") {
