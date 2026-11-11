@@ -10,12 +10,13 @@ use crate::de;
 use crate::error::Error;
 use crate::protocol::{MethodSpec, Raw};
 
-/// The `@attr` of a page: whose list, which page of how many.
+/// The paging attributes of a page, from its `@attr`: which page of how many.
 ///
-/// The service sends these as strings. All five are required.
+/// The service sends these as strings. All four are required. Whose list
+/// the page belongs to is on the page itself, such as
+/// [`RecentTracksPage::user`](super::RecentTracksPage::user).
 #[derive(Clone)]
 pub struct PageAttr {
-    user: String,
     page: u64,
     per_page: u64,
     total_pages: u64,
@@ -23,11 +24,6 @@ pub struct PageAttr {
 }
 
 impl PageAttr {
-    /// The user the service says the page is for, in its own spelling.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
     /// The page number, from 1.
     pub fn page(&self) -> u64 {
         self.page
@@ -291,6 +287,16 @@ pub(super) fn page(
     Ok((attr, rows))
 }
 
+/// Whose list a page is: `list.@attr.<key>`, such as its `user` or its
+/// `tag`. Read it before [`page`] or [`page_attr`], which take `@attr` out.
+pub(super) fn owner(list: &Map<String, Value>, root: &str, key: &str) -> Result<String, Error> {
+    let at = format!("{root}.@attr");
+    match list.get("@attr") {
+        Some(Value::Object(attr)) => Ok(required_str(attr, &at, key)?.to_owned()),
+        _ => Err(missing_or(&at, "an object")),
+    }
+}
+
 /// The paging attributes of a list, at `list.@attr`.
 pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<PageAttr, Error> {
     match list.remove("@attr") {
@@ -360,7 +366,6 @@ pub(super) fn each<T>(
 fn parse_attr(root: &str, attr: &Map<String, Value>) -> Result<PageAttr, Error> {
     let at = format!("{root}.@attr");
     Ok(PageAttr {
-        user: required_str(attr, &at, "user")?.to_owned(),
         page: required_uint(attr, &at, "page")?,
         per_page: required_uint(attr, &at, "perPage")?,
         total_pages: required_uint(attr, &at, "totalPages")?,

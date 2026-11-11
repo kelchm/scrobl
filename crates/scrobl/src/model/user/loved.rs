@@ -47,6 +47,7 @@ const ROOT: &str = "lovedtracks";
 /// ```
 #[derive(Clone)]
 pub struct LovedTracksPage {
+    user: String,
     attr: PageAttr,
     tracks: Vec<LovedTrack>,
 }
@@ -66,6 +67,11 @@ impl LovedTracksPage {
     /// response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         shared::decode(raw, &methods::USER_GET_LOVED_TRACKS, ROOT, parse)
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.
@@ -133,9 +139,10 @@ impl fmt::Debug for LovedTrack {
 }
 
 fn parse(mut loved: Map<String, Value>) -> Result<LovedTracksPage, Error> {
+    let user = shared::owner(&loved, ROOT, "user")?;
     let (attr, rows) = shared::page(&mut loved, ROOT, "track")?;
     let tracks = shared::each(rows, "lovedtracks.track", parse_row)?;
-    Ok(LovedTracksPage { attr, tracks })
+    Ok(LovedTracksPage { user, attr, tracks })
 }
 
 fn parse_row(row: Map<String, Value>, at: &str) -> Result<LovedTrack, Error> {

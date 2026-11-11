@@ -42,6 +42,7 @@ use crate::protocol::{Raw, methods};
 /// ```
 #[derive(Clone)]
 pub struct TopArtistsPage {
+    user: String,
     attr: PageAttr,
     artists: Vec<TopArtist>,
 }
@@ -62,10 +63,20 @@ impl TopArtistsPage {
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         const ROOT: &str = "topartists";
         shared::decode(raw, &methods::USER_GET_TOP_ARTISTS, ROOT, |mut list| {
+            let user = shared::owner(&list, ROOT, "user")?;
             let (attr, rows) = shared::page(&mut list, ROOT, "artist")?;
             let artists = shared::each(rows, "topartists.artist", top_artist)?;
-            Ok(Self { attr, artists })
+            Ok(Self {
+                user,
+                attr,
+                artists,
+            })
         })
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.
@@ -136,6 +147,7 @@ impl fmt::Debug for TopArtist {
 /// `album` takes the forms `artist` takes in a [`TopArtistsPage`].
 #[derive(Clone)]
 pub struct TopAlbumsPage {
+    user: String,
     attr: PageAttr,
     albums: Vec<TopAlbum>,
 }
@@ -152,10 +164,16 @@ impl TopAlbumsPage {
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         const ROOT: &str = "topalbums";
         shared::decode(raw, &methods::USER_GET_TOP_ALBUMS, ROOT, |mut list| {
+            let user = shared::owner(&list, ROOT, "user")?;
             let (attr, rows) = shared::page(&mut list, ROOT, "album")?;
             let albums = shared::each(rows, "topalbums.album", top_album)?;
-            Ok(Self { attr, albums })
+            Ok(Self { user, attr, albums })
         })
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.
@@ -231,6 +249,7 @@ impl fmt::Debug for TopAlbum {
 /// `track` takes the forms `artist` takes in a [`TopArtistsPage`].
 #[derive(Clone)]
 pub struct TopTracksPage {
+    user: String,
     attr: PageAttr,
     tracks: Vec<TopTrack>,
 }
@@ -248,10 +267,16 @@ impl TopTracksPage {
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         const ROOT: &str = "toptracks";
         shared::decode(raw, &methods::USER_GET_TOP_TRACKS, ROOT, |mut list| {
+            let user = shared::owner(&list, ROOT, "user")?;
             let (attr, rows) = shared::page(&mut list, ROOT, "track")?;
             let tracks = shared::each(rows, "toptracks.track", top_track)?;
-            Ok(Self { attr, tracks })
+            Ok(Self { user, attr, tracks })
         })
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.

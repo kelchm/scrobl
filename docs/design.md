@@ -128,7 +128,8 @@ for scrobble in page.scrobbles() {
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
-page.attr();                     // user, page, per_page, total_pages, total
+page.user();                     // whose page it is, as the service spells the name
+page.attr();                     // page, per_page, total_pages, total
 ```
 
 Decoding rules for every model:

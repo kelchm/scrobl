@@ -81,7 +81,7 @@ fn the_recorded_tagged_artists_decode() {
     let page = TaggedArtistsPage::decode(&raw("artist", ARTISTS)).unwrap();
     assert_eq!(page.tag(), "indie");
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(
         (
             attr.page(),

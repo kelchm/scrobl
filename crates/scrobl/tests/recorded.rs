@@ -79,7 +79,7 @@ fn the_first_extended_page_decodes() {
     let page = decode(EXTENDED_1);
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(attr.page(), 1);
     assert_eq!(attr.per_page(), 2);
     assert_eq!(attr.total_pages(), 2);
@@ -126,7 +126,7 @@ fn the_second_extended_page_decodes() {
     let page = decode(EXTENDED_2);
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(attr.page(), 2);
     assert_eq!(attr.per_page(), 2);
     assert_eq!(attr.total_pages(), 2);
@@ -146,7 +146,7 @@ fn the_plain_page_decodes() {
     let page = decode(PLAIN);
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(attr.page(), 1);
     assert_eq!(attr.per_page(), 200);
     assert_eq!(attr.total_pages(), 1);
@@ -342,7 +342,7 @@ fn the_now_playing_page_decodes_with_its_now_playing_row() {
     let page = decode(NOW_PLAYING);
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "example_listener");
+    assert_eq!(page.user(), "example_listener");
     assert_eq!(attr.page(), 1);
     assert_eq!(attr.per_page(), 200);
     assert_eq!(attr.total_pages(), 1);
