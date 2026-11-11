@@ -2836,3 +2836,84 @@ async fn a_list_query_sends_only_what_was_set() {
     })
     .await;
 }
+
+const WEEKLY_CHART_LIST: &[u8] = include_bytes!("../fixtures/derived/weekly-chart-list.json");
+const WEEKLY_ARTISTS: &[u8] =
+    include_bytes!("../fixtures/recorded/kelchm-weekly-artist-chart.json");
+const WEEKLY_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-album-chart.json");
+const WEEKLY_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-track-chart.json");
+
+#[tokio::test]
+async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
+    bounded(async {
+        let bodies = [
+            WEEKLY_CHART_LIST,
+            WEEKLY_ARTISTS,
+            WEEKLY_ALBUMS,
+            WEEKLY_TRACKS,
+            WEEKLY_ARTISTS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let weeks = user.weekly_chart_list().send().await.unwrap();
+        assert_eq!(weeks.raw().body(), WEEKLY_CHART_LIST);
+        let week = weeks.ranges().last().unwrap();
+        let (from, to) = (week.from(), week.to());
+        assert_eq!((from, to), (1_793_534_400, 1_794_139_200));
+
+        let artists = user
+            .weekly_artist_chart()
+            .range(from, to)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(artists.raw().body(), WEEKLY_ARTISTS);
+        assert_eq!((artists.from(), artists.to()), (from, to));
+        assert_eq!(artists.artists()[1].artist().name(), "Noah Kahan");
+
+        let albums = user
+            .weekly_album_chart()
+            .range(from, to)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(albums.raw().body(), WEEKLY_ALBUMS);
+        assert_eq!(albums.albums()[2].album().title(), Some("takeaways"));
+
+        let tracks = user
+            .weekly_track_chart()
+            .range(from, to)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(tracks.raw().body(), WEEKLY_TRACKS);
+        assert_eq!(tracks.tracks()[0].track().name(), "Fire Island, AK");
+
+        // Without a range neither bound is sent.
+        user.weekly_artist_chart().send().await.unwrap();
+
+        let week = [("from", "1793534400"), ("to", "1794139200")];
+        let with_week = |method: &'static str| {
+            let mut sent = vec![("method", method), ("user", USER)];
+            sent.extend(week);
+            pairs(&sent)
+        };
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "user.getWeeklyChartList"), ("user", USER)]),
+                with_week("user.getWeeklyArtistChart"),
+                with_week("user.getWeeklyAlbumChart"),
+                with_week("user.getWeeklyTrackChart"),
+                pairs(&[("method", "user.getWeeklyArtistChart"), ("user", USER)]),
+            ]
+        );
+    })
+    .await;
+}

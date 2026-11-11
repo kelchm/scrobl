@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The two tests send about thirty key-only requests between them, a
+//! The three tests send about forty key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -358,4 +358,118 @@ async fn the_lists_of_a_user_against_the_live_service() {
         library.attr().total(),
         library.artists().len()
     );
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
+async fn the_weekly_charts_of_a_user_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let name = env("SCROBL_LIVE_USER");
+    let user = client(&key).user(&name);
+
+    // The weeks follow one another without a gap.
+    let weeks = user.weekly_chart_list().send().await.unwrap();
+    capture("weekly-chart-list", weeks.raw());
+    assert!(weeks.user().eq_ignore_ascii_case(&name));
+    assert!(
+        weeks
+            .ranges()
+            .windows(2)
+            .all(|pair| pair[0].to() == pair[1].from()),
+        "each week ends where the next begins"
+    );
+    let last = weeks.ranges().last().expect("the list has no weeks");
+    let (from, to) = (last.from(), last.to());
+    println!(
+        "chart list: {} weeks, the last {from} to {to}",
+        weeks.ranges().len()
+    );
+
+    // Each chart of the last listed week echoes the week and is ranked.
+    let artists = user
+        .weekly_artist_chart()
+        .range(from, to)
+        .send()
+        .await
+        .unwrap();
+    capture("weekly-artist-chart", artists.raw());
+    assert!(artists.user().eq_ignore_ascii_case(&name));
+    assert_eq!((artists.from(), artists.to()), (from, to));
+    let rows: Vec<_> = artists
+        .artists()
+        .iter()
+        .map(|a| (a.rank(), a.playcount()))
+        .collect();
+    assert_ranked("weekly artists", 1, &rows);
+
+    let albums = user
+        .weekly_album_chart()
+        .range(from, to)
+        .send()
+        .await
+        .unwrap();
+    capture("weekly-album-chart", albums.raw());
+    assert_eq!((albums.from(), albums.to()), (from, to));
+    let album_rows: Vec<_> = albums
+        .albums()
+        .iter()
+        .map(|a| (a.rank(), a.playcount()))
+        .collect();
+    assert_ranked("weekly albums", 1, &album_rows);
+
+    let tracks = user
+        .weekly_track_chart()
+        .range(from, to)
+        .send()
+        .await
+        .unwrap();
+    capture("weekly-track-chart", tracks.raw());
+    assert_eq!((tracks.from(), tracks.to()), (from, to));
+    let track_rows: Vec<_> = tracks
+        .tracks()
+        .iter()
+        .map(|t| (t.rank(), t.playcount()))
+        .collect();
+    assert_ranked("weekly tracks", 1, &track_rows);
+    // The plays of a week are the same by artist and by track, unless the
+    // track chart was cut off at its thousand rows.
+    let plays = |rows: &[(u64, u64)]| rows.iter().map(|row| row.1).sum::<u64>();
+    println!(
+        "last week: {} artists ({} plays), {} albums ({} plays), {} tracks ({} plays)",
+        rows.len(),
+        plays(&rows),
+        album_rows.len(),
+        plays(&album_rows),
+        track_rows.len(),
+        plays(&track_rows)
+    );
+    if track_rows.len() < 1000 {
+        assert_eq!(plays(&rows), plays(&track_rows), "artists and tracks");
+    }
+
+    // Without a range the service chooses the span itself.
+    let chosen = user.weekly_artist_chart().send().await.unwrap();
+    capture("weekly-artist-chart-default", chosen.raw());
+    println!(
+        "no range: {} to {}, {} artists, a listed week: {}",
+        chosen.from(),
+        chosen.to(),
+        chosen.artists().len(),
+        weeks
+            .ranges()
+            .iter()
+            .any(|w| (w.from(), w.to()) == (chosen.from(), chosen.to()))
+    );
+
+    // The first listed week.
+    let first = weeks.ranges().first().expect("the list has no weeks");
+    let oldest = user
+        .weekly_track_chart()
+        .range(first.from(), first.to())
+        .send()
+        .await
+        .unwrap();
+    capture("weekly-track-chart-first", oldest.raw());
+    assert_eq!((oldest.from(), oldest.to()), (first.from(), first.to()));
+    println!("first listed week: {} tracks", oldest.tracks().len());
 }

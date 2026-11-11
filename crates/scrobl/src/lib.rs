@@ -6,9 +6,10 @@
 //! What works today: a raw, signed call to any of the 57 methods, the ten
 //! that change an account only through a `Writer`, a typed, checked read of
 //! a user's scrobble history, and typed reads of a user's loved tracks, of
-//! the artists, albums, tracks and tags they play and use most, and of the
-//! artists in their library. Not built yet: typed models for the other
-//! methods, the authentication flows and typed scrobbling.
+//! the artists, albums, tracks and tags they play and use most, of their
+//! weekly charts, and of the artists in their library. Not built yet: typed
+//! models for the other methods, the authentication flows and typed
+//! scrobbling.
 //!
 //! The crate is built in layers:
 //!

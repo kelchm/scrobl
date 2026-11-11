@@ -76,10 +76,10 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopArtistsPage` | live-verified |
 | `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::TopTags` | live-verified |
 | `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopTracksPage` | live-verified |
-| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | — | inventoried |
-| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | — | inventoried |
-| `user.getWeeklyChartList` | GET | API key | — | — | user | — | inventoried |
-| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | — | inventoried |
+| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyAlbumChart` | live-verified |
+| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyArtistChart` | live-verified |
+| `user.getWeeklyChartList` | GET | API key | — | — | user | `model::WeeklyChartList` | live-verified |
+| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyTrackChart` | live-verified |
 
 <!-- END GENERATED -->
 

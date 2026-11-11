@@ -16,5 +16,6 @@ pub use library::{LibraryArtist, LibraryArtistsPage};
 pub use shared::{Album, Artist, PageAttr, Track};
 pub use user::{
     LovedTrack, LovedTracksPage, NowPlaying, RecentTracksPage, Scrobble, TopAlbum, TopAlbumsPage,
-    TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
+    TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage, WeeklyAlbumChart,
+    WeeklyArtistChart, WeeklyChartList, WeeklyChartRange, WeeklyTrackChart,
 };
