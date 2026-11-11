@@ -316,18 +316,13 @@ async fn the_lists_of_a_user_against_the_live_service() {
         .collect();
     assert_ranked("top tracks", 1, &rows);
     println!(
-        "top tracks: {} in all, {} on the page, duration absent in {}, zero in {}",
+        "top tracks: {} in all, {} on the page, {} of unknown length",
         tracks.attr().total(),
         rows.len(),
         tracks
             .tracks()
             .iter()
             .filter(|t| t.duration().is_none())
-            .count(),
-        tracks
-            .tracks()
-            .iter()
-            .filter(|t| t.duration() == Some(0))
             .count()
     );
 

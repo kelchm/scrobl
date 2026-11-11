@@ -44,7 +44,7 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | — | inventoried |
 | `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | — | inventoried |
 | **library** | | | | | | | |
-| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | fixture-verified |
+| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | live-verified |
 | **tag** | | | | | | | |
 | `tag.getInfo` | GET | API key | — | — | _lang_, tag | — | inventoried |
 | `tag.getSimilar` | GET | API key | — | — | tag | — | inventoried |
@@ -72,10 +72,10 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LovedTracksPage` | typed-derived |
 | `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | — | inventoried |
 | `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::RecentTracksPage` | live-verified |
-| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopAlbumsPage` | fixture-verified |
-| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopArtistsPage` | fixture-verified |
-| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::TopTags` | fixture-verified |
-| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopTracksPage` | fixture-verified |
+| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopAlbumsPage` | live-verified |
+| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopArtistsPage` | live-verified |
+| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::TopTags` | live-verified |
+| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopTracksPage` | live-verified |
 | `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | — | inventoried |
 | `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | — | inventoried |
 | `user.getWeeklyChartList` | GET | API key | — | — | user | — | inventoried |

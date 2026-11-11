@@ -297,8 +297,9 @@ impl TopTrack {
         self.playcount
     }
 
-    /// The length of the track in seconds, as the row gives it. `None` when
-    /// the row has no `duration`.
+    /// The length of the track in seconds. `None` when the row has no
+    /// `duration` or gives 0, which is what the service sends for a length
+    /// it does not know; [`json`](Self::json) tells the two apart.
     pub fn duration(&self) -> Option<u64> {
         self.duration
     }
@@ -456,7 +457,7 @@ fn top_track(row: Map<String, Value>, at: &str) -> Result<TopTrack, Error> {
     Ok(TopTrack {
         rank: rank(&row, at)?,
         playcount: shared::required_uint(&row, at, "playcount")?,
-        duration: shared::optional_uint(&row, at, "duration")?,
+        duration: shared::optional_uint(&row, at, "duration")?.filter(|&seconds| seconds != 0),
         track: shared::parse_track(&row, at)?,
         artist: shared::parse_artist(&row, at)?,
         json: Value::Object(row),

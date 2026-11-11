@@ -450,6 +450,13 @@ fn what_a_row_may_leave_out_reads_as_none() {
     assert_eq!(page.tracks()[0].duration(), None);
     assert_eq!(page.tracks()[0].track().mbid(), None);
 
+    // A length the service does not know comes as 0.
+    let mut unknown = track_row("1", "A");
+    unknown["duration"] = json!("0");
+    let page = tracks(&paged("toptracks", "track", json!([unknown]), 1)).unwrap();
+    assert_eq!(page.tracks()[0].duration(), None);
+    assert_eq!(page.tracks()[0].json()["duration"], "0");
+
     let page = albums(&paged("topalbums", "album", json!([album_row("1", "")]), 1)).unwrap();
     assert_eq!(page.albums()[0].album().title(), None);
 

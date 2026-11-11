@@ -107,12 +107,6 @@ impl List {
         spec: &'static MethodSpec,
         decode: fn(&Raw) -> Result<T, Error>,
     ) -> Result<Response<T>, Error> {
-        if self.limit == Some(0) {
-            return Err(Error::invalid_request(spec, "`limit` starts at 1"));
-        }
-        if self.page == Some(0) {
-            return Err(Error::invalid_request(spec, "`page` starts at 1"));
-        }
         let mut request = Request::new(spec).param("user", &self.user);
         if let Some(period) = self.period {
             request = request.param("period", period.as_str());
@@ -162,8 +156,9 @@ impl TopArtistsQuery {
         self
     }
 
-    /// Sets `limit`, the page size, from 1. The page says what size the
-    /// service applied, in [`per_page`](crate::model::PageAttr::per_page).
+    /// Sets `limit`, the page size, from 1 to 1000. The service answers a
+    /// size outside that range with
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -180,9 +175,10 @@ impl TopArtistsQuery {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` or a
-    /// `page` of 0, before anything is sent; any error of [`Client::call`];
-    /// and [`ErrorKind::Decode`](crate::ErrorKind) when the page is not the
+    /// Any error of [`Client::call`], which is where a `limit` or a `page`
+    /// the service refuses arrives, as
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS); and
+    /// [`ErrorKind::Decode`](crate::ErrorKind) when the page is not the
     /// expected shape.
     pub async fn send(self) -> Result<Response<TopArtistsPage>, Error> {
         self.list
@@ -207,8 +203,9 @@ impl TopAlbumsQuery {
         self
     }
 
-    /// Sets `limit`, the page size, from 1. The page says what size the
-    /// service applied, in [`per_page`](crate::model::PageAttr::per_page).
+    /// Sets `limit`, the page size, from 1. The service has applied 1000
+    /// when asked; the page says what size it applied, in
+    /// [`per_page`](crate::model::PageAttr::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -249,8 +246,9 @@ impl TopTracksQuery {
         self
     }
 
-    /// Sets `limit`, the page size, from 1. The page says what size the
-    /// service applied, in [`per_page`](crate::model::PageAttr::per_page).
+    /// Sets `limit`, the page size, from 1. The service has applied 1000
+    /// when asked; the page says what size it applied, in
+    /// [`per_page`](crate::model::PageAttr::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -305,8 +303,7 @@ impl TopTagsQuery {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` of 0,
-    /// before anything is sent; any error of [`Client::call`]; and
+    /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
     pub async fn send(self) -> Result<Response<TopTags>, Error> {
@@ -333,8 +330,9 @@ pub struct LibraryArtistsQuery {
 }
 
 impl LibraryArtistsQuery {
-    /// Sets `limit`, the page size, from 1. The page says what size the
-    /// service applied, in [`per_page`](crate::model::PageAttr::per_page).
+    /// Sets `limit`, the page size, from 1. The service has applied 2000
+    /// when asked; the page says what size it applied, in
+    /// [`per_page`](crate::model::PageAttr::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self

@@ -28,7 +28,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
     (
         "library.getArtists",
         "`model::LibraryArtistsPage`",
-        "fixture-verified",
+        "live-verified",
     ),
     (
         "user.getLovedTracks",
@@ -43,18 +43,18 @@ const LEVELS: &[(&str, &str, &str)] = &[
     (
         "user.getTopAlbums",
         "`model::TopAlbumsPage`",
-        "fixture-verified",
+        "live-verified",
     ),
     (
         "user.getTopArtists",
         "`model::TopArtistsPage`",
-        "fixture-verified",
+        "live-verified",
     ),
-    ("user.getTopTags", "`model::TopTags`", "fixture-verified"),
+    ("user.getTopTags", "`model::TopTags`", "live-verified"),
     (
         "user.getTopTracks",
         "`model::TopTracksPage`",
-        "fixture-verified",
+        "live-verified",
     ),
 ];
 
