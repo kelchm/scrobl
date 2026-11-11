@@ -274,7 +274,7 @@ impl Scan {
 pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; .into_value() -> T; .into_parts() -> (T, Raw)
 ```
 
-**List queries.** `limit` and `page` exist where the method pages. A weekly chart takes only `range(from, to)`, and the profile and the list of weekly charts take nothing. A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) have an upper bound on `limit`. The others have none, because the service's ranges differ by method ([Coverage](#coverage) has what was seen).
+**List queries.** `limit` and `page` exist where the method pages. A weekly chart takes only `range(from, to)`, and the profile and the list of weekly charts take nothing. A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) check an upper bound on `limit` in the client. For the others the service refuses a `limit` over its own maximum, which differs by method ([Coverage](#coverage) has what was seen).
 
 **`Response<T>`** is how every typed call returns its result: the typed value next to the exact `Raw`, so the bytes can be archived and a field the model lacks stays reachable. `value` and `into_value` reach the typed value without `Deref`, for a method of `T` that a method of `Response` would shadow. `Debug` of `Response`, `Raw` and `HttpResponse` shows header names and never header values, which are text the network chose; `header()` still returns them.
 
@@ -343,7 +343,7 @@ impl Error {
     pub fn api_message(&self) -> Option<&str>;
     pub fn http_status(&self) -> Option<u16>;
     pub fn method(&self) -> Option<&'static str>;  // the Last.fm method name
-    pub fn body(&self) -> Option<&[u8]>;           // the response body, capped at 64 KiB
+    pub fn body(&self) -> Option<&[u8]>;           // the raw response body, capped at 64 KiB; it can hold a session key
     pub fn retry(&self) -> Retry;
     pub fn delivery(&self) -> Option<Delivery>;
 }
