@@ -243,6 +243,82 @@ impl fmt::Debug for Album {
     }
 }
 
+/// Defines one page of a list that the service pages: the paging attributes,
+/// whose list it is where the service says, and the rows.
+///
+/// The pages differ in the method, the names of the root and of the rows,
+/// the row type, and whether `@attr` names an owner such as a country.
+macro_rules! list_page {
+    (
+        $(#[$doc:meta])*
+        $name:ident, $method:literal, $spec:ident, $root:literal, $key:literal,
+        $(@of $owner:ident = $owner_key:literal, $owner_doc:literal;)?
+        $rows:ident: $row:ty = $parse:path
+    ) => {
+        $(#[$doc])*
+        #[derive(Clone)]
+        pub struct $name {
+            $($owner: String,)?
+            attr: $crate::model::PageAttr,
+            $rows: Vec<$row>,
+        }
+
+        impl $name {
+            #[doc = concat!("Decodes a `", $method, "` response.")]
+            ///
+            /// # Errors
+            ///
+            /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is
+            #[doc = concat!("for another method, when `", $root, "`, its `@attr` or a member read from")]
+            /// it is missing or malformed, when a row is not an object or
+            /// lacks what its type requires, when the rows are absent or
+            /// empty although `@attr` promises rows on the page, or when an
+            /// object repeats a member name. The message names the field,
+            #[doc = concat!("such as `", $root, ".", $key, "[3].name`, and never repeats response text.")]
+            pub fn decode(raw: &$crate::protocol::Raw) -> Result<Self, $crate::error::Error> {
+                use $crate::model::shared;
+                shared::decode(raw, &$crate::protocol::methods::$spec, $root, |mut list| {
+                    $(let $owner = shared::owner(&list, $root, $owner_key)?;)?
+                    let (attr, rows) = shared::page(&mut list, $root, $key)?;
+                    let $rows = shared::each(rows, concat!($root, ".", $key), $parse)?;
+                    Ok(Self {
+                        $($owner,)?
+                        attr,
+                        $rows,
+                    })
+                })
+            }
+
+            $(
+                #[doc = $owner_doc]
+                pub fn $owner(&self) -> &str {
+                    &self.$owner
+                }
+            )?
+
+            /// The paging attributes.
+            pub fn attr(&self) -> &$crate::model::PageAttr {
+                &self.attr
+            }
+
+            /// The rows, in the order the service sent them.
+            pub fn $rows(&self) -> &[$row] {
+                &self.$rows
+            }
+        }
+
+        impl ::std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.debug_struct(stringify!($name))
+                    .field("attr", &self.attr)
+                    .field(stringify!($rows), &self.$rows.len())
+                    .finish_non_exhaustive()
+            }
+        }
+    };
+}
+pub(super) use list_page;
+
 // Decoding. Every error names a field path; none repeats response text.
 
 pub(super) fn missing_or(path: &str, expected: &str) -> Error {
@@ -498,6 +574,12 @@ pub(super) fn parse_images(map: &Map<String, Value>, at: &str) -> Result<Vec<Ima
         }
     }
     Ok(images)
+}
+
+/// The length of a track in seconds, under `duration`. Missing or 0 reads as
+/// `None`: 0 is what the service sends for a length it does not know.
+pub(super) fn duration(row: &Map<String, Value>, at: &str) -> Result<Option<u64>, Error> {
+    Ok(optional_uint(row, at, "duration")?.filter(|&seconds| seconds != 0))
 }
 
 pub(super) fn required_str<'a>(

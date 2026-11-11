@@ -3022,3 +3022,95 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
     })
     .await;
 }
+
+// The charts of the service and of a country. Each test scripts the answer:
+// a body the repository owner recorded from the service's public charts,
+// listed in `fixtures/README.md`.
+
+const CHART_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/chart-top-artists.json");
+const CHART_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/chart-top-tracks.json");
+const CHART_TAGS: &[u8] = include_bytes!("../fixtures/recorded/chart-top-tags.json");
+const GEO_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/geo-top-artists.json");
+const GEO_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/geo-top-tracks.json");
+
+#[tokio::test]
+async fn the_charts_are_read_with_what_was_set_and_the_exact_bytes() {
+    bounded(async {
+        let bodies = [
+            CHART_ARTISTS,
+            CHART_TRACKS,
+            CHART_TAGS,
+            GEO_ARTISTS,
+            GEO_TRACKS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let chart = client.chart();
+        let country = client.geo("united states");
+        assert_eq!(country.country(), "united states");
+
+        let artists = chart.top_artists().limit(3).page(2).send().await.unwrap();
+        assert_eq!(artists.raw().body(), CHART_ARTISTS);
+        assert_eq!(artists.artists()[0].artist().name(), "Olivia Rodrigo");
+        assert_eq!(artists.attr().total(), 10_000);
+
+        let tracks = chart.top_tracks().limit(3).send().await.unwrap();
+        assert_eq!(tracks.raw().body(), CHART_TRACKS);
+        assert_eq!(tracks.tracks()[0].track().name(), "Nicole Kidman");
+
+        let tags = chart.top_tags().send().await.unwrap();
+        assert_eq!(tags.raw().body(), CHART_TAGS);
+        assert_eq!(tags.tags()[0].name(), "rock");
+
+        let artists = country.top_artists().limit(3).send().await.unwrap();
+        assert_eq!(artists.raw().body(), GEO_ARTISTS);
+        // The service spells the country its own way.
+        assert_eq!(artists.country(), "United States");
+        assert_eq!(artists.artists()[0].listeners(), 69_663);
+
+        let tracks = country.top_tracks().page(1).send().await.unwrap();
+        assert_eq!(tracks.raw().body(), GEO_TRACKS);
+        assert_eq!(tracks.tracks()[2].track().name(), "Earrings");
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "chart.getTopArtists"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+                pairs(&[("method", "chart.getTopTracks"), ("limit", "3")]),
+                pairs(&[("method", "chart.getTopTags")]),
+                pairs(&[
+                    ("method", "geo.getTopArtists"),
+                    ("country", "united states"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "geo.getTopTracks"),
+                    ("country", "united states"),
+                    ("page", "1")
+                ]),
+            ]
+        );
+
+        // A 0 is refused here as for the lists of a user, and nothing is sent.
+        for result in [
+            chart.top_artists().limit(0).send().await.map(drop),
+            chart.top_tracks().page(0).send().await.map(drop),
+            chart.top_tags().limit(0).send().await.map(drop),
+            country.top_artists().page(0).send().await.map(drop),
+            country.top_tracks().limit(0).send().await.map(drop),
+        ] {
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidRequest);
+        }
+        assert_eq!(server.request_count(), 5);
+    })
+    .await;
+}

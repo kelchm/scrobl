@@ -37,12 +37,12 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |
 | `auth.getToken` | GET | API key, signature | — | — | — | — | inventoried |
 | **chart** | | | | | | | |
-| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
-| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
-| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
+| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartArtistsPage` | live-verified |
+| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTagsPage` | live-verified |
+| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTracksPage` | live-verified |
 | **geo** | | | | | | | |
-| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | — | inventoried |
-| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | — | inventoried |
+| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::GeoArtistsPage` | live-verified |
+| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::GeoTracksPage` | live-verified |
 | **library** | | | | | | | |
 | `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | live-verified |
 | **tag** | | | | | | | |

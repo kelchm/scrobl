@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The four tests send about sixty key-only requests between them, a
+//! The five tests send about eighty key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -582,5 +582,113 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
             albums.attr().total(),
             tracks.attr().total()
         );
+    }
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY"]
+async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let client = client(&key);
+    let chart = client.chart();
+
+    // The chart of artists: the service echoes what was asked, a second
+    // page holds other artists, a page of 1000 decodes, and a page beyond
+    // the last is empty and not an error.
+    let artists = chart.top_artists().limit(5).send().await.unwrap();
+    capture("chart-artists", artists.raw());
+    assert_eq!((artists.attr().page(), artists.attr().per_page()), (1, 5));
+    assert_eq!(artists.artists().len(), 5);
+    let second = chart.top_artists().limit(5).page(2).send().await.unwrap();
+    capture("chart-artists-page-2", second.raw());
+    assert_eq!(second.attr().page(), 2);
+    assert_ne!(
+        second.artists()[0].artist().name(),
+        artists.artists()[0].artist().name()
+    );
+    let full = chart.top_artists().limit(1000).send().await.unwrap();
+    capture("chart-artists-1000", full.raw());
+    assert_eq!(full.artists().len(), 1000);
+    let beyond = chart
+        .top_artists()
+        .limit(50)
+        .page(999_999)
+        .send()
+        .await
+        .unwrap();
+    capture("chart-artists-beyond", beyond.raw());
+    assert!(beyond.artists().is_empty());
+    println!(
+        "chart artists: {} listed, first {} plays",
+        artists.attr().total(),
+        artists.artists()[0].playcount()
+    );
+
+    let tracks = chart.top_tracks().limit(5).send().await.unwrap();
+    capture("chart-tracks", tracks.raw());
+    assert_eq!(tracks.tracks().len(), 5);
+    let full = chart.top_tracks().limit(1000).send().await.unwrap();
+    capture("chart-tracks-1000", full.raw());
+    assert_eq!(full.tracks().len(), 1000);
+    let unknown = full
+        .tracks()
+        .iter()
+        .filter(|t| t.duration().is_none())
+        .count();
+    println!("chart tracks: {unknown} of 1000 without a length");
+
+    // The chart of tags. Whether it pages is printed and not asserted: on
+    // 2026-11-11 page 2 held the rows of page 1.
+    let tags = chart.top_tags().limit(5).send().await.unwrap();
+    capture("chart-tags", tags.raw());
+    assert_eq!(tags.tags().len(), 5);
+    let second = chart.top_tags().limit(5).page(2).send().await.unwrap();
+    capture("chart-tags-page-2", second.raw());
+    println!(
+        "chart tags: {} in all; page 2 starts with `{}`, page 1 with `{}`",
+        tags.attr().total(),
+        second.tags()[0].name(),
+        tags.tags()[0].name()
+    );
+    let full = chart.top_tags().limit(1000).send().await.unwrap();
+    capture("chart-tags-1000", full.raw());
+    assert_eq!(full.tags().len(), 1000);
+
+    // A country: the service spells the name back its own way, and refuses
+    // a code and a name it does not know.
+    let germany = client.geo("germany");
+    let artists = germany.top_artists().limit(5).send().await.unwrap();
+    capture("geo-artists", artists.raw());
+    assert_eq!(artists.country(), "Germany");
+    assert_eq!(artists.artists().len(), 5);
+    let full = germany.top_artists().limit(1000).send().await.unwrap();
+    capture("geo-artists-1000", full.raw());
+    assert_eq!(full.artists().len(), 1000);
+    let tracks = germany.top_tracks().limit(5).send().await.unwrap();
+    capture("geo-tracks", tracks.raw());
+    assert_eq!(tracks.country(), "Germany");
+    assert_eq!(tracks.tracks().len(), 5);
+    let full = germany.top_tracks().limit(1000).send().await.unwrap();
+    capture("geo-tracks-1000", full.raw());
+    assert_eq!(full.tracks().len(), 1000);
+    println!(
+        "Germany: {} artists, {} tracks listed",
+        artists.attr().total(),
+        tracks.attr().total()
+    );
+
+    for country in ["DE", "Atlantis"] {
+        let error = client
+            .geo(country)
+            .top_artists()
+            .limit(5)
+            .send()
+            .await
+            .unwrap_err();
+        println!(
+            "country `{country}`: {error} (http {:?})",
+            error.http_status()
+        );
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
     }
 }

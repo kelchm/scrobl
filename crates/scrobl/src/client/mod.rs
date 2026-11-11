@@ -268,6 +268,7 @@
 
 mod builder;
 mod cause;
+mod charts;
 mod history;
 mod lists;
 mod pacing;
@@ -280,6 +281,10 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 
 pub use builder::ClientBuilder;
+pub use charts::{
+    Chart, ChartArtistsQuery, ChartTagsQuery, ChartTracksQuery, Geo, GeoArtistsQuery,
+    GeoTracksQuery,
+};
 pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
 pub use lists::{
     FriendsQuery, LibraryArtistsQuery, Period, TaggedAlbumsQuery, TaggedArtistsQuery,
@@ -438,6 +443,18 @@ impl Client {
     /// The handle is a cheap value that holds a clone of this client.
     pub fn user(&self, name: impl Into<String>) -> User {
         User::new(self.clone(), name.into())
+    }
+
+    /// A handle for the charts of the whole service: the artists, tracks
+    /// and tags played and used most.
+    pub fn chart(&self) -> Chart {
+        Chart::new(self.clone())
+    }
+
+    /// A handle for the charts of one country, named as ISO 3166-1 names it
+    /// in English, such as `Germany`.
+    pub fn geo(&self, country: impl Into<String>) -> Geo {
+        Geo::new(self.clone(), country.into())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the

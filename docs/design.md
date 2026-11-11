@@ -225,6 +225,8 @@ impl Client {
     pub fn with_session(&self, session: SessionKey) -> Client;   // shares the pool and the pacing clock
     pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any method that is not a write
     pub fn user(&self, name: impl Into<String>) -> User;
+    pub fn chart(&self) -> Chart;                           // the whole service: top_artists, top_tracks, top_tags
+    pub fn geo(&self, country: impl Into<String>) -> Geo;   // one country: top_artists, top_tracks
 }
 
 impl Writer {   // Clone, Deref<Target = Client>
@@ -540,7 +542,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Fourteen have one so far: the thirteen reads of the `user` package and `library.getArtists`. All fourteen have been read from the live service through the client.
+Every method gets a typed model for v1. Nineteen have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service and the two of a country. All nineteen have been read from the live service through the client.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -556,7 +558,7 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the fourteen is tested against a response the owner recorded from their own account, with three exceptions:
+Each of the nineteen is tested against a response the owner recorded, from their own account or from the service's public charts, with three exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
@@ -606,6 +608,17 @@ Images, in the same captures (77 replies, 9,961 rows, 35,542 addresses):
 - A row that is an artist has five sizes (`small`, `medium`, `large`, `extralarge`, `mega`). An album, a track, a user and the artist named in an extended history row have four, and a track of a weekly chart three. The rows of the weekly artist and album charts have none.
 - All 1000 most played artists, all 1000 library artists and all 1000 most played tracks have the same image, a placeholder. Albums have covers of their own: 979 of the 1000 most played, and the other 21 have empty addresses.
 
+The charts of the service and of a country, on 2026-11-11:
+
+- A chart's `@attr` is the four paging numbers and no user. A country's adds `country`, in the service's own spelling: `germany` comes back as `Germany`.
+- A row's `@attr.rank`, where there is one, is its place on the page and not in the list: page 2 starts again at 1, and `geo.getTopTracks` counts from 0. The chart rows have none. So no model reads it, and a row's place is its position.
+- `chart.getTopTags` does not page. Page 2, and a page far beyond the last, hold the rows of page 1. The other four answer a page beyond the last with an empty array.
+- The service lists 10,000 artists and 10,000 tracks, and 2238 artists for the United States.
+- About one row in fourteen has no `mbid` member at all, where the lists of a user send an empty one.
+- `geo.getTopTracks` sent the same rows with a `location` and without, so the client does not offer it.
+- A country code (`DE`), a country the service does not know and no country at all are each error 6. So are a `limit` of 0 or above 1000 and a `page` of 0.
+- These errors arrive with HTTP 200, where the `user` methods send HTTP 400.
+
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
 Not yet seen live:
@@ -636,11 +649,11 @@ Tauri 2 itself declares 1.90, so the music app will need more than the library d
 
 Every fixture is listed in `crates/scrobl/fixtures/README.md` as one of:
 
-- **recorded**: a real exchange captured by the repository owner from their own account, with the request, the date and the HTTP status. The body is kept byte for byte.
+- **recorded**: a real exchange captured by the repository owner with their own key, from their own account or from the charts the service shows to anyone, with the request, the date and the HTTP status. The body is kept byte for byte.
 - **derived**: written from official documentation or a recorded fixture, with the source named.
 - **synthetic**: invented, including everything the fake server generates.
 
-The recorded fixtures are the owner's own captures of their own account. No credential is in any fixture. No test calls Last.fm except `tests/live.rs`, which runs only when the owner asks.
+The recorded fixtures are the owner's own captures: of their own account, and of the service's public charts. No credential is in any fixture. No test calls Last.fm except `tests/live.rs`, which runs only when the owner asks.
 
 ## Decisions
 

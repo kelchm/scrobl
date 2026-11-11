@@ -26,6 +26,31 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
 const LEVELS: &[(&str, &str, &str)] = &[
     (
+        "chart.getTopArtists",
+        "`model::ChartArtistsPage`",
+        "live-verified",
+    ),
+    (
+        "chart.getTopTags",
+        "`model::ChartTagsPage`",
+        "live-verified",
+    ),
+    (
+        "chart.getTopTracks",
+        "`model::ChartTracksPage`",
+        "live-verified",
+    ),
+    (
+        "geo.getTopArtists",
+        "`model::GeoArtistsPage`",
+        "live-verified",
+    ),
+    (
+        "geo.getTopTracks",
+        "`model::GeoTracksPage`",
+        "live-verified",
+    ),
+    (
         "library.getArtists",
         "`model::LibraryArtistsPage`",
         "live-verified",
