@@ -431,7 +431,8 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
         .map(|t| (t.rank(), t.playcount()))
         .collect();
     assert_ranked("weekly tracks", 1, &track_rows);
-    // The plays of a week are the same whichever way they are grouped.
+    // The plays of a week are the same by artist and by track, unless the
+    // track chart was cut off at its thousand rows.
     let plays = |rows: &[(u64, u64)]| rows.iter().map(|row| row.1).sum::<u64>();
     println!(
         "last week: {} artists ({} plays), {} albums ({} plays), {} tracks ({} plays)",
@@ -442,7 +443,9 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
         track_rows.len(),
         plays(&track_rows)
     );
-    assert_eq!(plays(&rows), plays(&track_rows), "artists and tracks");
+    if track_rows.len() < 1000 {
+        assert_eq!(plays(&rows), plays(&track_rows), "artists and tracks");
+    }
 
     // Without a range the service chooses the span itself.
     let chosen = user.weekly_artist_chart().send().await.unwrap();

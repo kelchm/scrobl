@@ -457,10 +457,10 @@ pub struct WeeklyArtistChartQuery {
 }
 
 impl WeeklyArtistChartQuery {
-    /// Sets `from` and `to`, the week to chart, in seconds since the Unix
-    /// epoch: a week of [`WeeklyChartList`]. Without them the service
-    /// chooses a recent span of seven days, which need not be one of the
-    /// listed weeks.
+    /// Sets `from` and `to`, the span to chart, in seconds since the Unix
+    /// epoch, such as a week of [`WeeklyChartList`]. Without them the
+    /// service chooses a recent span of seven days, which need not be one
+    /// of the listed weeks.
     pub fn range(mut self, from: u64, to: u64) -> Self {
         self.list.range = Some((from, to));
         self
@@ -494,7 +494,7 @@ pub struct WeeklyAlbumChartQuery {
 }
 
 impl WeeklyAlbumChartQuery {
-    /// Sets `from` and `to`, the week to chart, as
+    /// Sets `from` and `to`, the span to chart, as
     /// [`WeeklyArtistChartQuery::range`] does.
     pub fn range(mut self, from: u64, to: u64) -> Self {
         self.list.range = Some((from, to));
@@ -527,7 +527,7 @@ pub struct WeeklyTrackChartQuery {
 }
 
 impl WeeklyTrackChartQuery {
-    /// Sets `from` and `to`, the week to chart, as
+    /// Sets `from` and `to`, the span to chart, as
     /// [`WeeklyArtistChartQuery::range`] does.
     pub fn range(mut self, from: u64, to: u64) -> Self {
         self.list.range = Some((from, to));

@@ -266,9 +266,12 @@ weekly_chart! {
 
 weekly_chart! {
     /// The reply to `user.getWeeklyTrackChart`: the tracks a user played in
-    /// one week, most played first. The method has no pages. Each track's
-    /// artist comes as a name and an id, without a `url`, and no row has a
-    /// `duration`.
+    /// one week, most played first. Each track's artist comes as a name and
+    /// an id, without a `url`, and no row has a `duration`.
+    ///
+    /// The method has no pages, and the service has sent no more than 1000
+    /// rows: a week of 1390 plays came back as 1000 tracks holding 1167 of
+    /// them, with nothing in the reply to say the rest were left out.
     WeeklyTrackChart, "user.getWeeklyTrackChart", USER_GET_WEEKLY_TRACK_CHART,
     "weeklytrackchart", "track", tracks: TopTrack = top::top_track
 }

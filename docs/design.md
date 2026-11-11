@@ -431,7 +431,7 @@ What the live pass of 2026-11-10 showed for the lists of a user, with an API key
 And for the weekly charts, the same day:
 
 - The chart list held 1134 weeks of seven days, each ending where the next begins, on a Sunday at noon UTC. It starts in February 2005, before the account existed, and a week without a scrobble is an empty array.
-- The three charts of one week hold the same plays: 217 as 158 artists, as 184 albums and as 204 tracks.
+- The three charts of the last listed week hold the same plays: 217 as 158 artists, as 184 albums and as 204 tracks. A chart is not always complete. The track chart of a week of 1390 plays had exactly 1000 rows holding 1167 of them, and nothing in the reply says so; that week's album chart held 1336, since a scrobble need not name an album.
 - Without `from` and `to` the service chose the seven days up to the last noon UTC, which is not a listed week. `from` alone got the same answer.
 - The week after the last listed one, still in progress, had a chart. A `from` later than the `to` was an empty array, not an error.
 - The charts apply a `limit` although their pages document none. The three recorded fixtures were made with `limit=3`; the client sends none.
