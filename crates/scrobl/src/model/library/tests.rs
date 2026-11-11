@@ -96,6 +96,8 @@ fn the_recorded_page_decodes() {
     );
     // What the model does not name is still in the row.
     assert_eq!(first.json()["streamable"], "0");
+    assert_eq!(first.artist().images().len(), 5);
+    assert_eq!(first.artist().images()[4].size(), Some("mega"));
 }
 
 #[test]

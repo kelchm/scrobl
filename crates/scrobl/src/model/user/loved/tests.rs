@@ -148,6 +148,8 @@ fn the_recorded_page_decodes() {
         first.track().url(),
         Some("https://www.last.fm/music/Nolan+Taylor/_/68")
     );
+    assert_eq!(first.track().images().len(), 4);
+    assert!(first.artist().images().is_empty());
 }
 
 #[test]

@@ -1,5 +1,6 @@
 //! What the packages share: the paging attributes, a track, an artist and an
-//! album as a list names them, and the decoding every list goes through.
+//! album as a list names them, their images, and the decoding every list
+//! goes through.
 
 use std::fmt;
 
@@ -61,6 +62,61 @@ impl fmt::Debug for PageAttr {
     }
 }
 
+/// One address of an image, in one of the sizes the service offers.
+///
+/// The service sends an image as a list of these, one for each size. In
+/// every response recorded the list runs from the smallest to the largest:
+/// `small`, `medium` and `large`, then `extralarge` in most lists, then
+/// `mega` where the row is itself an artist.
+///
+/// What an image shows is the service's choice. Every artist recorded on
+/// 2026-11-10 had the same one, a placeholder; albums had their covers.
+///
+/// ```
+/// use scrobl::model::TopArtistsPage;
+/// use scrobl::protocol::{self, HttpResponse, Request, methods};
+///
+/// let body = r##"{"topartists": {
+///     "artist": [{"name": "Cher", "playcount": "9", "@attr": {"rank": "1"}, "image": [
+///         {"size": "small", "#text": "https://example.org/34.png"},
+///         {"size": "large", "#text": "https://example.org/174.png"}
+///     ]}],
+///     "@attr": {"user": "rj", "page": "1", "perPage": "1", "totalPages": "1", "total": "1"}
+/// }}"##;
+/// let request = Request::new(&methods::USER_GET_TOP_ARTISTS).param("user", "rj");
+/// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
+///
+/// let page = TopArtistsPage::decode(&raw)?;
+/// let largest = page.artists()[0].artist().images().last().unwrap();
+/// assert_eq!(largest.size(), Some("large"));
+/// assert_eq!(largest.url(), "https://example.org/174.png");
+/// # Ok::<(), scrobl::Error>(())
+/// ```
+#[derive(Clone)]
+pub struct Image {
+    size: Option<String>,
+    url: String,
+}
+
+impl Image {
+    /// The size as the service names it, such as `large`, if it sent a
+    /// non-empty one.
+    pub fn size(&self) -> Option<&str> {
+        self.size.as_deref()
+    }
+
+    /// The address of the image. Never empty.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl fmt::Debug for Image {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Image").finish_non_exhaustive()
+    }
+}
+
 /// A track, as named in a row.
 ///
 /// `mbid` and `url` are `None` when the field is missing or an empty string;
@@ -70,6 +126,7 @@ pub struct Track {
     name: String,
     mbid: Option<String>,
     url: Option<String>,
+    images: Vec<Image>,
 }
 
 impl Track {
@@ -86,6 +143,13 @@ impl Track {
     /// The Last.fm page of the track, if the service sent a non-empty one.
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
+    }
+
+    /// The track's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
+    pub fn images(&self) -> &[Image] {
+        &self.images
     }
 }
 
@@ -106,6 +170,7 @@ pub struct Artist {
     name: String,
     mbid: Option<String>,
     url: Option<String>,
+    images: Vec<Image>,
 }
 
 impl Artist {
@@ -123,6 +188,13 @@ impl Artist {
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
     }
+
+    /// The artist's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
+    pub fn images(&self) -> &[Image] {
+        &self.images
+    }
 }
 
 impl fmt::Debug for Artist {
@@ -132,7 +204,7 @@ impl fmt::Debug for Artist {
 }
 
 /// An album, as named in a row. A row without an album decodes to an album
-/// with no title, no mbid and no url.
+/// with no title, no mbid, no url and no images.
 ///
 /// Every field is `None` when missing or an empty string, but where the
 /// row is itself an album, as in a list of top albums, a missing name is an
@@ -142,6 +214,7 @@ pub struct Album {
     title: Option<String>,
     mbid: Option<String>,
     url: Option<String>,
+    images: Vec<Image>,
 }
 
 impl Album {
@@ -158,6 +231,13 @@ impl Album {
     /// The Last.fm page of the album, if the service sent a non-empty one.
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
+    }
+
+    /// The album's image in the sizes the service sent, in its order.
+    /// Empty when it sent none. An entry whose address is missing or empty
+    /// is left out; the row's own `json` still holds it.
+    pub fn images(&self) -> &[Image] {
+        &self.images
     }
 }
 
@@ -294,6 +374,7 @@ pub(super) fn parse_track(row: &Map<String, Value>, at: &str) -> Result<Track, E
         name: required_str(row, at, "name")?.to_owned(),
         mbid: optional_str(row, at, "mbid")?,
         url: optional_str(row, at, "url")?,
+        images: parse_images(row, at)?,
     })
 }
 
@@ -303,6 +384,7 @@ pub(super) fn parse_artist_row(row: &Map<String, Value>, at: &str) -> Result<Art
         name: required_str(row, at, "name")?.to_owned(),
         mbid: optional_str(row, at, "mbid")?,
         url: optional_str(row, at, "url")?,
+        images: parse_images(row, at)?,
     })
 }
 
@@ -313,6 +395,7 @@ pub(super) fn parse_album_row(row: &Map<String, Value>, at: &str) -> Result<Albu
         title: (!name.is_empty()).then(|| name.to_owned()),
         mbid: optional_str(row, at, "mbid")?,
         url: optional_str(row, at, "url")?,
+        images: parse_images(row, at)?,
     })
 }
 
@@ -352,6 +435,7 @@ pub(super) fn parse_artist(row: &Map<String, Value>, at: &str) -> Result<Artist,
         name,
         mbid: optional_str(artist, &path, "mbid")?,
         url: optional_str(artist, &path, "url")?,
+        images: parse_images(artist, &path)?,
     })
 }
 
@@ -364,14 +448,51 @@ pub(super) fn parse_album(row: &Map<String, Value>, at: &str) -> Result<Album, E
             title: None,
             mbid: None,
             url: None,
+            images: Vec::new(),
         }),
         Some(Value::Object(album)) => Ok(Album {
             title: optional_str(album, &path, "#text")?,
             mbid: optional_str(album, &path, "mbid")?,
             url: None,
+            images: parse_images(album, &path)?,
         }),
         Some(_) => Err(Error::decode_field(&path, "not an object")),
     }
+}
+
+/// The image of whatever `map` is, under `image`: an array of sizes, a
+/// single one, or none when the member is absent or `""`, as the rows of a
+/// page are read.
+///
+/// An entry whose address is missing or empty is left out, as a missing or
+/// empty `mbid` reads as none: the service sends an empty address where it
+/// has no image. An address or a size of another type is an error.
+pub(super) fn parse_images(map: &Map<String, Value>, at: &str) -> Result<Vec<Image>, Error> {
+    let path = format!("{at}.image");
+    let entries = match map.get("image") {
+        None => return Ok(Vec::new()),
+        Some(Value::String(s)) if s.is_empty() => return Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries.as_slice(),
+        Some(entry @ Value::Object(_)) => std::slice::from_ref(entry),
+        Some(_) => {
+            return Err(Error::decode_field(
+                &path,
+                "expected an array, an object or an empty string",
+            ));
+        }
+    };
+    let mut images = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let at = format!("{path}[{index}]");
+        let Value::Object(entry) = entry else {
+            return Err(Error::decode_field(&at, "not an object"));
+        };
+        let size = optional_str(entry, &at, "size")?;
+        if let Some(url) = optional_str(entry, &at, "#text")? {
+            images.push(Image { size, url });
+        }
+    }
+    Ok(images)
 }
 
 pub(super) fn required_str<'a>(

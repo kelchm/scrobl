@@ -85,6 +85,25 @@ fn the_recorded_profile_decodes() {
     assert_eq!(user.json()["type"], "subscriber");
     assert_eq!(user.json()["registered"]["#text"], 1_179_864_814_u64);
     assert_eq!(user.json()["image"][3]["size"], "extralarge");
+
+    let sizes: Vec<_> = user.images().iter().map(|image| image.size()).collect();
+    assert_eq!(sizes, ["small", "medium", "large", "extralarge"].map(Some));
+    assert_eq!(
+        user.images()[3].url(),
+        "https://lastfm-img.freetls.fastly.net/i/u/300x300/b1216fe4b5dfaec4f86ecf2075f54df4.png"
+    );
+}
+
+#[test]
+fn a_profile_without_an_image_has_none_and_a_malformed_one_names_the_field() {
+    // Every address in the derived page is empty.
+    let page = FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
+    assert!(page.users().iter().all(|user| user.images().is_empty()));
+    assert_eq!(page.users()[0].json()["image"][0]["size"], "small");
+
+    let mut user = profile("rj");
+    user["image"] = json!([{"size": "small", "#text": 5}]);
+    names(info(&user), "user.image[0].#text");
 }
 
 #[test]

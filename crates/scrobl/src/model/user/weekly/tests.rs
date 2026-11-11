@@ -192,6 +192,14 @@ fn the_recorded_track_chart_decodes() {
         Some("785e81ce-d95a-3499-979a-67272042e89b")
     );
     assert_eq!(chart.tracks()[2].artist().mbid(), None);
+    // A chart's track has three sizes of image, where a list's has four.
+    let sizes: Vec<_> = chart.tracks()[0]
+        .track()
+        .images()
+        .iter()
+        .map(|image| image.size())
+        .collect();
+    assert_eq!(sizes, ["small", "medium", "large"].map(Some));
 }
 
 #[test]

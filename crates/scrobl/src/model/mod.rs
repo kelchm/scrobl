@@ -13,7 +13,7 @@ mod shared;
 mod user;
 
 pub use library::{LibraryArtist, LibraryArtistsPage};
-pub use shared::{Album, Artist, PageAttr, Track};
+pub use shared::{Album, Artist, Image, PageAttr, Track};
 pub use user::{
     FriendsPage, LovedTrack, LovedTracksPage, NowPlaying, RecentTracksPage, Scrobble, TaggedAlbum,
     TaggedAlbumsPage, TaggedArtist, TaggedArtistsPage, TaggedTrack, TaggedTracksPage, TopAlbum,

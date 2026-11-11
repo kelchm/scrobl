@@ -101,6 +101,11 @@ fn the_recorded_tagged_artists_decode() {
         Some("https://www.last.fm/music/Panic+at+the+Disco")
     );
     assert_eq!(only.json()["streamable"], "0");
+    let sizes: Vec<_> = only.artist().images().iter().map(|i| i.size()).collect();
+    assert_eq!(
+        sizes,
+        ["small", "medium", "large", "extralarge", "mega"].map(Some)
+    );
 }
 
 #[test]
@@ -115,6 +120,7 @@ fn the_recorded_tagged_tracks_decode_whatever_their_duration_says() {
     assert_eq!(only.artist().url(), Some("https://www.last.fm/music/3"));
     // The service sent this word where a number of seconds belongs.
     assert_eq!(only.json()["duration"], "FIXME");
+    assert_eq!(only.track().images().len(), 4);
 }
 
 #[test]

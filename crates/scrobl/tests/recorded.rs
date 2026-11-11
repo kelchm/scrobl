@@ -107,6 +107,18 @@ fn the_first_extended_page_decodes() {
     assert_eq!(first.album().mbid(), None);
     assert_eq!(scrobbles[1].artist().name(), "Dave Matthews Band");
     assert!(scrobbles.iter().all(|s| s.loved() == Some(false)));
+
+    // The row's images are the track's. With `extended` the artist has
+    // its own, and an album never does.
+    let images = first.track().images();
+    assert_eq!(images.len(), 4);
+    assert_eq!(images[0].size(), Some("small"));
+    assert_eq!(
+        images[0].url(),
+        "https://lastfm-img.freetls.fastly.net/i/u/34s/5ebe3f82ffcb4644918fede92ab7e35f.png"
+    );
+    assert_eq!(first.artist().images().len(), 4);
+    assert!(first.album().images().is_empty());
 }
 
 #[test]
@@ -158,6 +170,8 @@ fn the_plain_page_decodes() {
         Some("e105c272-b5d7-4135-82ef-d60bded54345")
     );
     assert_eq!(scrobbles[0].artist().url(), None);
+    assert_eq!(scrobbles[0].track().images().len(), 4);
+    assert!(scrobbles[0].artist().images().is_empty());
     assert_eq!(scrobbles[3].artist().name(), "Two Door Cinema Club");
     assert!(scrobbles.iter().all(|s| s.loved().is_none()));
     assert!(scrobbles.iter().all(|s| s.json().get("loved").is_none()));
