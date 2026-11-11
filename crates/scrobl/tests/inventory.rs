@@ -26,6 +26,11 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
 const LEVELS: &[(&str, &str, &str)] = &[
     (
+        "library.getArtists",
+        "`model::LibraryArtistsPage`",
+        "fixture-verified",
+    ),
+    (
         "user.getLovedTracks",
         "`model::LovedTracksPage`",
         "typed-derived",
@@ -34,6 +39,22 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "user.getRecentTracks",
         "`model::RecentTracksPage`",
         "live-verified",
+    ),
+    (
+        "user.getTopAlbums",
+        "`model::TopAlbumsPage`",
+        "fixture-verified",
+    ),
+    (
+        "user.getTopArtists",
+        "`model::TopArtistsPage`",
+        "fixture-verified",
+    ),
+    ("user.getTopTags", "`model::TopTags`", "fixture-verified"),
+    (
+        "user.getTopTracks",
+        "`model::TopTracksPage`",
+        "fixture-verified",
     ),
 ];
 

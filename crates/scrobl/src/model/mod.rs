@@ -8,9 +8,13 @@
 //!
 //! The `Debug` output of a model leaves out the text of the response.
 
+mod library;
+mod shared;
 mod user;
 
+pub use library::{LibraryArtist, LibraryArtistsPage};
+pub use shared::{Album, Artist, PageAttr, Track};
 pub use user::{
-    Album, Artist, LovedTrack, LovedTracksPage, NowPlaying, PageAttr, RecentTracksPage, Scrobble,
-    Track,
+    LovedTrack, LovedTracksPage, NowPlaying, RecentTracksPage, Scrobble, TopAlbum, TopAlbumsPage,
+    TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
 };

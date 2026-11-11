@@ -3,13 +3,18 @@
 //! `user.getLovedTracks`.
 
 mod loved;
+mod top;
 
 pub use loved::{LovedTrack, LovedTracksPage};
+pub use top::{
+    TopAlbum, TopAlbumsPage, TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
+};
 
 use std::fmt;
 
 use serde_json::{Map, Value};
 
+use super::shared::{self, Album, Artist, PageAttr, Track, missing_or};
 use crate::de;
 use crate::error::Error;
 use crate::protocol::{Raw, methods};
@@ -92,16 +97,7 @@ impl RecentTracksPage {
     /// `recenttracks.@attr.total` or `recenttracks.track[3].date.uts`, and
     /// never repeats response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        if raw.method() != methods::USER_GET_RECENT_TRACKS.name() {
-            return Err(Error::decode("the response is for a different method")
-                .with_method(raw.spec())
-                .with_response(raw.status(), raw.body()));
-        }
-        let root = raw.json_strict()?;
-        parse(root).map_err(|e| {
-            e.with_method(raw.spec())
-                .with_response(raw.status(), raw.body())
-        })
+        shared::decode(raw, &methods::USER_GET_RECENT_TRACKS, ROOT, parse)
     }
 
     /// The paging attributes.
@@ -128,156 +124,6 @@ impl fmt::Debug for RecentTracksPage {
             .field("scrobbles", &self.scrobbles.len())
             .field("now_playing", &self.now_playing.is_some())
             .finish()
-    }
-}
-
-/// The `@attr` of a page: whose list, which page of how many.
-///
-/// The service sends these as strings. All five are required.
-#[derive(Clone)]
-pub struct PageAttr {
-    user: String,
-    page: u64,
-    per_page: u64,
-    total_pages: u64,
-    total: u64,
-}
-
-impl PageAttr {
-    /// The user the service says the page is for, in its own spelling.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
-    /// The page number, from 1.
-    pub fn page(&self) -> u64 {
-        self.page
-    }
-
-    /// The page size the service applied.
-    pub fn per_page(&self) -> u64 {
-        self.per_page
-    }
-
-    /// The number of pages the service says there are.
-    pub fn total_pages(&self) -> u64 {
-        self.total_pages
-    }
-
-    /// The number of items the service says match the request: for a
-    /// history, the scrobbles within the `from` and `to` bounds if any were
-    /// sent.
-    pub fn total(&self) -> u64 {
-        self.total
-    }
-}
-
-impl fmt::Debug for PageAttr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PageAttr")
-            .field("page", &self.page)
-            .field("per_page", &self.per_page)
-            .field("total_pages", &self.total_pages)
-            .field("total", &self.total)
-            .finish_non_exhaustive()
-    }
-}
-
-/// A track, as named in a row.
-///
-/// `mbid` and `url` are `None` when the field is missing or an empty string;
-/// [`Scrobble::json`] tells the two apart.
-#[derive(Clone)]
-pub struct Track {
-    name: String,
-    mbid: Option<String>,
-    url: Option<String>,
-}
-
-impl Track {
-    /// The track name. May be empty.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-
-    /// The Last.fm page of the track, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-}
-
-impl fmt::Debug for Track {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Track").finish_non_exhaustive()
-    }
-}
-
-/// An artist, as named in a row.
-///
-/// Both shapes decode: the name is `#text` normally and `name` with
-/// `extended=1`. A row that carries both must carry the same string twice.
-/// `url` is only sent with `extended=1`. `mbid` and `url` are
-/// `None` when the field is missing or an empty string.
-#[derive(Clone)]
-pub struct Artist {
-    name: String,
-    mbid: Option<String>,
-    url: Option<String>,
-}
-
-impl Artist {
-    /// The artist name. May be empty.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-
-    /// The Last.fm page of the artist, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-}
-
-impl fmt::Debug for Artist {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Artist").finish_non_exhaustive()
-    }
-}
-
-/// An album, as named in a row. A row without an album decodes to an album
-/// with no title and no mbid.
-///
-/// Both fields are `None` when missing or an empty string.
-#[derive(Clone)]
-pub struct Album {
-    title: Option<String>,
-    mbid: Option<String>,
-}
-
-impl Album {
-    /// The album title, if the service sent a non-empty one.
-    pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-}
-
-impl fmt::Debug for Album {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Album").finish_non_exhaustive()
     }
 }
 
@@ -393,37 +239,8 @@ impl fmt::Debug for NowPlaying {
     }
 }
 
-// Decoding. Every error names a field path; none repeats response text.
-
-fn missing_or(path: &str, expected: &str) -> Error {
-    Error::decode_field(path, &format!("missing or not {expected}"))
-}
-
-fn parse(root: Value) -> Result<RecentTracksPage, Error> {
-    let Value::Object(mut root) = root else {
-        return Err(Error::decode("the body is not a JSON object"));
-    };
-    let Some(Value::Object(mut recent)) = root.remove(ROOT) else {
-        return Err(missing_or(ROOT, "an object"));
-    };
-    let attr = match recent.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(ROOT, &attr)?,
-        _ => return Err(missing_or("recenttracks.@attr", "an object")),
-    };
-
-    let rows = match recent.remove("track") {
-        None => Vec::new(),
-        Some(Value::String(s)) if s.is_empty() => Vec::new(),
-        Some(value) => de::one_or_many(value).ok_or_else(|| {
-            Error::decode_field(
-                "recenttracks.track",
-                "expected an array, an object or an empty string",
-            )
-        })?,
-    };
-    if rows.is_empty() {
-        check_rows_may_be_absent(ROOT, &attr)?;
-    }
+fn parse(mut recent: Map<String, Value>) -> Result<RecentTracksPage, Error> {
+    let (attr, rows) = shared::page(&mut recent, ROOT, "track")?;
 
     let mut scrobbles = Vec::with_capacity(rows.len());
     let mut now_playing = None;
@@ -444,39 +261,6 @@ fn parse(root: Value) -> Result<RecentTracksPage, Error> {
         attr,
         scrobbles,
         now_playing,
-    })
-}
-
-/// An absent or empty `track` is an empty page only if the page's own `@attr`
-/// allows it: nothing matches (`total` is 0) or the page lies beyond the
-/// last one. Otherwise the rows are missing, not absent.
-fn check_rows_may_be_absent(root: &str, attr: &PageAttr) -> Result<(), Error> {
-    if attr.total == 0 || attr.page > attr.total_pages {
-        return Ok(());
-    }
-    Err(Error::decode_field(
-        &format!("{root}.track"),
-        "absent or empty, but `@attr` says the page holds rows",
-    ))
-}
-
-fn parse_attr(root: &str, attr: &Map<String, Value>) -> Result<PageAttr, Error> {
-    let uint = |key: &str| {
-        let path = format!("{root}.@attr.{key}");
-        attr.get(key)
-            .and_then(de::uint)
-            .ok_or_else(|| missing_or(&path, "an unsigned integer"))
-    };
-    let user = attr
-        .get("user")
-        .and_then(Value::as_str)
-        .ok_or_else(|| missing_or(&format!("{root}.@attr.user"), "a string"))?;
-    Ok(PageAttr {
-        user: user.to_owned(),
-        page: uint("page")?,
-        per_page: uint("perPage")?,
-        total_pages: uint("totalPages")?,
-        total: uint("total")?,
     })
 }
 
@@ -502,13 +286,9 @@ fn parse_row(index: usize, json: Value) -> Result<Row, Error> {
         Some(_) => return Err(Error::decode_field(&format!("{at}.@attr"), "not an object")),
     };
 
-    let track = Track {
-        name: required_str(map, &at, "name")?.to_owned(),
-        mbid: optional_str(map, &at, "mbid")?,
-        url: optional_str(map, &at, "url")?,
-    };
-    let artist = parse_artist(map, &at)?;
-    let album = parse_album(map, &at)?;
+    let track = shared::parse_track(map, &at)?;
+    let artist = shared::parse_artist(map, &at)?;
+    let album = shared::parse_album(map, &at)?;
     let loved = match map.get("loved") {
         None => None,
         Some(value) => Some(
@@ -541,75 +321,6 @@ fn parse_row(index: usize, json: Value) -> Result<Row, Error> {
         loved,
         json,
     }))
-}
-
-fn parse_artist(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
-    let path = format!("{at}.artist");
-    let Some(Value::Object(artist)) = row.get("artist") else {
-        return Err(missing_or(&path, "an object"));
-    };
-    // `name` with extended=1, `#text` without. Each one present must be a
-    // string, and two that are present must agree.
-    let name_in = |key: &str| match artist.get(key) {
-        None => Ok(None),
-        Some(Value::String(name)) => Ok(Some(name)),
-        Some(_) => Err(Error::decode_field(
-            &format!("{path}.{key}"),
-            "not a string",
-        )),
-    };
-    let name = match (name_in("name")?, name_in("#text")?) {
-        (Some(name), Some(text)) if name != text => {
-            return Err(Error::decode_field(
-                &path,
-                "`name` and `#text` are both present and disagree",
-            ));
-        }
-        (Some(name), _) | (None, Some(name)) => name.clone(),
-        (None, None) => {
-            return Err(Error::decode_field(
-                &format!("{path}.name"),
-                "neither `name` nor `#text` is present",
-            ));
-        }
-    };
-    Ok(Artist {
-        name,
-        mbid: optional_str(artist, &path, "mbid")?,
-        url: optional_str(artist, &path, "url")?,
-    })
-}
-
-fn parse_album(row: &Map<String, Value>, at: &str) -> Result<Album, Error> {
-    let path = format!("{at}.album");
-    match row.get("album") {
-        None => Ok(Album {
-            title: None,
-            mbid: None,
-        }),
-        Some(Value::Object(album)) => Ok(Album {
-            title: optional_str(album, &path, "#text")?,
-            mbid: optional_str(album, &path, "mbid")?,
-        }),
-        Some(_) => Err(Error::decode_field(&path, "not an object")),
-    }
-}
-
-fn required_str<'a>(map: &'a Map<String, Value>, at: &str, key: &str) -> Result<&'a str, Error> {
-    map.get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| missing_or(&format!("{at}.{key}"), "a string"))
-}
-
-/// A string field that may be missing or empty, both reading as `None`. A
-/// value of any other type is an error.
-fn optional_str(map: &Map<String, Value>, at: &str, key: &str) -> Result<Option<String>, Error> {
-    match map.get(key) {
-        None => Ok(None),
-        Some(Value::String(s)) if s.is_empty() => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(Error::decode_field(&format!("{at}.{key}"), "not a string")),
-    }
 }
 
 #[cfg(test)]

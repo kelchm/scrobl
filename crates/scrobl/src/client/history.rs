@@ -7,13 +7,14 @@ use crate::model::{LovedTracksPage, RecentTracksPage};
 use crate::protocol::{Request, methods};
 use crate::response::Response;
 
-/// One user's history, to read with typed methods. Made by [`Client::user`].
+/// One user, to read with typed methods: their history here, and what they
+/// play and tag most. Made by [`Client::user`].
 ///
 /// The handle owns a clone of the client, so it can be moved into a task.
 #[derive(Debug, Clone)]
 pub struct User {
-    client: Client,
-    name: String,
+    pub(super) client: Client,
+    pub(super) name: String,
 }
 
 impl User {

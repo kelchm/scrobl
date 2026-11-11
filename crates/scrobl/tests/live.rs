@@ -9,11 +9,11 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! It sends about a dozen key-only `user.getRecentTracks` requests, a
+//! The two tests send about thirty key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
-//! are that user's listening history; the test commits nothing.
+//! are that user's listening history; the tests commit nothing.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use scrobl::client::Period;
 use scrobl::history::Window;
 use scrobl::protocol::Raw;
 use scrobl::{ApiErrorCode, ApiKey, Client, ErrorKind};
@@ -208,4 +209,158 @@ async fn recent_tracks_against_the_live_service() {
     println!("bad key: {error} (http {:?})", error.http_status());
     assert_eq!(error.kind(), ErrorKind::Api);
     assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_API_KEY));
+}
+
+/// Ranks count up by one from `first`, and no row was played more than the
+/// row before it.
+fn assert_ranked(name: &str, first: u64, rows: &[(u64, u64)]) {
+    for (index, (rank, _)) in rows.iter().enumerate() {
+        assert_eq!(*rank, first + index as u64, "{name}: rank of row {index}");
+    }
+    assert!(
+        rows.windows(2).all(|pair| pair[0].1 >= pair[1].1),
+        "{name}: most played first"
+    );
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
+async fn the_lists_of_a_user_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let name = env("SCROBL_LIVE_USER");
+    let user = client(&key).user(&name);
+
+    // Top artists: the service echoes what was asked, ranks run on from one
+    // page to the next, and a shorter period holds no more than the whole.
+    let artists = user.top_artists().limit(5).send().await.unwrap();
+    capture("top-artists", artists.raw());
+    assert!(artists.attr().user().eq_ignore_ascii_case(&name));
+    assert_eq!((artists.attr().page(), artists.attr().per_page()), (1, 5));
+    let ranked = |page: &scrobl::model::TopArtistsPage| -> Vec<(u64, u64)> {
+        page.artists()
+            .iter()
+            .map(|a| (a.rank(), a.playcount()))
+            .collect()
+    };
+    assert_ranked("top artists", 1, &ranked(&artists));
+    let second = user.top_artists().limit(5).page(2).send().await.unwrap();
+    capture("top-artists-page-2", second.raw());
+    assert_ranked("top artists, page 2", 6, &ranked(&second));
+    let week = user
+        .top_artists()
+        .period(Period::SevenDays)
+        .limit(5)
+        .send()
+        .await
+        .unwrap();
+    capture("top-artists-7day", week.raw());
+    assert!(week.attr().total() <= artists.attr().total());
+    println!(
+        "top artists: {} overall, {} in seven days",
+        artists.attr().total(),
+        week.attr().total()
+    );
+
+    // A page far past the last one is empty, not an error.
+    let beyond = user
+        .top_artists()
+        .limit(1000)
+        .page(9999)
+        .send()
+        .await
+        .unwrap();
+    capture("top-artists-beyond", beyond.raw());
+    assert!(beyond.artists().is_empty());
+
+    // A page of a thousand of each list decodes: every row has what the
+    // model requires.
+    let artists = user.top_artists().limit(1000).send().await.unwrap();
+    capture("top-artists-1000", artists.raw());
+    assert_ranked("a thousand artists", 1, &ranked(&artists));
+    println!(
+        "top artists: a page of {} at `limit=1000`, `perPage` {}",
+        artists.artists().len(),
+        artists.attr().per_page()
+    );
+
+    let albums = user.top_albums().limit(1000).send().await.unwrap();
+    capture("top-albums-1000", albums.raw());
+    let rows: Vec<_> = albums
+        .albums()
+        .iter()
+        .map(|a| (a.rank(), a.playcount()))
+        .collect();
+    assert_ranked("top albums", 1, &rows);
+    println!(
+        "top albums: {} in all, {} on the page, {} untitled, {} without an mbid",
+        albums.attr().total(),
+        rows.len(),
+        albums
+            .albums()
+            .iter()
+            .filter(|a| a.album().title().is_none())
+            .count(),
+        albums
+            .albums()
+            .iter()
+            .filter(|a| a.album().mbid().is_none())
+            .count()
+    );
+
+    let tracks = user.top_tracks().limit(1000).send().await.unwrap();
+    capture("top-tracks-1000", tracks.raw());
+    let rows: Vec<_> = tracks
+        .tracks()
+        .iter()
+        .map(|t| (t.rank(), t.playcount()))
+        .collect();
+    assert_ranked("top tracks", 1, &rows);
+    println!(
+        "top tracks: {} in all, {} on the page, duration absent in {}, zero in {}",
+        tracks.attr().total(),
+        rows.len(),
+        tracks
+            .tracks()
+            .iter()
+            .filter(|t| t.duration().is_none())
+            .count(),
+        tracks
+            .tracks()
+            .iter()
+            .filter(|t| t.duration() == Some(0))
+            .count()
+    );
+
+    let tags = user.top_tags().send().await.unwrap();
+    capture("top-tags", tags.raw());
+    assert!(tags.user().eq_ignore_ascii_case(&name));
+    let limited = user.top_tags().limit(1).send().await.unwrap();
+    capture("top-tags-1", limited.raw());
+    assert!(limited.tags().len() <= 1);
+    println!("top tags: {}", tags.tags().len());
+
+    // The library is the same artists as the top list of all time, and one
+    // row to a page comes as a single object.
+    let library = user.library_artists().limit(1000).send().await.unwrap();
+    capture("library-artists-1000", library.raw());
+    assert_eq!(library.attr().total(), artists.attr().total());
+    assert!(
+        library
+            .artists()
+            .windows(2)
+            .all(|pair| pair[0].playcount() >= pair[1].playcount()),
+        "library: most played first"
+    );
+    let one = user.library_artists().limit(1).send().await.unwrap();
+    capture("library-artists-1", one.raw());
+    assert_eq!(one.artists().len(), 1);
+    assert_eq!(
+        one.artists()[0].artist().name(),
+        library.artists()[0].artist().name()
+    );
+    println!(
+        "library: {} artists, {} on the page",
+        library.attr().total(),
+        library.artists().len()
+    );
 }

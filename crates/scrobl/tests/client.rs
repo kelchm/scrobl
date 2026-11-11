@@ -12,8 +12,10 @@
 //! asserted as lower bounds only; the one upper bound is a generous hang
 //! guard around each test.
 //!
-//! provenance: synthetic. The fake service generates every response; the
-//! credentials are obvious sentinels.
+//! provenance: synthetic, and recorded for the lists of a user. The fake
+//! service generates every response but those, which are bodies the
+//! repository owner recorded from their own account; the credentials are
+//! obvious sentinels.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -30,7 +32,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use scrobl::client::{RecentTracksQuery, Scan, User};
+use scrobl::client::{Period, RecentTracksQuery, Scan, TopArtistsQuery, User};
 use scrobl::history::{ScanPage, ScanSummary, Window};
 use scrobl::model::RecentTracksPage;
 use scrobl::protocol::{Request, Requirement, methods};
@@ -2044,6 +2046,7 @@ fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<Writer>();
     assert_shareable::<User>();
     assert_shareable::<RecentTracksQuery>();
+    assert_shareable::<TopArtistsQuery>();
     assert_shareable::<ClientBuilder>();
     assert_owned::<Scan>();
     assert_shareable::<Response<RecentTracksPage>>();
@@ -2054,6 +2057,7 @@ fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     fn futures(client: &Client, request: &Request, scan: &mut Scan) {
         assert_send(&client.call(request));
         assert_send(&client.user("u").recent_tracks().send());
+        assert_send(&client.user("u").top_artists().send());
         assert_send(&scan.next_page());
         #[allow(dead_code)]
         fn writes(writer: &Writer, request: &Request) {
@@ -2583,6 +2587,247 @@ async fn a_loved_tracks_failure_is_an_error_of_that_method() {
         assert_eq!(error.kind(), ErrorKind::Api);
         assert_eq!(error.method(), Some("user.getLovedTracks"));
         assert_clean("loved tracks", &error);
+    })
+    .await;
+}
+
+// The lists of a user. The fake has no dataset for them, so each test
+// scripts the answer: a body the repository owner recorded from their own
+// account, listed in `fixtures/README.md`.
+
+const TOP_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-top-artists.json");
+const TOP_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-top-albums.json");
+const TOP_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-top-tracks.json");
+const TOP_TAGS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-top-tags.json");
+const LIBRARY_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-library-artists.json");
+
+/// The parameters of a recorded request that the caller chose.
+fn chosen(request: &Recorded) -> Vec<(String, String)> {
+    request
+        .params()
+        .into_iter()
+        .filter(|(name, _)| !["api_key", "format"].contains(&name.as_str()))
+        .collect()
+}
+
+fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
+    bounded(async {
+        let bodies = [
+            TOP_ARTISTS,
+            TOP_ALBUMS,
+            TOP_TRACKS,
+            TOP_TAGS,
+            LIBRARY_ARTISTS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let artists = user
+            .top_artists()
+            .period(Period::SevenDays)
+            .limit(3)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(artists.raw().body(), TOP_ARTISTS);
+        assert_eq!(artists.artists()[0].artist().name(), "Portugal. The Man");
+        assert_eq!(artists.attr().total(), 10_105);
+
+        let albums = user
+            .top_albums()
+            .period(Period::TwelveMonths)
+            .limit(3)
+            .page(1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(albums.raw().body(), TOP_ALBUMS);
+        assert_eq!(
+            albums.albums()[0].album().title(),
+            Some("The Social Network")
+        );
+
+        let tracks = user
+            .top_tracks()
+            .period(Period::OneMonth)
+            .limit(2)
+            .page(4)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(tracks.raw().body(), TOP_TRACKS);
+        assert_eq!(tracks.tracks()[0].track().name(), "Swim");
+
+        let tags = user.top_tags().limit(5).send().await.unwrap();
+        assert_eq!(tags.raw().body(), TOP_TAGS);
+        assert_eq!(tags.tags()[0].name(), "indie");
+
+        let library = user
+            .library_artists()
+            .limit(3)
+            .page(1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(library.raw().body(), LIBRARY_ARTISTS);
+        assert_eq!(library.artists()[0].playcount(), 5584);
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "user.getTopArtists"),
+                    ("user", USER),
+                    ("period", "7day"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+                pairs(&[
+                    ("method", "user.getTopAlbums"),
+                    ("user", USER),
+                    ("period", "12month"),
+                    ("limit", "3"),
+                    ("page", "1")
+                ]),
+                pairs(&[
+                    ("method", "user.getTopTracks"),
+                    ("user", USER),
+                    ("period", "1month"),
+                    ("limit", "2"),
+                    ("page", "4")
+                ]),
+                pairs(&[
+                    ("method", "user.getTopTags"),
+                    ("user", USER),
+                    ("limit", "5")
+                ]),
+                pairs(&[
+                    ("method", "library.getArtists"),
+                    ("user", USER),
+                    ("limit", "3"),
+                    ("page", "1")
+                ]),
+            ]
+        );
+    })
+    .await;
+}
+
+#[test]
+fn every_period_has_the_value_the_service_documents() {
+    let values = [
+        Period::Overall,
+        Period::SevenDays,
+        Period::OneMonth,
+        Period::ThreeMonths,
+        Period::SixMonths,
+        Period::TwelveMonths,
+    ]
+    .map(Period::as_str);
+    assert_eq!(
+        values,
+        ["overall", "7day", "1month", "3month", "6month", "12month"]
+    );
+    assert_eq!(Period::default(), Period::Overall);
+}
+
+#[tokio::test]
+async fn a_list_query_that_cannot_be_built_sends_nothing() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let user = client(&server).user(USER);
+
+        let errors = [
+            user.top_artists().limit(0).send().await.map(drop),
+            user.top_artists().page(0).send().await.map(drop),
+            user.top_albums().limit(0).send().await.map(drop),
+            user.top_tracks().page(0).send().await.map(drop),
+            user.top_tags().limit(0).send().await.map(drop),
+            user.library_artists().page(0).send().await.map(drop),
+        ];
+        let methods = errors.map(|result| {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            error.method()
+        });
+        assert_eq!(
+            methods,
+            [
+                Some("user.getTopArtists"),
+                Some("user.getTopArtists"),
+                Some("user.getTopAlbums"),
+                Some("user.getTopTracks"),
+                Some("user.getTopTags"),
+                Some("library.getArtists"),
+            ]
+        );
+        assert_eq!(server.request_count(), 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_list_that_fails_is_an_error_of_its_method() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::api_error(6),
+                // The answer to another method: the body does not decode.
+                Behaviour::status(200, TOP_ARTISTS),
+            ],
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let error = user.top_tags().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Api);
+        assert_eq!(error.method(), Some("user.getTopTags"));
+        assert_clean("top tags", &error);
+
+        let error = user.library_artists().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Decode);
+        assert_eq!(error.method(), Some("library.getArtists"));
+        assert_eq!(error.body(), Some(TOP_ARTISTS));
+        assert_clean("library artists", &error);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_list_query_sends_only_what_was_set() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [TOP_ARTISTS, TOP_TAGS].map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let user = client(&server).user(USER);
+        user.top_artists().send().await.unwrap();
+        user.top_tags().send().await.unwrap();
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "user.getTopArtists"), ("user", USER)]),
+                pairs(&[("method", "user.getTopTags"), ("user", USER)]),
+            ]
+        );
     })
     .await;
 }
