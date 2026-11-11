@@ -1,6 +1,6 @@
 [package]
 name = "scrobl"
-version = "0.1.0"
+version.workspace = true
 description = "The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs. Unofficial."
 # The project README, which cargo copies into the package.
 readme = "../../README.md"
@@ -10,7 +10,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

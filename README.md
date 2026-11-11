@@ -14,10 +14,10 @@ Early development. Not affiliated with or endorsed by Last.fm.
 
 The full Last.fm API in async Rust: every method callable, history read and checked page by page, credentials kept out of logs.
 
-What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and typed reads of everything else the `user` package offers (a profile, friends, loved tracks, the artists, albums, tracks and tags played and used most, the weekly charts, and what was given a tag) and of the artists in a user's library. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. All fourteen have been run against the live service; [Endpoints](docs/endpoints.md) has the level of every method.
+What works today: a raw, signed call to any of the 57 methods, the ten that change an account only through a `Writer`, a typed, checked read of a user's scrobble history, and typed reads of everything else the `user` package offers (a profile, friends, loved tracks, the artists, albums, tracks and tags played and used most, the weekly charts, and what was given a tag) and of the artists in a user's library. Not built yet: typed models for the other methods, the authentication flows and typed scrobbling. All fourteen have been run against the live service; [Endpoints](https://github.com/kelchm/scrobl/blob/main/docs/endpoints.md) has the level of every method.
 
-- [Design](docs/design.md)
-- [Endpoints](docs/endpoints.md): every method and how far it is verified
+- [Design](https://github.com/kelchm/scrobl/blob/main/docs/design.md)
+- [Endpoints](https://github.com/kelchm/scrobl/blob/main/docs/endpoints.md): every method and how far it is verified
 
 The crate is not published yet, so depend on it from Git. The client runs on Tokio:
 
@@ -153,10 +153,10 @@ cargo llvm-cov --all-features --fail-under-lines 95
 
 Tests never call Last.fm. They use fixtures and a local fake server.
 
-How changes are made, for people and for agents, is in [`AGENTS.md`](AGENTS.md).
+How changes are made, for people and for agents, is in [`AGENTS.md`](https://github.com/kelchm/scrobl/blob/main/AGENTS.md).
 
 The minimum supported Rust version is 1.88 for the library and 1.89 for the command-line tool, and CI runs the tests of each on it.
 
 ## License
 
-[MIT](LICENSE). No fixture is copied from another project. Where each fixture came from is listed in [`crates/scrobl/fixtures/README.md`](crates/scrobl/fixtures/README.md).
+[MIT](https://github.com/kelchm/scrobl/blob/main/LICENSE). No fixture is copied from another project. Where each fixture came from is listed in [`crates/scrobl/fixtures/README.md`](https://github.com/kelchm/scrobl/blob/main/crates/scrobl/fixtures/README.md).
