@@ -21,9 +21,9 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  # Both crates, the library first. crates.io trusts this workflow of this
-  # repository, so no token is stored: the action trades the run's identity
-  # for one that lasts half an hour.
+  # Both crates. crates.io trusts this workflow of this repository, so no
+  # token is stored: the action trades the run's identity for one that lasts
+  # half an hour.
   crates:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -46,7 +46,19 @@ jobs:
           | jq -r '[.packages[].version] | unique | join(" ")')"
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
-      - run: cargo publish --workspace --locked
+      # The library first, and only what is not there yet, so that a run
+      # which failed between the two can simply be run again.
+      - run: |
+          for crate in scrobl scrobl-cli; do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --user-agent "scrobl-release (+https://github.com/kelchm/scrobl)" \
+              "https://crates.io/api/v1/crates/$crate/${TAG#v}")
+            case "$status" in
+              200) echo "$crate ${TAG#v} is already on crates.io" ;;
+              404) cargo publish --locked --package "$crate" ;;
+              *) echo "crates.io answered $status for $crate"; exit 1 ;;
+            esac
+          done
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
