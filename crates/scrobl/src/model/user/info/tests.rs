@@ -144,8 +144,6 @@ fn the_derived_friends_page_decodes() {
             )
         ]
     );
-    // A friend's row has no counts but the playcount, which the service
-    // sent as 0, and `registered.#text` is a date here, not a number.
     let first = &page.items()[0];
     // The service sends zeros for a friend's counts, and they are not read.
     assert_eq!(

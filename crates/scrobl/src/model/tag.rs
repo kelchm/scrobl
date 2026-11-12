@@ -243,8 +243,9 @@ pub fn tag_get_top_tracks(raw: &Raw) -> Result<Page<Track>, Error> {
 /// first, each with its `taggings` and `reach`.
 ///
 /// The list is read from an offset, not by page. Its `@attr` holds the
-/// offset, the number of rows asked for and the number of tags there are;
-/// the list keeps none of the three.
+/// offset, the number of rows asked for and the number of tags there are.
+/// The list keeps the offset, as where [`ranked`](List::ranked) counts
+/// from, and neither of the other two.
 ///
 /// ```
 /// use scrobl::model::decode;
@@ -260,6 +261,7 @@ pub fn tag_get_top_tracks(raw: &Raw) -> Result<Page<Track>, Error> {
 /// let tags = decode::tag_get_top_tags(&raw)?;
 /// assert_eq!(tags[0].name(), "rock");
 /// assert_eq!(tags[0].taggings(), Some(4_077_917));
+/// assert_eq!(tags.ranked().next().map(|(place, _)| place), Some(1));
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 ///
@@ -295,7 +297,7 @@ pub fn tag_get_top_tags(raw: &Raw) -> Result<List<Tag>, Error> {
         let tags = shared::each(rows, "toptags.tag", |row, at| {
             entity::tag(row, at, TagCounts::Count)
         })?;
-        Ok(List::new(tags, None))
+        Ok(List::new(tags, None).after(offset))
     })
 }
 

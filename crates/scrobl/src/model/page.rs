@@ -175,11 +175,24 @@ impl<T> fmt::Debug for Page<T> {
 pub struct List<T> {
     items: Vec<T>,
     subject: Option<String>,
+    /// How many rows of the service's list come before the first here.
+    skipped: u64,
 }
 
 impl<T> List<T> {
     pub(super) fn new(items: Vec<T>, subject: Option<String>) -> Self {
-        Self { items, subject }
+        Self {
+            items,
+            subject,
+            skipped: 0,
+        }
+    }
+
+    /// The same list, as one that starts `skipped` rows into the service's
+    /// own: the one method that takes an offset says how far it went.
+    pub(super) fn after(mut self, skipped: u64) -> Self {
+        self.skipped = skipped;
+        self
     }
 
     /// The rows, in the order the service sent them.
@@ -192,9 +205,12 @@ impl<T> List<T> {
         self.items
     }
 
-    /// Each row with its place in the list, from 1.
+    /// Each row with its place in the service's list, from 1. A list read
+    /// from part of the way down, which only
+    /// [`tag.getTopTags`](super::decode::tag_get_top_tags) can be, counts
+    /// from where it starts.
     pub fn ranked(&self) -> impl Iterator<Item = (u64, &T)> {
-        (1..).zip(&self.items)
+        (self.skipped.saturating_add(1)..).zip(&self.items)
     }
 
     /// Who or what the list is about, as the service spells it back: the

@@ -411,6 +411,25 @@ fn a_list_of_every_tag_is_empty_only_where_its_attr_allows() {
         body["toptags"]["@attr"][member] = value;
         assert!(all(&body).unwrap().items().is_empty(), "{member}");
     }
+    // A list read from part of the way down counts its places from there.
+    let mut body = all_of(json!([
+        {"name": "t", "count": 7, "reach": 3},
+        {"name": "u", "count": 6, "reach": 2}
+    ]));
+    let from_the_top = all(&body).unwrap();
+    let places: Vec<_> = from_the_top
+        .ranked()
+        .map(|(place, tag)| (place, tag.name()))
+        .collect();
+    assert_eq!(places, [(1, "t"), (2, "u")]);
+    body["toptags"]["@attr"]["offset"] = json!(7);
+    let further = all(&body).unwrap();
+    let places: Vec<_> = further
+        .ranked()
+        .map(|(place, tag)| (place, tag.name()))
+        .collect();
+    assert_eq!(places, [(8, "t"), (9, "u")]);
+
     // The number asked for is not required, but a malformed one is named.
     let mut body = all_of(json!([{"name": "t", "count": 7, "reach": 3}]));
     body["toptags"]["@attr"]
