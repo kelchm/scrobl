@@ -54,7 +54,7 @@ async fn charts() -> Result<(), scrobl::Error> {
 
 - An `Artist`, `Album`, `Track`, `Tag` and `User` are the same type wherever a reply names one.
 - A number that is true only in one list, such as a user's own play count, is on a row of that list: `row.playcount()`, `row.artist()`.
-- A fact Last.fm did not send is `None`, never 0. The exact response is on every result as `raw()`.
+- A fact Last.fm did not send is `None`, never 0. The exact response is on every result of `send()`, as `raw()`.
 - Searching [the documentation](https://docs.rs/scrobl) for a Last.fm method name, such as `user.getTopArtists`, finds its call.
 
 A history is read with a scan, which checks every page against the others:

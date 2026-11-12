@@ -115,11 +115,11 @@ The promise covers requests as `prepare` built them and as the client sent them.
 
 ### Typed views
 
-Typed models are decoded from `Raw` on request, by one function for each method in `scrobl::model::decode`. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable.
+Typed models are decoded from `Raw` on request, by one function for each method in `scrobl::model::decode`. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable. The one exception is a week in a list of weeks, which is a plain `Window`; the response it came from has the rest.
 
 A list is one of two types. `Page<T>` is one page of a list the service pages: its rows, its place (`number()`, `per_page()`, `total_pages()`, `total()`, `next_page()`), who or what it is about (`subject()`), and `ranked()`, which gives each row its place in the whole list. `List<T>` is a list the service sends whole. A page of the history is a `HistoryPage`: the scrobbles, the track playing now, and the same place accessors.
 
-Five things have one type each wherever a reply names them: `Artist`, `Album`, `Track`, `Tag` and `User`. Each carries what identifies it (`name`, `mbid`, `url`, `images`), what is true of it everywhere (a track's `artist`, `album` and `duration`), and the service's counts for everyone (`listeners`, `playcount`, a tag's `taggings` and `reach`) where a reply has them. A count a reply does not send is `None`.
+Five things have one type each wherever a reply names them: `Artist`, `Album`, `Track`, `Tag` and `User`. Each carries what identifies it: a `name` always, and an `mbid`, a `url` and `images` where the service has such a thing for it (a tag has no id and no image, a user no id). An artist, an album, a track and a tag also carry what is true of them everywhere (a track's `artist`, `album` and `duration`) and the service's counts for everyone (`listeners`, `playcount`, a tag's `taggings` and `reach`) where a reply has them. A `User`'s counts are that user's own. A count a reply does not send is `None`.
 
 A number that is true only inside one list is on a row of that list, which wraps the thing: `UserArtist`, `UserAlbum`, `UserTrack` and `UserTag` hold a user's own play or use count, `CountryArtist` and `CountryTrack` the listeners in one country, `LovedTrack` when a track was loved. So the chart of the service is a `Page<Artist>`, and a user's top artists a `Page<UserArtist>`: the two play counts mean different things and cannot be mistaken for each other. A span of time is a `Window` wherever one appears: the weeks the service keeps charts for are a `List<Window>`, and what a user played in a window is a `List` of the same rows as their other top lists. The rank the service sends with a row is not read. On some methods it starts again on every page, and `ranked()` is right on all of them.
 
@@ -131,7 +131,7 @@ for scrobble in page.scrobbles() {
     scrobble.track().artist().mbid();   // None when missing or empty
     scrobble.track().album();    // None for a scrobble without an album
     scrobble.loved();            // None unless the page was requested with extended=1
-    scrobble.track().images().largest();   // one address for each size, in the service's order
+    scrobble.track().images().largest();   // the largest size the row has an address for, or None
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
@@ -279,7 +279,7 @@ let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).s
 | `.all()` | `Rows<T>`: every row, page after page | every call that gives a `Page` |
 | `.scan()?` | `Scan`: every scrobble of a window, checked | `user.recent_tracks()` only |
 
-The calls so far, which are the twenty-six typed methods:
+The calls so far. There are 28 for the twenty-six typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
 
 | Handle | Calls |
 |---|---|
@@ -480,7 +480,12 @@ Authentication and writes (not built; shape only, to be checked against the live
 let auth = client.auth();
 let token = auth.token().send().await?;
 open_browser(&token.authorization_url());
-let session = auth.session(&token).send().await?.into_value();   // None until the user approves
+let session = loop {
+    match auth.session(&token).send().await?.into_value() {
+        Some(session) => break session,      // approved
+        None => wait_a_moment().await,       // not yet: an ordinary answer, not an error
+    }
+};
 
 let writer = writer.with_session(session.key().clone());   // typed writes exist only on a Writer
 let play = Play::new("Cher", "Believe", started_at).album("Believe");
