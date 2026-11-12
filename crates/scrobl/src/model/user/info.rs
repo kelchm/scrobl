@@ -164,6 +164,7 @@ impl fmt::Debug for UserInfo {
 /// with an empty page.
 #[derive(Clone)]
 pub struct FriendsPage {
+    user: String,
     attr: PageAttr,
     users: Vec<UserInfo>,
 }
@@ -183,10 +184,16 @@ impl FriendsPage {
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         const ROOT: &str = "friends";
         shared::decode(raw, &methods::USER_GET_FRIENDS, ROOT, |mut list| {
+            let user = shared::owner(&list, ROOT, "user")?;
             let (attr, rows) = shared::page(&mut list, ROOT, "user")?;
             let users = shared::each(rows, "friends.user", parse)?;
-            Ok(Self { attr, users })
+            Ok(Self { user, attr, users })
         })
+    }
+
+    /// The user whose friends these are, as the service spells the name.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.

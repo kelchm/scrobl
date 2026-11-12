@@ -41,6 +41,7 @@ const ROOT: &str = "artists";
 /// ```
 #[derive(Clone)]
 pub struct LibraryArtistsPage {
+    user: String,
     attr: PageAttr,
     artists: Vec<LibraryArtist>,
 }
@@ -60,10 +61,20 @@ impl LibraryArtistsPage {
     /// response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         shared::decode(raw, &methods::LIBRARY_GET_ARTISTS, ROOT, |mut list| {
+            let user = shared::owner(&list, ROOT, "user")?;
             let (attr, rows) = shared::page(&mut list, ROOT, "artist")?;
             let artists = shared::each(rows, "artists.artist", parse_row)?;
-            Ok(Self { attr, artists })
+            Ok(Self {
+                user,
+                attr,
+                artists,
+            })
         })
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.

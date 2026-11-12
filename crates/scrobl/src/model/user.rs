@@ -86,6 +86,7 @@ const ROOT: &str = "recenttracks";
 /// ```
 #[derive(Clone)]
 pub struct RecentTracksPage {
+    user: String,
     attr: PageAttr,
     scrobbles: Vec<Scrobble>,
     now_playing: Option<NowPlaying>,
@@ -108,6 +109,11 @@ impl RecentTracksPage {
     /// never repeats response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         shared::decode(raw, &methods::USER_GET_RECENT_TRACKS, ROOT, parse)
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// The paging attributes.
@@ -250,6 +256,7 @@ impl fmt::Debug for NowPlaying {
 }
 
 fn parse(mut recent: Map<String, Value>) -> Result<RecentTracksPage, Error> {
+    let user = shared::owner(&recent, ROOT, "user")?;
     let (attr, rows) = shared::page(&mut recent, ROOT, "track")?;
 
     let mut scrobbles = Vec::with_capacity(rows.len());
@@ -268,6 +275,7 @@ fn parse(mut recent: Map<String, Value>) -> Result<RecentTracksPage, Error> {
         }
     }
     Ok(RecentTracksPage {
+        user,
         attr,
         scrobbles,
         now_playing,

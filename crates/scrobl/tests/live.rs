@@ -131,7 +131,7 @@ async fn recent_tracks_against_the_live_service() {
         .await
         .unwrap();
     capture("week-first-page-extended", first.raw());
-    assert!(first.attr().user().eq_ignore_ascii_case(&user));
+    assert!(first.user().eq_ignore_ascii_case(&user));
     assert_eq!(first.attr().per_page(), 5);
     let newest = first
         .scrobbles()
@@ -234,7 +234,7 @@ async fn the_lists_of_a_user_against_the_live_service() {
     // page to the next, and a shorter period holds no more than the whole.
     let artists = user.top_artists().limit(5).send().await.unwrap();
     capture("top-artists", artists.raw());
-    assert!(artists.attr().user().eq_ignore_ascii_case(&name));
+    assert!(artists.user().eq_ignore_ascii_case(&name));
     assert_eq!((artists.attr().page(), artists.attr().per_page()), (1, 5));
     let ranked = |page: &scrobl::model::TopArtistsPage| -> Vec<(u64, u64)> {
         page.artists()
@@ -508,7 +508,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     // Friends: a page decodes, and a page past the last is an error.
     let friends = user.friends().limit(2).send().await.unwrap();
     capture("friends", friends.raw());
-    assert!(friends.attr().user().eq_ignore_ascii_case(&name));
+    assert!(friends.user().eq_ignore_ascii_case(&name));
     assert_eq!(friends.attr().per_page(), 2);
     assert!(friends.users().len() <= 2);
     println!(
@@ -537,7 +537,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     // Loved tracks, newest first.
     let loved = user.loved_tracks().limit(2).send().await.unwrap();
     capture("loved-tracks", loved.raw());
-    assert!(loved.attr().user().eq_ignore_ascii_case(&name));
+    assert!(loved.user().eq_ignore_ascii_case(&name));
     assert!(
         loved
             .tracks()
@@ -573,7 +573,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
             .unwrap();
         capture(&format!("tagged-tracks-{index}"), tracks.raw());
         assert!(artists.tag().eq_ignore_ascii_case(tag.name()));
-        assert!(artists.attr().user().eq_ignore_ascii_case(&name));
+        assert!(artists.user().eq_ignore_ascii_case(&name));
         assert_eq!(artists.attr().per_page(), 2);
         println!(
             "a tag used {} times: {} artists, {} albums, {} tracks",

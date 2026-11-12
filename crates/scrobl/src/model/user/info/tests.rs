@@ -110,7 +110,7 @@ fn a_profile_without_an_image_has_none_and_a_malformed_one_names_the_field() {
 fn the_derived_friends_page_decodes() {
     let page = FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
     let attr = page.attr();
-    assert_eq!(attr.user(), "rj_Synthetic");
+    assert_eq!(page.user(), "rj_Synthetic");
     assert_eq!(
         (
             attr.page(),

@@ -514,7 +514,7 @@ impl WindowScan {
         let number = self.next_page;
 
         // 1
-        if attr.user().to_lowercase() != self.query.user.to_lowercase() {
+        if page.user().to_lowercase() != self.query.user.to_lowercase() {
             return Err(Error::inconsistent(
                 "rule 1: the page is for a different user",
             ));
@@ -603,7 +603,7 @@ impl WindowScan {
     /// Records a page that passed.
     fn commit(&mut self, page: &RecentTracksPage, progress: Progress) {
         if self.echoed_user.is_none() {
-            self.echoed_user = Some(page.attr().user().to_owned());
+            self.echoed_user = Some(page.user().to_owned());
         }
         self.totals = Some(progress.totals);
         self.last_timestamp = progress.last_timestamp;

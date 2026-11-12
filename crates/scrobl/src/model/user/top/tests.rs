@@ -99,7 +99,7 @@ fn the_recorded_top_artists_decode() {
     let page = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(
         (
             attr.page(),
@@ -552,6 +552,7 @@ fn the_recorded_rows_carry_their_images() {
     );
 
     let albums = TopAlbumsPage::decode(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
+    assert_eq!(albums.user(), "kelchm");
     let images = albums.albums()[0].album().images();
     assert_eq!(
         sizes(images),
@@ -565,6 +566,7 @@ fn the_recorded_rows_carry_their_images() {
     assert!(albums.albums()[0].artist().images().is_empty());
 
     let tracks = TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!(tracks.user(), "kelchm");
     assert_eq!(tracks.tracks()[0].track().images().len(), 4);
     assert!(tracks.tracks()[0].artist().images().is_empty());
 }

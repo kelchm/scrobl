@@ -61,7 +61,7 @@ fn the_recorded_page_decodes() {
     let page = LibraryArtistsPage::decode(&raw(THREE)).unwrap();
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(
         (
             attr.page(),

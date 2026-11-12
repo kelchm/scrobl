@@ -81,7 +81,7 @@ fn the_recorded_tagged_artists_decode() {
     let page = TaggedArtistsPage::decode(&raw("artist", ARTISTS)).unwrap();
     assert_eq!(page.tag(), "indie");
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(
         (
             attr.page(),
@@ -112,6 +112,7 @@ fn the_recorded_tagged_artists_decode() {
 fn the_recorded_tagged_tracks_decode_whatever_their_duration_says() {
     let page = TaggedTracksPage::decode(&raw("track", TRACKS)).unwrap();
     assert_eq!((page.tag(), page.attr().total()), ("interesting", 1));
+    assert_eq!(page.user(), "kelchm");
     let [only] = page.tracks() else {
         panic!("one track expected");
     };
@@ -128,6 +129,7 @@ fn the_recorded_page_without_an_album_is_empty() {
     let page = TaggedAlbumsPage::decode(&raw("album", NO_ALBUMS)).unwrap();
     assert!(page.albums().is_empty());
     assert_eq!((page.tag(), page.attr().total()), ("indie", 0));
+    assert_eq!(page.user(), "kelchm");
 }
 
 #[test]

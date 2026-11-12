@@ -11,25 +11,22 @@ use crate::protocol::{Raw, methods};
 
 const ROOT: &str = "taggings";
 
-/// The paging attributes, the tag, and the rows at `taggings.<kind>.<key>`.
-/// A reply holds one kind only, the one its request asked for.
+/// The user, the tag, the paging attributes, and the rows at
+/// `taggings.<kind>.<key>`. A reply holds one kind only, the one its request
+/// asked for.
 fn tagged(
     mut taggings: Map<String, Value>,
     kind: &str,
     key: &str,
-) -> Result<(PageAttr, String, Vec<Value>), Error> {
-    let tag = match taggings.get("@attr") {
-        Some(Value::Object(attr)) => {
-            shared::required_str(attr, "taggings.@attr", "tag")?.to_owned()
-        }
-        _ => return Err(missing_or("taggings.@attr", "an object")),
-    };
+) -> Result<(String, String, PageAttr, Vec<Value>), Error> {
+    let user = shared::owner(&taggings, ROOT, "user")?;
+    let tag = shared::owner(&taggings, ROOT, "tag")?;
     let attr = shared::page_attr(&mut taggings, ROOT)?;
     let Some(Value::Object(mut inner)) = taggings.remove(kind) else {
         return Err(missing_or(&format!("taggings.{kind}"), "an object"));
     };
     let rows = shared::promised_rows(&mut inner, &attr, &format!("taggings.{kind}.{key}"), key)?;
-    Ok((attr, tag, rows))
+    Ok((user, tag, attr, rows))
 }
 
 /// Defines the reply for one `taggingtype`. The three differ in the names
@@ -42,8 +39,9 @@ macro_rules! tagged_page {
         $(#[$doc])*
         #[derive(Clone)]
         pub struct $name {
-            attr: PageAttr,
+            user: String,
             tag: String,
+            attr: PageAttr,
             $rows: Vec<$row>,
         }
 
@@ -65,10 +63,16 @@ macro_rules! tagged_page {
             /// and never repeats response text.
             pub fn decode(raw: &Raw) -> Result<Self, Error> {
                 shared::decode(raw, &methods::USER_GET_PERSONAL_TAGS, ROOT, |taggings| {
-                    let (attr, tag, rows) = tagged(taggings, $kind, $key)?;
+                    let (user, tag, attr, rows) = tagged(taggings, $kind, $key)?;
                     let $rows = shared::each(rows, concat!("taggings.", $kind, ".", $key), $parse)?;
-                    Ok(Self { attr, tag, $rows })
+                    Ok(Self { user, tag, attr, $rows })
                 })
+            }
+
+            /// The user the service says the page is for, in its own
+            /// spelling.
+            pub fn user(&self) -> &str {
+                &self.user
             }
 
             /// The paging attributes.

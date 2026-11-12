@@ -75,7 +75,7 @@ fn the_derived_page_decodes() {
     let page = LovedTracksPage::decode(&raw).unwrap();
 
     let attr = page.attr();
-    assert_eq!(attr.user(), "rj_Synthetic");
+    assert_eq!(page.user(), "rj_Synthetic");
     assert_eq!(
         (
             attr.page(),
@@ -116,7 +116,7 @@ fn the_derived_page_decodes() {
 fn the_recorded_page_decodes() {
     let page = LovedTracksPage::decode(&raw(RECORDED)).unwrap();
     let attr = page.attr();
-    assert_eq!(attr.user(), "kelchm");
+    assert_eq!(page.user(), "kelchm");
     assert_eq!(
         (
             attr.page(),

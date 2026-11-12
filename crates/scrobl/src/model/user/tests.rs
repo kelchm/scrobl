@@ -111,7 +111,7 @@ fn plain_page_with_now_playing() {
     ]))
     .unwrap();
 
-    assert_eq!(page.attr().user(), "rj");
+    assert_eq!(page.user(), "rj");
     assert_eq!(page.attr().page(), 1);
     assert_eq!(page.attr().per_page(), 50);
     assert_eq!(page.attr().total_pages(), 1);
