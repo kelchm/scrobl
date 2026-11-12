@@ -87,6 +87,8 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 
 Places where the official pages contradict themselves, contradict the authentication guides, or look like documentation errors. The table follows the pages except where a row below says otherwise; the snapshot fixture keeps the documented spelling next to the normalised name.
 
+This list is about the pages. Where the live service was seen to do something other than its page says, the table still follows the page, and what was seen is in [`design.md`](design.md#what-the-live-passes-showed). `chart.getTopTags` is one: its page documents `page`, and the service sent the same rows for every page.
+
 - **`autocorrect[0|1]`** (13 methods: `album.getInfo`, `album.getTags`, `album.getTopTags`, `artist.getInfo`, `artist.getSimilar`, `artist.getTags`, `artist.getTopAlbums`, `artist.getTopTags`, `artist.getTopTracks`, `track.getInfo`, `track.getSimilar`, `track.getTags`, `track.getTopTags`). The page spells the parameter name with its value set. The table lists `autocorrect`, optional; the fixture keeps `autocorrect[0|1]`.
 - **`taggingtype[artist|album|track]`** (`user.getPersonalTags`). Same artefact, and here the bracket lists the accepted values. The table lists `taggingtype`, required; the accepted values are a request-level check, not part of the table.
 - **`extended (0|1)`** (`user.getRecentTracks`). The page puts the value hint between the name and the label, so the label reads `(0|1) (Optional)`. The table lists `extended`, optional; the fixture keeps `extended (0|1)` as the name and `(Optional)` as the label.
