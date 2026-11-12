@@ -1,13 +1,12 @@
 //! What a user has given one tag: the three replies of
 //! `user.getPersonalTags`, one for each `taggingtype`.
 
-use std::fmt;
-
 use serde_json::{Map, Value};
 
 use crate::error::Error;
 use crate::model::Page;
-use crate::model::shared::{self, Album, Artist, Track, missing_or};
+use crate::model::entity::{self, Album, Artist, Counts, Length, Track};
+use crate::model::shared::{self, missing_or};
 use crate::protocol::{Raw, methods};
 
 const ROOT: &str = "taggings";
@@ -63,7 +62,7 @@ fn tagged<T>(
 /// let page = decode::user_get_personal_tags_artists(&raw)?;
 /// assert_eq!(page.subject(), Some("rj"));
 /// assert_eq!(page.total(), 1);
-/// assert_eq!(page[0].artist().name(), "A");
+/// assert_eq!(page[0].name(), "A");
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 ///
@@ -73,8 +72,10 @@ fn tagged<T>(
 /// shares](crate::model::decode#errors), and when the reply is for another
 /// `taggingtype`. `@attr.user` and `@attr.tag` are required, and a row needs
 /// a `name`.
-pub fn user_get_personal_tags_artists(raw: &Raw) -> Result<Page<TaggedArtist>, Error> {
-    tagged(raw, "artists", "artist", tagged_artist)
+pub fn user_get_personal_tags_artists(raw: &Raw) -> Result<Page<Artist>, Error> {
+    tagged(raw, "artists", "artist", |row, at| {
+        entity::artist(row, at, Counts::Neither)
+    })
 }
 
 /// Decodes a `user.getPersonalTags` response to a request with
@@ -85,135 +86,26 @@ pub fn user_get_personal_tags_artists(raw: &Raw) -> Result<Page<TaggedArtist>, E
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](crate::model::decode#errors), and when the reply is for another
 /// `taggingtype`. A row needs a `name` and an `artist`.
-pub fn user_get_personal_tags_albums(raw: &Raw) -> Result<Page<TaggedAlbum>, Error> {
-    tagged(raw, "albums", "album", tagged_album)
+pub fn user_get_personal_tags_albums(raw: &Raw) -> Result<Page<Album>, Error> {
+    tagged(raw, "albums", "album", |row, at| {
+        entity::album(row, at, Counts::Neither)
+    })
 }
 
 /// Decodes a `user.getPersonalTags` response to a request with
 /// `taggingtype=track`: one page of the tracks a user has given a tag.
+///
+/// A track's `duration` is not read here: on 2026-11-10 the service sent
+/// the word `FIXME` for every one. The row's `json` still holds it.
 ///
 /// # Errors
 ///
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](crate::model::decode#errors), and when the reply is for another
 /// `taggingtype`. A row needs a `name` and an `artist`.
-pub fn user_get_personal_tags_tracks(raw: &Raw) -> Result<Page<TaggedTrack>, Error> {
-    tagged(raw, "tracks", "track", tagged_track)
-}
-
-/// An artist a user has given a tag. [`json`](Self::json) is the row
-/// exactly as decoded.
-#[derive(Clone)]
-pub struct TaggedArtist {
-    artist: Artist,
-    json: Value,
-}
-
-impl TaggedArtist {
-    /// The artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TaggedArtist {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaggedArtist").finish_non_exhaustive()
-    }
-}
-
-/// An album a user has given a tag. [`json`](Self::json) is the row exactly
-/// as decoded.
-#[derive(Clone)]
-pub struct TaggedAlbum {
-    album: Album,
-    artist: Artist,
-    json: Value,
-}
-
-impl TaggedAlbum {
-    /// The album.
-    pub fn album(&self) -> &Album {
-        &self.album
-    }
-
-    /// The album's artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TaggedAlbum {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaggedAlbum").finish_non_exhaustive()
-    }
-}
-
-/// A track a user has given a tag. [`json`](Self::json) is the row exactly
-/// as decoded.
-///
-/// The row has a `duration`, which is not read: in every row recorded the
-/// service sent the word `FIXME` there.
-#[derive(Clone)]
-pub struct TaggedTrack {
-    track: Track,
-    artist: Artist,
-    json: Value,
-}
-
-impl TaggedTrack {
-    /// The track.
-    pub fn track(&self) -> &Track {
-        &self.track
-    }
-
-    /// The track's artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TaggedTrack {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaggedTrack").finish_non_exhaustive()
-    }
-}
-
-fn tagged_artist(row: Map<String, Value>, at: &str) -> Result<TaggedArtist, Error> {
-    Ok(TaggedArtist {
-        artist: shared::parse_artist_row(&row, at)?,
-        json: Value::Object(row),
-    })
-}
-
-fn tagged_album(row: Map<String, Value>, at: &str) -> Result<TaggedAlbum, Error> {
-    Ok(TaggedAlbum {
-        album: shared::parse_album_row(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
-        json: Value::Object(row),
-    })
-}
-
-fn tagged_track(row: Map<String, Value>, at: &str) -> Result<TaggedTrack, Error> {
-    Ok(TaggedTrack {
-        track: shared::parse_track(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
-        json: Value::Object(row),
+pub fn user_get_personal_tags_tracks(raw: &Raw) -> Result<Page<Track>, Error> {
+    tagged(raw, "tracks", "track", |row, at| {
+        entity::track(row, at, Counts::Neither, Length::Leave)
     })
 }
 

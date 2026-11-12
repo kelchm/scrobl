@@ -213,7 +213,7 @@ impl Store {
         for scrobble in read() {
             let row = (
                 scrobble.timestamp(),
-                scrobble.artist().name(),
+                scrobble.track().artist().name(),
                 scrobble.track().name(),
             );
             *unmatched.entry(row).or_default() += 1;
@@ -252,12 +252,12 @@ impl Store {
             for scrobble in read() {
                 insert.execute(params![
                     scrobble.timestamp(),
-                    scrobble.artist().name(),
-                    scrobble.artist().mbid(),
+                    scrobble.track().artist().name(),
+                    scrobble.track().artist().mbid(),
                     scrobble.track().name(),
                     scrobble.track().mbid(),
-                    scrobble.album().title(),
-                    scrobble.album().mbid(),
+                    scrobble.track().album().map(|album| album.name()),
+                    scrobble.track().album().and_then(|album| album.mbid()),
                 ])?;
             }
         }
@@ -285,8 +285,8 @@ impl Store {
             for loved in pages.iter().flat_map(|page| page.items()) {
                 insert.execute(params![
                     loved.loved_at(),
-                    loved.artist().name(),
-                    loved.artist().mbid(),
+                    loved.track().artist().name(),
+                    loved.track().artist().mbid(),
                     loved.track().name(),
                     loved.track().mbid(),
                 ])?;

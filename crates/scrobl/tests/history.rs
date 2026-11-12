@@ -453,8 +453,11 @@ fn gate4_identical_rows_in_one_second_are_all_kept() {
     for row in &rows {
         assert_eq!(row.timestamp(), first.timestamp());
         assert_eq!(row.track().name(), first.track().name());
-        assert_eq!(row.artist().name(), first.artist().name());
-        assert_eq!(row.album().title(), first.album().title());
+        assert_eq!(row.track().artist().name(), first.track().artist().name());
+        assert_eq!(
+            row.track().album().map(|album| album.name()),
+            first.track().album().map(|album| album.name())
+        );
     }
     let unique: BTreeSet<_> = done.markers().into_iter().collect();
     assert_eq!(unique.len(), 401);

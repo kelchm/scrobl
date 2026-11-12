@@ -6,7 +6,7 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
-use super::top::{self, TopAlbum, TopArtist, TopTrack};
+use super::top::{self, UserAlbum, UserArtist, UserTrack};
 use crate::error::Error;
 use crate::model::List;
 use crate::model::shared::{self, missing_or};
@@ -220,7 +220,7 @@ weekly_chart! {
     /// # Ok::<(), scrobl::Error>(())
     /// ```
     WeeklyArtistChart, "user.getWeeklyArtistChart", USER_GET_WEEKLY_ARTIST_CHART,
-    "weeklyartistchart", "artist", artists: TopArtist = top::top_artist
+    "weeklyartistchart", "artist", artists: UserArtist = top::user_artist
 }
 
 weekly_chart! {
@@ -228,7 +228,7 @@ weekly_chart! {
     /// one week, most played first. The method has no pages. Each album's
     /// artist comes as a name and an id, without a `url`.
     WeeklyAlbumChart, "user.getWeeklyAlbumChart", USER_GET_WEEKLY_ALBUM_CHART,
-    "weeklyalbumchart", "album", albums: TopAlbum = top::top_album
+    "weeklyalbumchart", "album", albums: UserAlbum = top::user_album
 }
 
 weekly_chart! {
@@ -240,7 +240,7 @@ weekly_chart! {
     /// rows: a week of 1390 plays came back as 1000 tracks holding 1167 of
     /// them, with nothing in the reply to say the rest were left out.
     WeeklyTrackChart, "user.getWeeklyTrackChart", USER_GET_WEEKLY_TRACK_CHART,
-    "weeklytrackchart", "track", tracks: TopTrack = top::top_track
+    "weeklytrackchart", "track", tracks: UserTrack = top::user_track
 }
 
 #[cfg(test)]

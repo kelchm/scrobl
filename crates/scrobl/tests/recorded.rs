@@ -90,9 +90,9 @@ fn the_first_extended_page_decodes() {
     assert_eq!(names(scrobbles), ["1996", "Fool To Think"]);
 
     let first = &scrobbles[0];
-    assert_eq!(first.artist().name(), "The Wombats");
+    assert_eq!(first.track().artist().name(), "The Wombats");
     assert_eq!(
-        first.artist().url(),
+        first.track().artist().url(),
         Some("https://www.last.fm/music/The+Wombats")
     );
     assert_eq!(
@@ -100,11 +100,11 @@ fn the_first_extended_page_decodes() {
         Some("a771c5bd-0575-3f71-9c08-a6462f6f9662")
     );
     assert_eq!(
-        first.album().title(),
+        first.track().album().map(|album| album.name()),
         Some("The Wombats Proudly Present... This Modern Glitch")
     );
-    assert_eq!(first.album().mbid(), None);
-    assert_eq!(scrobbles[1].artist().name(), "Dave Matthews Band");
+    assert_eq!(first.track().album().and_then(|album| album.mbid()), None);
+    assert_eq!(scrobbles[1].track().artist().name(), "Dave Matthews Band");
     assert!(scrobbles.iter().all(|s| s.loved() == Some(false)));
 
     // The row's images are the track's. With `extended` the artist has
@@ -116,8 +116,8 @@ fn the_first_extended_page_decodes() {
         images[0].url(),
         "https://lastfm-img.freetls.fastly.net/i/u/34s/5ebe3f82ffcb4644918fede92ab7e35f.png"
     );
-    assert_eq!(first.artist().images().len(), 4);
-    assert!(first.album().images().is_empty());
+    assert_eq!(first.track().artist().images().len(), 4);
+    assert!(first.track().album().unwrap().images().is_empty());
 }
 
 #[test]
@@ -134,8 +134,11 @@ fn the_second_extended_page_decodes() {
     let scrobbles = page.scrobbles();
     assert_eq!(timestamps(scrobbles), [1_790_726_590, 1_790_726_357]);
     assert_eq!(names(scrobbles), ["Hold Me Down", "Settle"]);
-    assert_eq!(scrobbles[0].artist().name(), "Motion City Soundtrack");
-    assert_eq!(scrobbles[1].artist().name(), "Two Door Cinema Club");
+    assert_eq!(
+        scrobbles[0].track().artist().name(),
+        "Motion City Soundtrack"
+    );
+    assert_eq!(scrobbles[1].track().artist().name(), "Two Door Cinema Club");
     assert!(scrobbles.iter().all(|s| s.loved() == Some(false)));
 }
 
@@ -161,15 +164,15 @@ fn the_plain_page_decodes() {
     );
     // Without `extended` the artist is a name and an id, and there is no
     // `loved`.
-    assert_eq!(scrobbles[0].artist().name(), "The Wombats");
+    assert_eq!(scrobbles[0].track().artist().name(), "The Wombats");
     assert_eq!(
-        scrobbles[0].artist().mbid(),
+        scrobbles[0].track().artist().mbid(),
         Some("e105c272-b5d7-4135-82ef-d60bded54345")
     );
-    assert_eq!(scrobbles[0].artist().url(), None);
+    assert_eq!(scrobbles[0].track().artist().url(), None);
     assert_eq!(scrobbles[0].track().images().len(), 4);
-    assert!(scrobbles[0].artist().images().is_empty());
-    assert_eq!(scrobbles[3].artist().name(), "Two Door Cinema Club");
+    assert!(scrobbles[0].track().artist().images().is_empty());
+    assert_eq!(scrobbles[3].track().artist().name(), "Two Door Cinema Club");
     assert!(scrobbles.iter().all(|s| s.loved().is_none()));
     assert!(scrobbles.iter().all(|s| s.json().get("loved").is_none()));
 }
@@ -248,9 +251,12 @@ fn the_plain_and_extended_readings_agree() {
     assert_eq!(timestamps(&extended), timestamps(plain.scrobbles()));
     assert_eq!(names(&extended), names(plain.scrobbles()));
     for (a, b) in extended.iter().zip(plain.scrobbles()) {
-        assert_eq!(a.artist().name(), b.artist().name());
+        assert_eq!(a.track().artist().name(), b.track().artist().name());
         assert_eq!(a.track().mbid(), b.track().mbid());
-        assert_eq!(a.album().title(), b.album().title());
+        assert_eq!(
+            a.track().album().map(|album| album.name()),
+            b.track().album().map(|album| album.name())
+        );
     }
 }
 
@@ -350,10 +356,10 @@ fn the_now_playing_page_decodes_with_its_now_playing_row() {
         playing.track().mbid(),
         Some("00000000-0000-4000-8000-000000000001")
     );
-    assert_eq!(playing.artist().name(), "Paper Lanterns Choir");
-    assert_eq!(playing.artist().mbid(), None);
+    assert_eq!(playing.track().artist().name(), "Paper Lanterns Choir");
+    assert_eq!(playing.track().artist().mbid(), None);
     assert_eq!(
-        playing.artist().url(),
+        playing.track().artist().url(),
         Some("https://www.last.fm/music/Paper+Lanterns+Choir")
     );
     assert_eq!(playing.loved(), Some(false));
@@ -373,10 +379,16 @@ fn the_now_playing_page_keeps_empty_mbids_distinct_from_missing_ones() {
 
     assert_eq!(salt_flats.track().name(), "Salt Flats");
     assert_eq!(salt_flats.track().mbid(), None);
-    assert_eq!(salt_flats.artist().name(), "Quiet Meridian");
-    assert_eq!(salt_flats.artist().mbid(), None);
-    assert_eq!(salt_flats.album().title(), Some("Long Weather"));
-    assert_eq!(salt_flats.album().mbid(), None);
+    assert_eq!(salt_flats.track().artist().name(), "Quiet Meridian");
+    assert_eq!(salt_flats.track().artist().mbid(), None);
+    assert_eq!(
+        salt_flats.track().album().map(|album| album.name()),
+        Some("Long Weather")
+    );
+    assert_eq!(
+        salt_flats.track().album().and_then(|album| album.mbid()),
+        None
+    );
     assert_eq!(salt_flats.loved(), Some(false));
     // The service sent empty strings; they are present in the row.
     assert_eq!(salt_flats.json()["mbid"], "");
@@ -390,7 +402,7 @@ fn the_now_playing_page_keeps_empty_mbids_distinct_from_missing_ones() {
         Some("00000000-0000-4000-8000-000000000003")
     );
     assert_eq!(
-        with_ids.album().mbid(),
+        with_ids.track().album().and_then(|album| album.mbid()),
         Some("00000000-0000-4000-8000-000000000004")
     );
     assert_eq!(with_ids.loved(), Some(true));

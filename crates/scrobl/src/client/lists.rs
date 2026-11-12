@@ -5,9 +5,8 @@
 use super::{Client, User};
 use crate::error::Error;
 use crate::model::{
-    LibraryArtist, List, Page, TaggedAlbum, TaggedArtist, TaggedTrack, TopAlbum, TopArtist, TopTag,
-    TopTrack, UserInfo, WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
-    decode,
+    Album, Artist, List, Page, Track, User as UserEntity, UserAlbum, UserArtist, UserTag,
+    UserTrack, WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart, decode,
 };
 use crate::protocol::{MethodSpec, Raw, Request, methods};
 use crate::response::Response;
@@ -243,7 +242,7 @@ impl Listing {
 ///     .send()
 ///     .await?;
 /// for (place, top) in page.ranked() {
-///     println!("{}. {} ({})", top.rank(), top.artist().name(), top.playcount());
+///     println!("{place}. {} ({})", top.artist().name(), top.playcount());
 /// }
 /// # Ok(())
 /// # }
@@ -287,7 +286,7 @@ impl TopArtistsQuery {
     /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS); and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the page is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<Page<TopArtist>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserArtist>>, Error> {
         self.list
             .send(&methods::USER_GET_TOP_ARTISTS, decode::user_get_top_artists)
             .await
@@ -330,7 +329,7 @@ impl TopAlbumsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<TopAlbum>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserAlbum>>, Error> {
         self.list
             .send(&methods::USER_GET_TOP_ALBUMS, decode::user_get_top_albums)
             .await
@@ -373,7 +372,7 @@ impl TopTracksQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<TopTrack>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserTrack>>, Error> {
         self.list
             .send(&methods::USER_GET_TOP_TRACKS, decode::user_get_top_tracks)
             .await
@@ -387,7 +386,7 @@ impl TopTracksQuery {
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let top = client.user("rj").top_tags().limit(10).send().await?;
 /// for tag in top.items() {
-///     println!("{} ({})", tag.name(), tag.count());
+///     println!("{} ({})", tag.tag().name(), tag.count());
 /// }
 /// # Ok(())
 /// # }
@@ -414,7 +413,7 @@ impl TopTagsQuery {
     /// before anything is sent; any error of [`Client::call`]; and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<List<TopTag>>, Error> {
+    pub async fn send(self) -> Result<Response<List<UserTag>>, Error> {
         self.list
             .send(&methods::USER_GET_TOP_TAGS, decode::user_get_top_tags)
             .await
@@ -458,7 +457,7 @@ impl LibraryArtistsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<LibraryArtist>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserArtist>>, Error> {
         self.list
             .send(&methods::LIBRARY_GET_ARTISTS, decode::library_get_artists)
             .await
@@ -505,8 +504,8 @@ impl WeeklyChartListQuery {
 ///         .range(week.from(), week.to())
 ///         .send()
 ///         .await?;
-///     for top in chart.artists() {
-///         println!("{}. {} ({})", top.rank(), top.artist().name(), top.playcount());
+///     for (place, top) in chart.artists().iter().enumerate() {
+///         println!("{}. {} ({})", place + 1, top.artist().name(), top.playcount());
 ///     }
 /// }
 /// # Ok(())
@@ -617,7 +616,7 @@ impl WeeklyTrackChartQuery {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let user = client.user("rj").info().send().await?;
-/// println!("{} has {} scrobbles", user.name(), user.playcount());
+/// println!("{} has {} scrobbles", user.name(), user.playcount().unwrap_or_default());
 /// # Ok(())
 /// # }
 /// ```
@@ -636,9 +635,9 @@ impl UserInfoQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<UserInfo>, Error> {
+    pub async fn send(self) -> Result<Response<UserEntity>, Error> {
         self.list
-            .send(&methods::USER_GET_INFO, UserInfo::decode)
+            .send(&methods::USER_GET_INFO, decode::user_get_info)
             .await
     }
 }
@@ -677,7 +676,7 @@ impl FriendsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<UserInfo>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserEntity>>, Error> {
         self.list
             .send(&methods::USER_GET_FRIENDS, decode::user_get_friends)
             .await
@@ -691,7 +690,7 @@ impl FriendsQuery {
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let page = client.user("rj").tagged_artists("rock").send().await?;
 /// for tagged in page.items() {
-///     println!("{}", tagged.artist().name());
+///     println!("{}", tagged.name());
 /// }
 /// # Ok(())
 /// # }
@@ -723,7 +722,7 @@ impl TaggedArtistsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<TaggedArtist>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<Artist>>, Error> {
         self.list
             .send(
                 &methods::USER_GET_PERSONAL_TAGS,
@@ -761,7 +760,7 @@ impl TaggedAlbumsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<TaggedAlbum>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<Album>>, Error> {
         self.list
             .send(
                 &methods::USER_GET_PERSONAL_TAGS,
@@ -799,7 +798,7 @@ impl TaggedTracksQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<Page<TaggedTrack>>, Error> {
+    pub async fn send(self) -> Result<Response<Page<Track>>, Error> {
         self.list
             .send(
                 &methods::USER_GET_PERSONAL_TAGS,

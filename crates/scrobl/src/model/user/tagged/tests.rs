@@ -41,11 +41,11 @@ fn raw(kind: &str, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<Page<TaggedArtist>, Error> {
+fn artists(body: &Value) -> Result<Page<Artist>, Error> {
     decode::user_get_personal_tags_artists(&raw("artist", body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<Page<TaggedTrack>, Error> {
+fn tracks(body: &Value) -> Result<Page<Track>, Error> {
     decode::user_get_personal_tags_tracks(&raw("track", body.to_string()))
 }
 
@@ -93,14 +93,14 @@ fn the_recorded_tagged_artists_decode() {
     let [only] = page.items() else {
         panic!("one artist expected");
     };
-    assert_eq!(only.artist().name(), "Panic at the Disco");
-    assert_eq!(only.artist().mbid(), None);
+    assert_eq!(only.name(), "Panic at the Disco");
+    assert_eq!(only.mbid(), None);
     assert_eq!(
-        only.artist().url(),
+        only.url(),
         Some("https://www.last.fm/music/Panic+at+the+Disco")
     );
     assert_eq!(only.json()["streamable"], "0");
-    let sizes: Vec<_> = only.artist().images().iter().map(|i| i.size()).collect();
+    let sizes: Vec<_> = only.images().iter().map(|i| i.size()).collect();
     assert_eq!(
         sizes,
         ["small", "medium", "large", "extralarge", "mega"].map(Some)
@@ -114,12 +114,12 @@ fn the_recorded_tagged_tracks_decode_whatever_their_duration_says() {
     let [only] = page.items() else {
         panic!("one track expected");
     };
-    assert_eq!(only.track().name(), "Bedroom in Hell");
+    assert_eq!(only.name(), "Bedroom in Hell");
     assert_eq!(only.artist().name(), "3");
     assert_eq!(only.artist().url(), Some("https://www.last.fm/music/3"));
     // The service sent this word where a number of seconds belongs.
     assert_eq!(only.json()["duration"], "FIXME");
-    assert_eq!(only.track().images().len(), 4);
+    assert_eq!(only.images().len(), 4);
 }
 
 #[test]
@@ -140,17 +140,17 @@ fn the_derived_tagged_albums_decode() {
     let rows: Vec<_> = page
         .items()
         .iter()
-        .map(|a| (a.album().title(), a.album().mbid(), a.artist().name()))
+        .map(|a| (a.name(), a.mbid(), a.artist().unwrap().name()))
         .collect();
     assert_eq!(
         rows,
         [
-            (Some("First Album"), None, "Tagged Artist"),
-            (Some("Second Album"), None, "Tagged Artist")
+            ("First Album", None, "Tagged Artist"),
+            ("Second Album", None, "Tagged Artist")
         ]
     );
     assert_eq!(
-        page.items()[0].album().url(),
+        page.items()[0].url(),
         Some("https://example.invalid/music/Tagged+Artist/Album+1")
     );
     // What the model does not name is still in the row.
@@ -160,7 +160,7 @@ fn the_derived_tagged_albums_decode() {
 #[test]
 fn rows_may_be_one_object_or_none_at_all() {
     let page = artists(&taggings("artists", "artist", artist_row("Only"), 1)).unwrap();
-    assert_eq!(page.items()[0].artist().name(), "Only");
+    assert_eq!(page.items()[0].name(), "Only");
 
     for rows in [Some(json!([])), Some(json!("")), None] {
         let mut body = taggings("tracks", "track", json!([]), 0);

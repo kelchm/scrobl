@@ -32,7 +32,7 @@ fn raw(body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn decode(body: &Value) -> Result<Page<LibraryArtist>, Error> {
+fn decode(body: &Value) -> Result<Page<UserArtist>, Error> {
     decode::library_get_artists(&raw(body.to_string()))
 }
 

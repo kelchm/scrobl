@@ -102,7 +102,8 @@ fn the_recorded_artist_chart_decodes() {
     let rows: Vec<_> = chart
         .artists()
         .iter()
-        .map(|a| (a.rank(), a.playcount(), a.artist().name()))
+        .zip(1_u64..)
+        .map(|(a, place)| (place, a.playcount(), a.artist().name()))
         .collect();
     assert_eq!(
         rows,
@@ -127,34 +128,36 @@ fn the_recorded_album_chart_decodes() {
     let rows: Vec<_> = chart
         .albums()
         .iter()
-        .map(|a| {
+        .zip(1_u64..)
+        .map(|(a, place)| {
             (
-                a.rank(),
+                place,
                 a.playcount(),
-                a.album().title(),
-                a.artist().name(),
+                a.album().name(),
+                a.album().artist().unwrap().name(),
             )
         })
         .collect();
     assert_eq!(
         rows,
         [
-            (
-                1,
-                19,
-                Some("The Social Network"),
-                "Trent Reznor and Atticus Ross"
-            ),
-            (2, 4, Some("Putting the Days to Bed"), "The Long Winters"),
-            (3, 3, Some("takeaways"), "Medium Build")
+            (1, 19, "The Social Network", "Trent Reznor and Atticus Ross"),
+            (2, 4, "Putting the Days to Bed", "The Long Winters"),
+            (3, 3, "takeaways", "Medium Build")
         ]
     );
     // The artist is a name and an id here: no `url`, and an empty `mbid`
     // reads as none.
     let first = &chart.albums()[0];
-    assert_eq!((first.artist().mbid(), first.artist().url()), (None, None));
     assert_eq!(
-        chart.albums()[1].artist().mbid(),
+        (
+            first.album().artist().unwrap().mbid(),
+            first.album().artist().unwrap().url()
+        ),
+        (None, None)
+    );
+    assert_eq!(
+        chart.albums()[1].album().artist().unwrap().mbid(),
         Some("966bd819-2ba1-4e1b-9d35-72385937e8ed")
     );
     assert_eq!(
@@ -171,13 +174,14 @@ fn the_recorded_track_chart_decodes() {
     let rows: Vec<_> = chart
         .tracks()
         .iter()
-        .map(|t| {
+        .zip(1_u64..)
+        .map(|(t, place)| {
             (
-                t.rank(),
+                place,
                 t.playcount(),
-                t.duration(),
+                t.track().duration(),
                 t.track().name(),
-                t.artist().name(),
+                t.track().artist().name(),
             )
         })
         .collect();
@@ -193,7 +197,7 @@ fn the_recorded_track_chart_decodes() {
         chart.tracks()[0].track().mbid(),
         Some("785e81ce-d95a-3499-979a-67272042e89b")
     );
-    assert_eq!(chart.tracks()[2].artist().mbid(), None);
+    assert_eq!(chart.tracks()[2].track().artist().mbid(), None);
     // A chart's track has three sizes of image, where a list's has four.
     let sizes: Vec<_> = chart.tracks()[0]
         .track()
@@ -265,13 +269,13 @@ fn a_malformed_chart_names_the_field() {
         artists(&artist_chart(json!([artist_row("1", "A"), SECRET]))),
         "weeklyartistchart.artist[1]",
     );
-    names(
-        artists(&artist_chart(json!([
-            artist_row("1", "A"),
-            artist_row(SECRET, "B")
-        ]))),
-        "weeklyartistchart.artist[1].@attr.rank",
-    );
+    // The rank is not read, so a row decodes whatever its rank says.
+    let chart = artists(&artist_chart(json!([
+        artist_row("1", "A"),
+        artist_row(SECRET, "B")
+    ])))
+    .unwrap();
+    assert_eq!(chart.artists().len(), 2);
 }
 
 #[test]

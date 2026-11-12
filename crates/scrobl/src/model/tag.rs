@@ -4,12 +4,13 @@
 
 use std::fmt;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
+use super::entity::{self, Album, Artist, Counts, Length, Tag, TagCounts, Track};
+use super::shared::{self, missing_or};
 use super::user::chart_range;
+use super::{List, Page, WeeklyChartRange};
 use crate::error::Error;
-use crate::model::shared::{self, Album, Artist, Track, missing_or};
-use crate::model::{List, Page, WeeklyChartRange};
 use crate::protocol::{Raw, methods};
 
 /// What the service says about one tag: the reply to `tag.getInfo`.
@@ -19,7 +20,7 @@ use crate::protocol::{Raw, methods};
 /// of 0.
 ///
 /// ```
-/// use scrobl::model::TagInfo;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"tag": {
@@ -29,65 +30,40 @@ use crate::protocol::{Raw, methods};
 /// let request = Request::new(&methods::TAG_GET_INFO).param("tag", "disco");
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let tag = TagInfo::decode(&raw)?;
-/// assert_eq!(tag.name(), "disco");
-/// assert_eq!((tag.total(), tag.reach()), (68_000, 21_000));
-/// assert_eq!(tag.summary(), Some("Disco is a genre."));
-/// assert_eq!(tag.content(), None);
+/// let info = decode::tag_get_info(&raw)?;
+/// assert_eq!(info.tag().name(), "disco");
+/// assert_eq!((info.taggings(), info.reach()), (68_000, 21_000));
+/// assert_eq!(info.summary(), Some("Disco is a genre."));
+/// assert_eq!(info.content(), None);
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 #[derive(Clone)]
 pub struct TagInfo {
-    name: String,
-    total: u64,
+    tag: Tag,
+    taggings: u64,
     reach: u64,
     summary: Option<String>,
     content: Option<String>,
-    json: Value,
 }
 
 impl TagInfo {
-    /// Decodes a `tag.getInfo` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `tag`, its `name`, its `total` or its `reach`
-    /// is missing or malformed, when an object repeats a member name, or
-    /// when another field has the wrong type. The message names the field,
-    /// such as `tag.reach`, and never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        shared::decode(raw, &methods::TAG_GET_INFO, "tag", |tag| {
-            let (summary, content) = match tag.get("wiki") {
-                None => (None, None),
-                Some(Value::Object(wiki)) => (
-                    shared::optional_str(wiki, "tag.wiki", "summary")?,
-                    shared::optional_str(wiki, "tag.wiki", "content")?,
-                ),
-                Some(_) => return Err(Error::decode_field("tag.wiki", "not an object")),
-            };
-            Ok(Self {
-                name: shared::required_str(&tag, "tag", "name")?.to_owned(),
-                total: shared::required_uint(&tag, "tag", "total")?,
-                reach: shared::required_uint(&tag, "tag", "reach")?,
-                summary,
-                content,
-                json: Value::Object(tag),
-            })
-        })
-    }
-
     /// The tag, as the service spells it back.
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn tag(&self) -> &Tag {
+        &self.tag
     }
 
-    /// The service's `total`: how many times the tag has been used.
-    pub fn total(&self) -> u64 {
-        self.total
+    /// The tag, to keep.
+    pub fn into_tag(self) -> Tag {
+        self.tag
     }
 
-    /// The service's `reach`: how many users have used the tag.
+    /// How many times the tag has been used. The service calls this
+    /// `total` here.
+    pub fn taggings(&self) -> u64 {
+        self.taggings
+    }
+
+    /// How many users have used the tag.
     pub fn reach(&self) -> u64 {
         self.reach
     }
@@ -108,17 +84,54 @@ impl TagInfo {
 
     /// The tag exactly as decoded.
     pub fn json(&self) -> &Value {
-        &self.json
+        self.tag.json()
+    }
+}
+
+impl AsRef<Tag> for TagInfo {
+    fn as_ref(&self) -> &Tag {
+        &self.tag
     }
 }
 
 impl fmt::Debug for TagInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TagInfo")
-            .field("total", &self.total)
+            .field("taggings", &self.taggings)
             .field("reach", &self.reach)
             .finish_non_exhaustive()
     }
+}
+
+/// Decodes a `tag.getInfo` response.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for another
+/// method, when `tag`, its `name`, its `total` or its `reach` is missing or
+/// malformed, when an object repeats a member name, or when another field
+/// has the wrong type. The message names the field, such as `tag.reach`,
+/// and never repeats response text.
+pub fn tag_get_info(raw: &Raw) -> Result<TagInfo, Error> {
+    shared::decode(raw, &methods::TAG_GET_INFO, "tag", |tag| {
+        let (summary, content) = match tag.get("wiki") {
+            None => (None, None),
+            Some(Value::Object(wiki)) => (
+                shared::optional_str(wiki, "tag.wiki", "summary")?,
+                shared::optional_str(wiki, "tag.wiki", "content")?,
+            ),
+            Some(_) => return Err(Error::decode_field("tag.wiki", "not an object")),
+        };
+        let tag = entity::tag(tag, "tag", TagCounts::Total)?;
+        Ok(TagInfo {
+            // `TagCounts::Total` makes both required, so both are there.
+            taggings: tag.taggings().unwrap_or_default(),
+            reach: tag.reach().unwrap_or_default(),
+            tag,
+            summary,
+            content,
+        })
+    })
 }
 
 /// Decodes a `tag.getSimilar` response: the tags the service finds like one
@@ -133,53 +146,15 @@ impl fmt::Debug for TagInfo {
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.tag` is required, and a row needs
 /// a `name`.
-pub fn tag_get_similar(raw: &Raw) -> Result<List<SimilarTag>, Error> {
+pub fn tag_get_similar(raw: &Raw) -> Result<List<Tag>, Error> {
     shared::listed(
         raw,
         &methods::TAG_GET_SIMILAR,
         "similartags",
         "tag",
         Some("tag"),
-        |row, at| {
-            Ok(SimilarTag {
-                name: shared::required_str(&row, at, "name")?.to_owned(),
-                url: shared::optional_str(&row, at, "url")?,
-                json: Value::Object(row),
-            })
-        },
+        |row, at| entity::tag(row, at, TagCounts::Neither),
     )
-}
-
-/// A tag in a list of similar tags. [`json`](Self::json) is the row exactly
-/// as decoded.
-#[derive(Clone)]
-pub struct SimilarTag {
-    name: String,
-    url: Option<String>,
-    json: Value,
-}
-
-impl SimilarTag {
-    /// The tag.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The Last.fm page of the tag, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for SimilarTag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SimilarTag").finish_non_exhaustive()
-    }
 }
 
 /// Decodes a `tag.getTopAlbums` response: one page of the albums given a tag
@@ -205,8 +180,8 @@ impl fmt::Debug for SimilarTag {
 ///
 /// let page = decode::tag_get_top_albums(&raw)?;
 /// assert_eq!(page.subject(), Some("disco"));
-/// assert_eq!(page[0].album().title(), Some("Record"));
-/// assert_eq!(page[0].artist().name(), "A");
+/// assert_eq!(page[0].name(), "Record");
+/// assert_eq!(page[0].artist().map(|artist| artist.name()), Some("A"));
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 ///
@@ -215,14 +190,14 @@ impl fmt::Debug for SimilarTag {
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.tag` is required, and a row needs
 /// a `name` and an `artist`.
-pub fn tag_get_top_albums(raw: &Raw) -> Result<Page<TagTopAlbum>, Error> {
+pub fn tag_get_top_albums(raw: &Raw) -> Result<Page<Album>, Error> {
     shared::paged(
         raw,
         &methods::TAG_GET_TOP_ALBUMS,
         "albums",
         "album",
         Some("tag"),
-        top_album,
+        |row, at| entity::album(row, at, Counts::Neither),
     )
 }
 
@@ -234,14 +209,14 @@ pub fn tag_get_top_albums(raw: &Raw) -> Result<Page<TagTopAlbum>, Error> {
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.tag` is required, and a row needs
 /// a `name`.
-pub fn tag_get_top_artists(raw: &Raw) -> Result<Page<TagTopArtist>, Error> {
+pub fn tag_get_top_artists(raw: &Raw) -> Result<Page<Artist>, Error> {
     shared::paged(
         raw,
         &methods::TAG_GET_TOP_ARTISTS,
         "topartists",
         "artist",
         Some("tag"),
-        top_artist,
+        |row, at| entity::artist(row, at, Counts::Neither),
     )
 }
 
@@ -253,149 +228,27 @@ pub fn tag_get_top_artists(raw: &Raw) -> Result<Page<TagTopArtist>, Error> {
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.tag` is required, and a row needs
 /// a `name` and an `artist`.
-pub fn tag_get_top_tracks(raw: &Raw) -> Result<Page<TagTopTrack>, Error> {
+pub fn tag_get_top_tracks(raw: &Raw) -> Result<Page<Track>, Error> {
     shared::paged(
         raw,
         &methods::TAG_GET_TOP_TRACKS,
         "tracks",
         "track",
         Some("tag"),
-        top_track,
+        |row, at| entity::track(row, at, Counts::Neither, Length::Read),
     )
 }
 
-/// An album in a list of those given a tag most. [`json`](Self::json) is
-/// the row exactly as decoded.
-#[derive(Clone)]
-pub struct TagTopAlbum {
-    album: Album,
-    artist: Artist,
-    json: Value,
-}
-
-impl TagTopAlbum {
-    /// The album.
-    pub fn album(&self) -> &Album {
-        &self.album
-    }
-
-    /// The album's artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TagTopAlbum {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TagTopAlbum").finish_non_exhaustive()
-    }
-}
-
-/// An artist in a list of those given a tag most. [`json`](Self::json) is
-/// the row exactly as decoded.
-#[derive(Clone)]
-pub struct TagTopArtist {
-    artist: Artist,
-    json: Value,
-}
-
-impl TagTopArtist {
-    /// The artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TagTopArtist {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TagTopArtist").finish_non_exhaustive()
-    }
-}
-
-/// A track in a list of those given a tag most. [`json`](Self::json) is the
-/// row exactly as decoded.
-#[derive(Clone)]
-pub struct TagTopTrack {
-    duration: Option<u64>,
-    track: Track,
-    artist: Artist,
-    json: Value,
-}
-
-impl TagTopTrack {
-    /// The length of the track in seconds. `None` when the row has no
-    /// `duration` or gives 0, which is read as a length the service does
-    /// not know; [`json`](Self::json) tells the two apart.
-    pub fn duration(&self) -> Option<u64> {
-        self.duration
-    }
-
-    /// The track.
-    pub fn track(&self) -> &Track {
-        &self.track
-    }
-
-    /// The track's artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for TagTopTrack {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TagTopTrack")
-            .field("duration", &self.duration)
-            .finish_non_exhaustive()
-    }
-}
-
-fn top_album(row: Map<String, Value>, at: &str) -> Result<TagTopAlbum, Error> {
-    Ok(TagTopAlbum {
-        album: shared::parse_album_row(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
-        json: Value::Object(row),
-    })
-}
-
-fn top_artist(row: Map<String, Value>, at: &str) -> Result<TagTopArtist, Error> {
-    Ok(TagTopArtist {
-        artist: shared::parse_artist_row(&row, at)?,
-        json: Value::Object(row),
-    })
-}
-
-fn top_track(row: Map<String, Value>, at: &str) -> Result<TagTopTrack, Error> {
-    Ok(TagTopTrack {
-        duration: shared::duration(&row, at)?,
-        track: shared::parse_track(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
-        json: Value::Object(row),
-    })
-}
-
-/// Every tag of the service, most used first: the reply to
-/// `tag.getTopTags`.
+/// Decodes a `tag.getTopTags` response: the tags of the service, most used
+/// first, each with its `taggings` and `reach`.
 ///
 /// The list is read from an offset, not by page. Its `@attr` holds the
 /// offset, the number of rows asked for and the number of tags there are.
+/// The list keeps the offset, as where [`ranked`](List::ranked) counts
+/// from, and neither of the other two.
 ///
 /// ```
-/// use scrobl::model::AllTags;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"toptags": {
@@ -405,133 +258,47 @@ fn top_track(row: Map<String, Value>, at: &str) -> Result<TagTopTrack, Error> {
 /// let request = Request::new(&methods::TAG_GET_TOP_TAGS);
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let list = AllTags::decode(&raw)?;
-/// assert_eq!((list.offset(), list.total()), (0, 2_896_879));
-/// assert_eq!(list.tags()[0].name(), "rock");
-/// assert_eq!(list.tags()[0].count(), 4_077_917);
+/// let tags = decode::tag_get_top_tags(&raw)?;
+/// assert_eq!(tags[0].name(), "rock");
+/// assert_eq!(tags[0].taggings(), Some(4_077_917));
+/// assert_eq!(tags.ranked().next().map(|(place, _)| place), Some(1));
 /// # Ok::<(), scrobl::Error>(())
 /// ```
-#[derive(Clone)]
-pub struct AllTags {
-    offset: u64,
-    total: u64,
-    tags: Vec<AllTag>,
-}
-
-impl AllTags {
-    /// Decodes a `tag.getTopTags` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `toptags`, `@attr.offset` or `@attr.total` is
-    /// missing or malformed, when a row is not an object or lacks a
-    /// `name`, a `count` or a `reach`, when `tag` is absent or empty
-    /// although `@attr` puts the offset before the last tag and does not
-    /// say that none was asked for, or when an object repeats a member
-    /// name. The message names the field, such as `toptags.tag[3].count`,
-    /// and never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        const ROOT: &str = "toptags";
-        shared::decode(raw, &methods::TAG_GET_TOP_TAGS, ROOT, |mut list| {
-            let (offset, asked, total) = match list.get("@attr") {
-                Some(Value::Object(attr)) => (
-                    shared::required_uint(attr, "toptags.@attr", "offset")?,
-                    shared::optional_uint(attr, "toptags.@attr", "num_res")?,
-                    shared::required_uint(attr, "toptags.@attr", "total")?,
-                ),
-                _ => return Err(missing_or("toptags.@attr", "an object")),
-            };
-            let rows = shared::rows(&mut list, "toptags.tag", "tag")?;
-            // As for a page: no rows where `@attr` says there are some is
-            // a member gone missing, not an empty list.
-            if rows.is_empty() && offset < total && asked != Some(0) {
-                return Err(Error::decode_field(
-                    "toptags.tag",
-                    "absent or empty, but `@attr` says there are tags to list",
-                ));
-            }
-            let tags = shared::each(rows, "toptags.tag", |row, at| {
-                Ok(AllTag {
-                    name: shared::required_str(&row, at, "name")?.to_owned(),
-                    count: shared::required_uint(&row, at, "count")?,
-                    reach: shared::required_uint(&row, at, "reach")?,
-                    json: Value::Object(row),
-                })
-            })?;
-            Ok(Self {
-                offset,
-                total,
-                tags,
-            })
-        })
-    }
-
-    /// How many tags come before the first row.
-    pub fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    /// How many tags the service says there are.
-    pub fn total(&self) -> u64 {
-        self.total
-    }
-
-    /// The tags, most used first.
-    pub fn tags(&self) -> &[AllTag] {
-        &self.tags
-    }
-}
-
-impl fmt::Debug for AllTags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AllTags")
-            .field("offset", &self.offset)
-            .field("total", &self.total)
-            .field("tags", &self.tags.len())
-            .finish()
-    }
-}
-
-/// A tag in the list of every tag. [`json`](Self::json) is the row exactly
-/// as decoded.
-#[derive(Clone)]
-pub struct AllTag {
-    name: String,
-    count: u64,
-    reach: u64,
-    json: Value,
-}
-
-impl AllTag {
-    /// The tag.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The service's `count`: how many times the tag has been used.
-    pub fn count(&self) -> u64 {
-        self.count
-    }
-
-    /// The service's `reach`: how many users have used the tag.
-    pub fn reach(&self) -> u64 {
-        self.reach
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for AllTag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AllTag")
-            .field("count", &self.count)
-            .field("reach", &self.reach)
-            .finish_non_exhaustive()
-    }
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for another
+/// method, when `toptags`, `@attr.offset` or `@attr.total` is missing or
+/// malformed, when a row is not an object or lacks a `name`, a `count` or a
+/// `reach`, when `tag` is absent or empty although `@attr` puts the offset
+/// before the last tag and does not say that none was asked for, or when an
+/// object repeats a member name. The message names the field, such as
+/// `toptags.tag[3].count`, and never repeats response text.
+pub fn tag_get_top_tags(raw: &Raw) -> Result<List<Tag>, Error> {
+    const ROOT: &str = "toptags";
+    shared::decode(raw, &methods::TAG_GET_TOP_TAGS, ROOT, |mut list| {
+        let (offset, asked, total) = match list.get("@attr") {
+            Some(Value::Object(attr)) => (
+                shared::required_uint(attr, "toptags.@attr", "offset")?,
+                shared::optional_uint(attr, "toptags.@attr", "num_res")?,
+                shared::required_uint(attr, "toptags.@attr", "total")?,
+            ),
+            _ => return Err(missing_or("toptags.@attr", "an object")),
+        };
+        let rows = shared::rows(&mut list, "toptags.tag", "tag")?;
+        // As for a page: no rows where `@attr` says there are some is a
+        // member gone missing, not an empty list.
+        if rows.is_empty() && offset < total && asked != Some(0) {
+            return Err(Error::decode_field(
+                "toptags.tag",
+                "absent or empty, but `@attr` says there are tags to list",
+            ));
+        }
+        let tags = shared::each(rows, "toptags.tag", |row, at| {
+            entity::tag(row, at, TagCounts::Count)
+        })?;
+        Ok(List::new(tags, None).after(offset))
+    })
 }
 
 /// Decodes a `tag.getWeeklyChartList` response: the weeks the service keeps
