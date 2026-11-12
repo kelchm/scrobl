@@ -17,9 +17,9 @@
 //! run it.
 //!
 //! 1. A handle says who or what: [`Client::user`], [`Client::artist`],
-//!    [`Client::album`], [`Client::tag`], [`Client::country`],
-//!    [`Client::charts`], [`Client::search`]. It is a cheap value and
-//!    sends nothing.
+//!    [`Client::album`], [`Client::track`], [`Client::tag`],
+//!    [`Client::country`], [`Client::charts`], [`Client::search`]. It is a
+//!    cheap value and sends nothing.
 //! 2. A method of the handle asks the question, such as
 //!    [`UserHandle::top_artists`], and returns a query with a setter for
 //!    each option the method takes.
@@ -301,6 +301,7 @@ mod rows;
 mod scan;
 mod search;
 mod tag;
+mod track;
 mod user;
 
 use std::fmt;
@@ -322,10 +323,14 @@ pub use charts::{
 pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
 pub use rows::Rows;
 pub use scan::Scan;
-pub use search::{SearchAlbumsQuery, SearchArtistsQuery, SearchHandle};
+pub use search::{SearchAlbumsQuery, SearchArtistsQuery, SearchHandle, SearchTracksQuery};
 pub use tag::{
     TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
     TagTopTracksQuery, TagWeeksQuery,
+};
+pub use track::{
+    TrackCorrectionQuery, TrackHandle, TrackInfoQuery, TrackSimilarQuery, TrackTagsOfQuery,
+    TrackTopTagsQuery,
 };
 pub use user::{
     Period, UserFriendsQuery, UserHandle, UserInfoQuery, UserLibraryArtistsQuery,
@@ -513,6 +518,18 @@ impl Client {
         AlbumHandle::with_mbid(self.clone(), mbid.into())
     }
 
+    /// One track, by the names of its artist and of the track, to ask
+    /// about: what the service says about it, what is like it, and the
+    /// tags it is given.
+    pub fn track(&self, artist: impl Into<String>, title: impl Into<String>) -> TrackHandle {
+        TrackHandle::named(self.clone(), artist.into(), title.into())
+    }
+
+    /// One track, by MusicBrainz id.
+    pub fn track_mbid(&self, mbid: impl Into<String>) -> TrackHandle {
+        TrackHandle::with_mbid(self.clone(), mbid.into())
+    }
+
     /// One tag, to ask about: what the service says of it, and the artists,
     /// albums and tracks given it most.
     pub fn tag(&self, name: impl Into<String>) -> TagHandle {
@@ -531,7 +548,7 @@ impl Client {
         ChartsHandle::new(self.clone())
     }
 
-    /// The service's search, for artists and albums by name.
+    /// The service's search, for artists, albums and tracks by name.
     pub fn search(&self) -> SearchHandle {
         SearchHandle::new(self.clone())
     }

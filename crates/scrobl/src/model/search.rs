@@ -1,4 +1,5 @@
-//! Searches: the replies to `artist.search` and `album.search`.
+//! Searches: the replies to `artist.search`, `album.search` and
+//! `track.search`.
 //!
 //! A search answers in a shape of its own. Where a list has `@attr` with
 //! four paging numbers, a search has three members named after OpenSearch
@@ -7,7 +8,7 @@
 use serde_json::{Map, Value};
 
 use super::Page;
-use super::entity::{self, Album, Artist, Counts};
+use super::entity::{self, Album, Artist, Counts, Length, Track};
 use super::page::Paging;
 use super::shared::{self, missing_or};
 use crate::error::Error;
@@ -133,6 +134,30 @@ pub fn album_search(raw: &Raw) -> Result<Page<Album>, Error> {
         "albummatches",
         "album",
         |row, at| entity::album_by_name(row, at, Counts::Neither),
+    )
+}
+
+/// Decodes a `track.search` response: one page of the tracks a search
+/// found, the best match first. The page's subject is what was searched
+/// for.
+///
+/// A match names its artist with a string and nothing else. It has its
+/// `listeners` for everyone, no `playcount` and no length. The paging is
+/// as for [`artist_search`], but the service answers a page beyond 1000
+/// with an error here, where the other two searches go on to 10000.
+///
+/// # Errors
+///
+/// As [`artist_search`], with `trackmatches` for `artistmatches`. A row
+/// needs a `name`, `listeners` and an `artist` that is a string and not
+/// empty.
+pub fn track_search(raw: &Raw) -> Result<Page<Track>, Error> {
+    found(
+        raw,
+        &methods::TRACK_SEARCH,
+        "trackmatches",
+        "track",
+        |row, at| entity::track_by_name(row, at, Counts::Listeners, Length::Leave),
     )
 }
 

@@ -22,6 +22,8 @@ use crate::protocol::{self, HttpResponse, Request};
 const ARTISTS: &[u8] = include_bytes!("../../../fixtures/recorded/artist-search.json");
 const ALBUMS: &[u8] = include_bytes!("../../../fixtures/recorded/album-search.json");
 const NOTHING: &[u8] = include_bytes!("../../../fixtures/recorded/artist-search-nothing.json");
+// `track-search.json` was recorded the same way on 2026-11-12. recorded.
+const TRACKS: &[u8] = include_bytes!("../../../fixtures/recorded/track-search.json");
 
 /// A string that appears in no error and no `Debug` output.
 const SECRET: &str = "SYNTHETIC-RESPONSE-TEXT";
@@ -119,6 +121,62 @@ fn the_recorded_search_for_albums_decodes() {
     assert_eq!(first.artist().unwrap().url(), None);
     assert_eq!((first.listeners(), first.playcount()), (None, None));
     assert!(first.mbid().is_some() && first.url().is_some());
+}
+
+#[test]
+fn the_recorded_search_for_tracks_decodes() {
+    let page = decode::track_search(&raw(&methods::TRACK_SEARCH, TRACKS)).unwrap();
+    assert_eq!(page.subject(), Some("creep"));
+    assert_eq!((page.per_page(), page.total()), (3, 97_919));
+    let rows: Vec<_> = page
+        .iter()
+        .map(|track| (track.name(), track.artist().name(), track.listeners()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Creep", "Radiohead", Some(4_267_814)),
+            ("Creep", "Frost Children", Some(69_729)),
+            ("Creep", "TLC", Some(553_465))
+        ]
+    );
+    // A match names its artist with a string, and has no plays, no length
+    // and no album.
+    let first = &page[0];
+    assert_eq!(first.artist().url(), None);
+    assert_eq!(
+        (first.playcount(), first.duration(), first.album().is_none()),
+        (None, None, true)
+    );
+
+    let row = |artist: Value| {
+        let body = results(
+            "trackmatches",
+            "track",
+            json!([{"name": "T", "listeners": "3", "artist": artist}]),
+            1,
+            3,
+            1,
+        );
+        decode::track_search(&raw(&methods::TRACK_SEARCH, body.to_string()))
+    };
+    assert_eq!(row(json!("A")).unwrap()[0].artist().name(), "A");
+    names(
+        row(json!({"name": SECRET})),
+        "results.trackmatches.track[0].artist",
+    );
+    let body = results(
+        "trackmatches",
+        "track",
+        json!([{"name": "T", "artist": "A"}]),
+        1,
+        3,
+        1,
+    );
+    names(
+        decode::track_search(&raw(&methods::TRACK_SEARCH, body.to_string())),
+        "results.trackmatches.track[0].listeners",
+    );
 }
 
 #[test]

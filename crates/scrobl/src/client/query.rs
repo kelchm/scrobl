@@ -25,6 +25,8 @@ pub(super) struct Ask {
     pub(super) lang: Option<String>,
     /// The user whose own play count a `getInfo` reply should carry.
     pub(super) for_user: Option<String>,
+    /// The artist a search for tracks is narrowed to.
+    pub(super) artist: Option<String>,
     pub(super) period: Option<Period>,
     pub(super) limit: Option<u32>,
     pub(super) page: Option<u32>,
@@ -41,6 +43,7 @@ impl Ask {
             refused: None,
             lang: None,
             for_user: None,
+            artist: None,
             period: None,
             limit: None,
             page: None,
@@ -99,6 +102,9 @@ impl Ask {
         }
         if let Some(user) = &self.for_user {
             request = request.param("username", user);
+        }
+        if let Some(artist) = &self.artist {
+            request = request.param("artist", artist);
         }
         if let Some(period) = self.period {
             request = request.param("period", period.as_str());
@@ -252,6 +258,14 @@ macro_rules! query {
         /// carries as `user_playcount`. Sent as `username`.
         pub fn for_user(mut self, user: impl Into<String>) -> Self {
             self.ask.for_user = Some(user.into());
+            self
+        }
+    };
+    (@option artist) => {
+        /// Narrows the search to tracks by artists whose names match
+        /// `artist`.
+        pub fn artist(mut self, artist: impl Into<String>) -> Self {
+            self.ask.artist = Some(artist.into());
             self
         }
     };

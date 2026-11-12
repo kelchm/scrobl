@@ -109,7 +109,7 @@ query! {
     /// The tags an album is given most. Made by [`AlbumHandle::top_tags`].
     ///
     /// On 2026-11-11 the service answered this call for an album named by
-    /// id with HTTP 400 and an empty body, where `info` by the same id
+    /// id with HTTP 400 and the body `{}`, where `info` by the same id
     /// worked. That arrives as [`ErrorKind::Http`](crate::ErrorKind).
     AlbumTopTagsQuery => List<TopTag> = decode::album_get_top_tags;
 }

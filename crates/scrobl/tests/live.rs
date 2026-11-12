@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The nine tests send about 150 key-only requests between them, a
+//! The ten tests send about 180 key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -1168,4 +1168,153 @@ async fn the_searches_against_the_live_service() {
         assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
     }
     println!("beyond 10000: error 6");
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
+async fn a_track_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let name = env("SCROBL_LIVE_USER");
+    let client = client(&key);
+    let track = client.track("radiohead", "creep");
+
+    // What the service says: both counts, a length, an album, a few tags,
+    // and with a user named that user's plays and whether they love it.
+    let info = track.info().send().await.unwrap();
+    capture("track-info", info.raw());
+    assert_eq!(info.track().name(), "Creep");
+    assert_eq!(info.track().artist().name(), "Radiohead");
+    assert_eq!(info.track().listeners(), Some(info.listeners()));
+    let length = info.track().duration().expect("a length");
+    assert!((60..1200).contains(&length.as_secs()), "{length:?}");
+    assert!(info.track().album().is_some());
+    assert_eq!((info.user_playcount(), info.user_loved()), (None, None));
+    let mine = track.info().for_user(&name).send().await.unwrap();
+    capture("track-info-user", mine.raw());
+    assert!(mine.user_playcount().is_some() && mine.user_loved().is_some());
+    println!(
+        "track: {} listeners, {length:?}, {} tags; the user: {:?} plays, loved {:?}",
+        info.listeners(),
+        info.tags().len(),
+        mine.user_playcount(),
+        mine.user_loved()
+    );
+    let by_id = client
+        .track_mbid("012e70cd-4ef6-37bf-8ebf-02d318fe5151")
+        .info()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(by_id.track().name(), "Creep");
+    let corrected = client
+        .track("Guns and Roses", "Paradise City")
+        .autocorrect()
+        .info()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(corrected.track().artist().name(), "Guns N' Roses");
+
+    // The names the service files a track under.
+    let filed = client
+        .track("Guns and Roses", "Paradise City")
+        .correction()
+        .send()
+        .await
+        .unwrap();
+    capture("track-correction", filed.raw());
+    assert_eq!(filed.artist().name(), "Guns N' Roses");
+    let same = track.correction().send().await.unwrap();
+    assert_eq!((same.name(), same.artist().name()), ("Creep", "Radiohead"));
+
+    // Similar tracks: most alike first, and no more than the service has.
+    let similar = track.similar().limit(5).send().await.unwrap();
+    capture("track-similar", similar.raw());
+    assert_eq!(similar.subject(), Some("Creep"));
+    assert_eq!(similar.len(), 5);
+    assert!(
+        similar
+            .windows(2)
+            .all(|pair| pair[0].similarity() >= pair[1].similarity())
+    );
+    assert!(similar.iter().all(|row| row.track().playcount().is_some()));
+    let most = track.similar().limit(1000).send().await.unwrap();
+    capture("track-similar-1000", most.raw());
+    let unset = track.similar().send().await.unwrap();
+    println!(
+        "similar: {} when 1000 are asked for, {} when no limit is set",
+        most.len(),
+        unset.len()
+    );
+
+    // Tags: the most given first, and one user's own.
+    let top = track.top_tags().send().await.unwrap();
+    capture("track-top-tags", top.raw());
+    assert_eq!(top.subject(), Some("Creep"));
+    assert_eq!(top[0].count(), 100);
+    let tags = track.tags_of(&name).send().await.unwrap();
+    capture("track-tags", tags.raw());
+    assert_eq!(tags.subject(), Some("Creep"));
+    println!("tags: {} given most, {} by the user", top.len(), tags.len());
+
+    // A track the service does not know is an error on all five.
+    let unknown = client.track("radiohead", "zzqqxx-no-such-track-scrobl");
+    for error in [
+        unknown.info().send().await.map(drop).unwrap_err(),
+        unknown.correction().send().await.map(drop).unwrap_err(),
+        unknown.similar().send().await.map(drop).unwrap_err(),
+        unknown.top_tags().send().await.map(drop).unwrap_err(),
+        unknown.tags_of(&name).send().await.map(drop).unwrap_err(),
+    ] {
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+    }
+    println!("unknown track: error 6 on all five");
+
+    // The search: narrowed by an artist, a page of 1000, every match page
+    // after page, and where the pages stop.
+    let search = client.search();
+    let found = search.tracks("creep").limit(5).send().await.unwrap();
+    capture("search-tracks", found.raw());
+    assert_eq!(found.subject(), Some("creep"));
+    assert_eq!((found.number(), found.len()), (1, 5));
+    assert!(found.iter().all(|track| track.listeners().is_some()));
+    let narrowed = search
+        .tracks("creep")
+        .artist("radiohead")
+        .limit(5)
+        .send()
+        .await
+        .unwrap();
+    assert!(narrowed.total() < found.total());
+    assert_eq!(narrowed[0].artist().name(), "Radiohead");
+    let full = search.tracks("love").limit(1000).send().await.unwrap();
+    capture("search-tracks-1000", full.raw());
+    assert_eq!(full.len(), 1000);
+    let unset = search.tracks("creep").send().await.unwrap();
+    let mut rows = search.tracks("creep").limit(3).all();
+    let mut seen = Vec::new();
+    while seen.len() < 7 {
+        seen.push(rows.next().await.unwrap().expect("a match"));
+    }
+    assert_eq!(seen[4].name(), found[4].name());
+    let last = search.tracks("creep").limit(1).page(1000).send().await;
+    let beyond = search.tracks("creep").limit(1).page(1001).send().await;
+    let large = search.tracks("creep").limit(1001).send().await;
+    println!(
+        "search: {} match, {} with the artist; {} to a page when no limit is set; \
+         page 1000 ok: {}, page 1001 ok: {}, a limit of 1001 ok: {}",
+        found.total(),
+        narrowed.total(),
+        unset.per_page(),
+        last.is_ok(),
+        beyond.is_ok(),
+        large.is_ok()
+    );
+    assert_eq!(unset.per_page(), 30);
+    assert!(last.is_ok());
+    assert_eq!(
+        beyond.unwrap_err().api_code(),
+        Some(ApiErrorCode::INVALID_PARAMETERS)
+    );
+    assert!(large.is_err());
 }

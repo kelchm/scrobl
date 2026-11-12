@@ -4,12 +4,11 @@
 //! Early development. Not affiliated with or endorsed by Last.fm.
 //!
 //! What works today: a raw, signed call to any of the 57 methods, the ten
-//! that change an account only through a `Writer`, a typed, checked read of
-//! a user's scrobble history, and typed reads of everything else about a
-//! user, of a tag, of a country's charts, of the charts of the whole
-//! service, of an artist and of an album, and searches for both. Not
-//! built yet: typed models for the other methods, the authentication
-//! flows and typed scrobbling.
+//! that change an account only through a `Writer`, and a typed call for
+//! every method that reads: a checked read of a user's scrobble history,
+//! everything else about a user, an artist, an album, a track and a tag,
+//! the charts of a country and of the whole service, and the searches. Not
+//! built yet: the authentication flows and typed scrobbling.
 //!
 //! A typed call is who or what, which question, then how to run it:
 //!
