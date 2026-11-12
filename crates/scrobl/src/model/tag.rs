@@ -8,9 +8,10 @@ use serde_json::Value;
 
 use super::entity::{self, Album, Artist, Counts, Length, Tag, TagCounts, Track};
 use super::shared::{self, missing_or};
-use super::user::chart_range;
-use super::{List, Page, WeeklyChartRange};
+use super::user::week;
+use super::{List, Page};
 use crate::error::Error;
+use crate::history::Window;
 use crate::protocol::{Raw, methods};
 
 /// What the service says about one tag: the reply to `tag.getInfo`.
@@ -311,15 +312,15 @@ pub fn tag_get_top_tags(raw: &Raw) -> Result<List<Tag>, Error> {
 ///
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.tag` is required, and a row needs
-/// a `from` and a `to` that are numbers.
-pub fn tag_get_weekly_chart_list(raw: &Raw) -> Result<List<WeeklyChartRange>, Error> {
+/// a `from` and a later `to` that are numbers.
+pub fn tag_get_weekly_chart_list(raw: &Raw) -> Result<List<Window>, Error> {
     shared::listed(
         raw,
         &methods::TAG_GET_WEEKLY_CHART_LIST,
         "weeklychartlist",
         "chart",
         Some("tag"),
-        chart_range,
+        week,
     )
 }
 

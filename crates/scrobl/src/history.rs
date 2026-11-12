@@ -5,8 +5,9 @@
 //! responses it is given; the caller, or the async client, moves the bytes.
 
 use crate::error::Error;
-use crate::model::{HistoryPage, NowPlaying, Scrobble, decode};
+use crate::model::{HistoryPage, decode};
 use crate::protocol::{MethodSpec, Raw, Request, methods};
+use crate::response::Response;
 
 /// The largest `limit` the documentation allows for `user.getRecentTracks`.
 const MAX_LIMIT: u32 = 200;
@@ -439,7 +440,7 @@ impl WindowScan {
     /// page does not decode. Either abandons the scan. Calling this with no
     /// request outstanding is also an error and leaves a finished scan as it
     /// was.
-    pub fn accept(&mut self, raw: Raw) -> Result<ScanPage, Error> {
+    pub fn accept(&mut self, raw: Raw) -> Result<Response<HistoryPage>, Error> {
         match self.state {
             State::Failed => return Err(abandoned()),
             State::Done => {
@@ -453,11 +454,7 @@ impl WindowScan {
         match self.validate(&raw) {
             Ok((page, progress)) => {
                 self.commit(&page, progress);
-                Ok(ScanPage {
-                    raw,
-                    number: progress.page,
-                    page,
-                })
+                Ok(Response::new(page, raw))
             }
             Err(error) => {
                 self.state = State::Failed;
@@ -629,52 +626,6 @@ struct Progress {
 
 fn abandoned() -> Error {
     Error::inconsistent("the scan was abandoned after an earlier failure")
-}
-
-/// A page that passed every rule of the scan.
-///
-/// `Debug` leaves out the response.
-#[derive(Clone)]
-pub struct ScanPage {
-    raw: Raw,
-    number: u32,
-    page: HistoryPage,
-}
-
-impl ScanPage {
-    /// The response exactly as received.
-    pub fn raw(&self) -> &Raw {
-        &self.raw
-    }
-
-    /// The page number, from 1.
-    pub fn number(&self) -> u32 {
-        self.number
-    }
-
-    /// The decoded page.
-    pub fn page(&self) -> &HistoryPage {
-        &self.page
-    }
-
-    /// The historical rows in response order, without the now-playing row.
-    pub fn scrobbles(&self) -> &[Scrobble] {
-        self.page.scrobbles()
-    }
-
-    /// The now-playing row, if the page had one.
-    pub fn now_playing(&self) -> Option<&NowPlaying> {
-        self.page.now_playing()
-    }
-}
-
-impl std::fmt::Debug for ScanPage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScanPage")
-            .field("number", &self.number)
-            .field("page", &self.page)
-            .finish()
-    }
 }
 
 /// What a completed scan read.

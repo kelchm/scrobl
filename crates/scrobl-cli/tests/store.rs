@@ -15,7 +15,9 @@ mod common;
 
 use common::*;
 use scrobl::ApiKey;
-use scrobl::history::{RecentTracks, ScanPage, ScanSummary, Window};
+use scrobl::Response;
+use scrobl::history::{RecentTracks, ScanSummary, Window};
+use scrobl::model::HistoryPage;
 use scrobl::protocol::{self, Credentials, HttpResponse};
 use scrobl_cli::Error;
 use scrobl_cli::store::{Change, Store};
@@ -28,7 +30,11 @@ fn bound(scratch: &Scratch) -> Store {
 }
 
 /// A finished scan of `window`, driven without a socket.
-fn scan(dataset: &Dataset, window: Window, page_size: u32) -> (ScanSummary, Vec<ScanPage>) {
+fn scan(
+    dataset: &Dataset,
+    window: Window,
+    page_size: u32,
+) -> (ScanSummary, Vec<Response<HistoryPage>>) {
     scan_by(dataset, window, page_size, "Synthetic Artist")
 }
 
@@ -39,7 +45,7 @@ fn scan_by(
     window: Window,
     page_size: u32,
     artist: &str,
-) -> (ScanSummary, Vec<ScanPage>) {
+) -> (ScanSummary, Vec<Response<HistoryPage>>) {
     let credentials = Credentials::new(ApiKey::new("SENTINEL_API_KEY_0001"));
     let mut scan = RecentTracks::new(USER)
         .window(window)

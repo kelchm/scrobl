@@ -52,7 +52,7 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Artist>` | live-verified |
 | `tag.getTopTags` | GET | API key | — | — | — | `model::List<Tag>` | live-verified |
 | `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Track>` | live-verified |
-| `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::List<WeeklyChartRange>` | live-verified |
+| `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::List<Window>` | live-verified |
 | **track** | | | | | | | |
 | `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | — | inventoried |
 | `track.getCorrection` | GET | API key | — | — | artist, track | — | inventoried |
@@ -76,10 +76,10 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserArtist>` | live-verified |
 | `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::List<UserTag>` | live-verified |
 | `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserTrack>` | live-verified |
-| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyAlbumChart` | live-verified |
-| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyArtistChart` | live-verified |
-| `user.getWeeklyChartList` | GET | API key | — | — | user | `model::List<WeeklyChartRange>` | live-verified |
-| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyTrackChart` | live-verified |
+| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserAlbum>` | live-verified |
+| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserArtist>` | live-verified |
+| `user.getWeeklyChartList` | GET | API key | — | — | user | `model::List<Window>` | live-verified |
+| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserTrack>` | live-verified |
 
 <!-- END GENERATED -->
 

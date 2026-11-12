@@ -32,8 +32,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use scrobl::client::{Period, RecentTracksQuery, Scan, TopArtistsQuery, User};
-use scrobl::history::{ScanPage, ScanSummary, Window};
+use scrobl::client::{Period, Scan, UserHandle, UserRecentTracksQuery, UserTopArtistsQuery};
+use scrobl::history::{ScanSummary, Window};
 use scrobl::model::HistoryPage;
 use scrobl::protocol::{Request, Requirement, methods};
 use scrobl::{
@@ -161,7 +161,7 @@ fn assert_clean(label: &str, error: &Error) {
     assert!(error.method().is_some(), "{label}: no method on {error:?}");
 }
 
-fn markers(pages: &[ScanPage]) -> Vec<usize> {
+fn markers(pages: &[Response<HistoryPage>]) -> Vec<usize> {
     pages
         .iter()
         .flat_map(|page| page.scrobbles())
@@ -169,7 +169,7 @@ fn markers(pages: &[ScanPage]) -> Vec<usize> {
         .collect()
 }
 
-async fn read_scan(mut scan: Scan) -> Result<(Vec<ScanPage>, ScanSummary), Error> {
+async fn read_scan(mut scan: Scan) -> Result<(Vec<Response<HistoryPage>>, ScanSummary), Error> {
     let mut pages = Vec::new();
     while let Some(page) = scan.next_page().await? {
         pages.push(page);
@@ -1888,7 +1888,7 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
                 format!("{:?}", Response::new((), raw.clone())),
             ),
             ("HttpResponse", format!("{http:?}\n{http:#?}")),
-            ("ScanPage", format!("{scan_page:?}\n{scan_page:#?}")),
+            ("a scanned page", format!("{scan_page:?}\n{scan_page:#?}")),
         ];
         for (what, text) in shown {
             assert!(!text.contains("SENTINEL"), "{what} shows a value: {text}");
@@ -2044,9 +2044,9 @@ fn assert_sync<T: Sync>() {}
 fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<Client>();
     assert_shareable::<Writer>();
-    assert_shareable::<User>();
-    assert_shareable::<RecentTracksQuery>();
-    assert_shareable::<TopArtistsQuery>();
+    assert_shareable::<UserHandle>();
+    assert_shareable::<UserRecentTracksQuery>();
+    assert_shareable::<UserTopArtistsQuery>();
     assert_shareable::<ClientBuilder>();
     assert_owned::<Scan>();
     assert_shareable::<Response<HistoryPage>>();
@@ -2840,7 +2840,7 @@ const WEEKLY_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-
 const WEEKLY_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-track-chart.json");
 
 #[tokio::test]
-async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
+async fn what_a_user_played_in_a_window_is_read_for_that_window() {
     bounded(async {
         let bodies = [
             WEEKLY_CHART_LIST,
@@ -2856,42 +2856,29 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
         .await;
         let user = client(&server).user(USER);
 
-        let weeks = user.weekly_chart_list().send().await.unwrap();
+        let weeks = user.weeks().send().await.unwrap();
         assert_eq!(weeks.raw().body(), WEEKLY_CHART_LIST);
-        let week = weeks.items().last().unwrap();
-        let (from, to) = (week.from(), week.to());
-        assert_eq!((from, to), (1_793_534_400, 1_794_139_200));
+        let week = *weeks.last().unwrap();
+        assert_eq!(
+            (week.from(), week.to()),
+            (Some(1_793_534_400), Some(1_794_139_200))
+        );
 
-        let artists = user
-            .weekly_artist_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let artists = user.top_artists_in(week).send().await.unwrap();
         assert_eq!(artists.raw().body(), WEEKLY_ARTISTS);
-        assert_eq!((artists.from(), artists.to()), (from, to));
-        assert_eq!(artists.artists()[1].artist().name(), "Noah Kahan");
+        assert_eq!(artists.subject(), Some("kelchm"));
+        assert_eq!(artists[1].artist().name(), "Noah Kahan");
 
-        let albums = user
-            .weekly_album_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let albums = user.top_albums_in(week).send().await.unwrap();
         assert_eq!(albums.raw().body(), WEEKLY_ALBUMS);
-        assert_eq!(albums.albums()[2].album().name(), "takeaways");
+        assert_eq!(albums[2].album().name(), "takeaways");
 
-        let tracks = user
-            .weekly_track_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let tracks = user.top_tracks_in(week).send().await.unwrap();
         assert_eq!(tracks.raw().body(), WEEKLY_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Fire Island, AK");
+        assert_eq!(tracks[0].track().name(), "Fire Island, AK");
 
-        // Without a range neither bound is sent.
-        user.weekly_artist_chart().send().await.unwrap();
+        // The charts take a limit, which goes before the span.
+        user.top_artists_in(week).limit(3).send().await.unwrap();
 
         let week = [("from", "1793534400"), ("to", "1794139200")];
         let with_week = |method: &'static str| {
@@ -2907,9 +2894,37 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
                 with_week("user.getWeeklyArtistChart"),
                 with_week("user.getWeeklyAlbumChart"),
                 with_week("user.getWeeklyTrackChart"),
-                pairs(&[("method", "user.getWeeklyArtistChart"), ("user", USER)]),
+                pairs(&[
+                    ("method", "user.getWeeklyArtistChart"),
+                    ("user", USER),
+                    ("limit", "3"),
+                    ("from", "1793534400"),
+                    ("to", "1794139200")
+                ]),
             ]
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_window_without_both_ends_is_refused_before_anything_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let user = client(&server).user(USER);
+        // With one end or none the service charts a span of its own choosing.
+        for window in [Window::ALL, Window::since(1), Window::before(2)] {
+            let errors = [
+                user.top_artists_in(window).send().await.map(drop),
+                user.top_albums_in(window).send().await.map(drop),
+                user.top_tracks_in(window).send().await.map(drop),
+            ];
+            for error in errors.map(Result::unwrap_err) {
+                assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+                assert!(error.to_string().contains("a start and an end"), "{error}");
+            }
+        }
+        assert!(server.requests().is_empty());
     })
     .await;
 }
@@ -3045,9 +3060,9 @@ async fn the_charts_are_read_with_what_was_set_and_the_exact_bytes() {
         )
         .await;
         let client = client(&server);
-        let chart = client.chart();
-        let country = client.geo("united states");
-        assert_eq!(country.country(), "united states");
+        let chart = client.charts();
+        let country = client.country("united states");
+        assert_eq!(country.name(), "united states");
 
         let artists = chart.top_artists().limit(3).page(2).send().await.unwrap();
         assert_eq!(artists.raw().body(), CHART_ARTISTS);
@@ -3165,16 +3180,16 @@ async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
         let tracks = tag.top_tracks().page(1).send().await.unwrap();
         assert_eq!(tracks.items()[1].name(), "505");
 
-        let weeks = tag.weekly_chart_list().send().await.unwrap();
+        let weeks = tag.weeks().send().await.unwrap();
         assert_eq!(weeks.raw().body(), TAG_WEEKS);
         assert_eq!(weeks.items().len(), 4);
 
-        let all = client.chart().all_tags().send().await.unwrap();
+        let all = client.charts().tags().send().await.unwrap();
         assert_eq!(all.raw().body(), ALL_TAGS);
         assert_eq!(all.items()[0].name(), "rock");
         client
-            .chart()
-            .all_tags()
+            .charts()
+            .tags()
             .limit(3)
             .offset(6)
             .send()

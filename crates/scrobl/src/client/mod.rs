@@ -269,10 +269,12 @@
 mod builder;
 mod cause;
 mod charts;
-mod history;
-mod lists;
+mod country;
 mod pacing;
-mod tags;
+mod query;
+mod scan;
+mod tag;
+mod user;
 
 use std::fmt;
 use std::sync::Arc;
@@ -283,19 +285,20 @@ use tokio::time::sleep;
 
 pub use builder::ClientBuilder;
 pub use charts::{
-    Chart, ChartArtistsQuery, ChartTagsQuery, ChartTracksQuery, Geo, GeoArtistsQuery,
-    GeoTracksQuery,
+    ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
 };
-pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
-pub use lists::{
-    FriendsQuery, LibraryArtistsQuery, Period, TaggedAlbumsQuery, TaggedArtistsQuery,
-    TaggedTracksQuery, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
-    UserInfoQuery, WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery,
-    WeeklyTrackChartQuery,
+pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
+pub use scan::Scan;
+pub use tag::{
+    TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
+    TagTopTracksQuery, TagWeeksQuery,
 };
-pub use tags::{
-    AllTagsQuery, SimilarTagsQuery, Tag, TagInfoQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
-    TagTopTracksQuery, TagWeeklyChartListQuery,
+pub use user::{
+    Period, UserFriendsQuery, UserHandle, UserInfoQuery, UserLibraryArtistsQuery,
+    UserLovedTracksQuery, UserRecentTracksQuery, UserTaggedAlbumsQuery, UserTaggedArtistsQuery,
+    UserTaggedTracksQuery, UserTopAlbumsInQuery, UserTopAlbumsQuery, UserTopArtistsInQuery,
+    UserTopArtistsQuery, UserTopTagsQuery, UserTopTracksInQuery, UserTopTracksQuery,
+    UserWeeksQuery,
 };
 
 use crate::error::{Error, Retry};
@@ -442,30 +445,31 @@ impl Client {
         }
     }
 
-    /// A handle for the user `name`, to read their history, their profile
-    /// and their lists with typed methods.
+    /// One user, to ask about: their history, their profile and their
+    /// lists.
     ///
-    /// The handle is a cheap value that holds a clone of this client.
-    pub fn user(&self, name: impl Into<String>) -> User {
-        User::new(self.clone(), name.into())
+    /// A handle is a cheap value that holds a clone of this client. It
+    /// sends nothing until a call on it is sent.
+    pub fn user(&self, name: impl Into<String>) -> UserHandle {
+        UserHandle::new(self.clone(), name.into())
     }
 
-    /// A handle for the charts of the whole service: the artists, tracks
-    /// and tags played and used most.
-    pub fn chart(&self) -> Chart {
-        Chart::new(self.clone())
+    /// One tag, to ask about: what the service says of it, and the artists,
+    /// albums and tracks given it most.
+    pub fn tag(&self, name: impl Into<String>) -> TagHandle {
+        TagHandle::new(self.clone(), name.into())
     }
 
-    /// A handle for the charts of one country, named as ISO 3166-1 names it
-    /// in English, such as `Germany`.
-    pub fn geo(&self, country: impl Into<String>) -> Geo {
-        Geo::new(self.clone(), country.into())
+    /// One country, to ask what it plays most. It is named as ISO 3166-1
+    /// names it in English, such as `Germany`.
+    pub fn country(&self, name: impl Into<String>) -> CountryHandle {
+        CountryHandle::new(self.clone(), name.into())
     }
 
-    /// A handle for one tag: what the service says about it, and the
-    /// albums, artists and tracks given it most.
-    pub fn tag(&self, name: impl Into<String>) -> Tag {
-        Tag::new(self.clone(), name.into())
+    /// The charts of the whole service: the artists, tracks and tags played
+    /// and used most.
+    pub fn charts(&self) -> ChartsHandle {
+        ChartsHandle::new(self.clone())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the

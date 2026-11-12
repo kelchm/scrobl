@@ -382,13 +382,13 @@ async fn the_lists_of_a_user_against_the_live_service() {
 
 #[tokio::test]
 #[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
-async fn the_weekly_charts_of_a_user_against_the_live_service() {
+async fn what_a_user_played_in_a_week_against_the_live_service() {
     let key = env("SCROBL_LIVE_API_KEY");
     let name = env("SCROBL_LIVE_USER");
     let user = client(&key).user(&name);
 
     // The weeks follow one another without a gap.
-    let weeks = user.weekly_chart_list().send().await.unwrap();
+    let weeks = user.weeks().send().await.unwrap();
     capture("weekly-chart-list", weeks.raw());
     assert!(
         weeks
@@ -396,61 +396,37 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
             .is_some_and(|it| it.eq_ignore_ascii_case(&name))
     );
     assert!(
-        weeks
-            .items()
-            .windows(2)
-            .all(|pair| pair[0].to() == pair[1].from()),
+        weeks.windows(2).all(|pair| pair[0].to() == pair[1].from()),
         "each week ends where the next begins"
     );
-    let last = weeks.items().last().expect("the list has no weeks");
-    let (from, to) = (last.from(), last.to());
-    println!(
-        "chart list: {} weeks, the last {from} to {to}",
-        weeks.items().len()
-    );
+    let last = *weeks.last().expect("the list has no weeks");
+    println!("chart list: {} weeks, the last {last:?}", weeks.len());
 
-    // Each chart of the last listed week echoes the week and is ranked.
-    let artists = user
-        .weekly_artist_chart()
-        .range(from, to)
-        .send()
-        .await
-        .unwrap();
+    // Each chart of the last listed week is the user's and is ranked.
+    let artists = user.top_artists_in(last).send().await.unwrap();
     capture("weekly-artist-chart", artists.raw());
-    assert!(artists.user().eq_ignore_ascii_case(&name));
-    assert_eq!((artists.from(), artists.to()), (from, to));
+    assert!(
+        artists
+            .subject()
+            .is_some_and(|it| it.eq_ignore_ascii_case(&name))
+    );
     let rows: Vec<_> = artists
-        .artists()
         .iter()
         .map(|a| (service_rank(a.json()), a.playcount()))
         .collect();
     assert_ranked("weekly artists", 1, &rows);
 
-    let albums = user
-        .weekly_album_chart()
-        .range(from, to)
-        .send()
-        .await
-        .unwrap();
+    let albums = user.top_albums_in(last).send().await.unwrap();
     capture("weekly-album-chart", albums.raw());
-    assert_eq!((albums.from(), albums.to()), (from, to));
     let album_rows: Vec<_> = albums
-        .albums()
         .iter()
         .map(|a| (service_rank(a.json()), a.playcount()))
         .collect();
     assert_ranked("weekly albums", 1, &album_rows);
 
-    let tracks = user
-        .weekly_track_chart()
-        .range(from, to)
-        .send()
-        .await
-        .unwrap();
+    let tracks = user.top_tracks_in(last).send().await.unwrap();
     capture("weekly-track-chart", tracks.raw());
-    assert_eq!((tracks.from(), tracks.to()), (from, to));
     let track_rows: Vec<_> = tracks
-        .tracks()
         .iter()
         .map(|t| (service_rank(t.json()), t.playcount()))
         .collect();
@@ -471,31 +447,20 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
         assert_eq!(plays(&rows), plays(&track_rows), "artists and tracks");
     }
 
-    // Without a range the service chooses the span itself.
-    let chosen = user.weekly_artist_chart().send().await.unwrap();
-    capture("weekly-artist-chart-default", chosen.raw());
-    println!(
-        "no range: {} to {}, {} artists, a listed week: {}",
-        chosen.from(),
-        chosen.to(),
-        chosen.artists().len(),
-        weeks
-            .items()
-            .iter()
-            .any(|w| (w.from(), w.to()) == (chosen.from(), chosen.to()))
-    );
+    // A limit, which the method's page does not document, is applied: the
+    // rows are the first of the whole chart.
+    let few = user.top_artists_in(last).limit(3).send().await.unwrap();
+    capture("weekly-artist-chart-limit", few.raw());
+    assert_eq!(few.len(), rows.len().min(3));
+    for (short, whole) in few.iter().zip(artists.iter()) {
+        assert_eq!(short.artist().name(), whole.artist().name());
+    }
 
     // The first listed week.
-    let first = weeks.items().first().expect("the list has no weeks");
-    let oldest = user
-        .weekly_track_chart()
-        .range(first.from(), first.to())
-        .send()
-        .await
-        .unwrap();
+    let first = *weeks.first().expect("the list has no weeks");
+    let oldest = user.top_tracks_in(first).send().await.unwrap();
     capture("weekly-track-chart-first", oldest.raw());
-    assert_eq!((oldest.from(), oldest.to()), (first.from(), first.to()));
-    println!("first listed week: {} tracks", oldest.tracks().len());
+    println!("first listed week: {} tracks", oldest.len());
 }
 
 #[tokio::test]
@@ -625,7 +590,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
 async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
     let key = env("SCROBL_LIVE_API_KEY");
     let client = client(&key);
-    let chart = client.chart();
+    let chart = client.charts();
 
     // The chart of artists: the service echoes what was asked, a second
     // page holds other artists, a page of 1000 decodes, and a page beyond
@@ -681,7 +646,7 @@ async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
 
     // A country: the service spells the name back its own way, and refuses
     // a code and a name it does not know.
-    let germany = client.geo("germany");
+    let germany = client.country("germany");
     let artists = germany.top_artists().limit(5).send().await.unwrap();
     capture("geo-artists", artists.raw());
     assert_eq!(artists.subject(), Some("Germany"));
@@ -704,7 +669,7 @@ async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
 
     for country in ["DE", "Atlantis"] {
         let error = client
-            .geo(country)
+            .country(country)
             .top_artists()
             .limit(5)
             .send()
@@ -808,25 +773,20 @@ async fn tags_against_the_live_service() {
     );
 
     // The weeks: each ends where the next begins.
-    let weeks = tag.weekly_chart_list().send().await.unwrap();
+    let weeks = tag.weeks().send().await.unwrap();
     capture("tag-weeks", weeks.raw());
     assert_eq!(weeks.subject(), Some("indie"));
-    assert!(
-        weeks
-            .items()
-            .windows(2)
-            .all(|pair| pair[0].to() == pair[1].from())
-    );
-    println!("indie: {} weeks", weeks.items().len());
+    assert!(weeks.windows(2).all(|pair| pair[0].to() == pair[1].from()));
+    println!("indie: {} weeks", weeks.len());
 
     // Every tag: 50 when nothing is asked, and the two parameters the
     // method's page does not list move through the list.
-    let all = client.chart().all_tags().send().await.unwrap();
+    let all = client.charts().tags().send().await.unwrap();
     capture("all-tags", all.raw());
     assert_eq!(all.items().len(), 50);
     let next = client
-        .chart()
-        .all_tags()
+        .charts()
+        .tags()
         .limit(3)
         .offset(2)
         .send()
