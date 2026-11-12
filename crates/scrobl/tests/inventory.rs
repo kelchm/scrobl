@@ -55,6 +55,29 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::LibraryArtistsPage`",
         "live-verified",
     ),
+    ("tag.getInfo", "`model::TagInfo`", "live-verified"),
+    ("tag.getSimilar", "`model::SimilarTags`", "typed-derived"),
+    (
+        "tag.getTopAlbums",
+        "`model::TagTopAlbumsPage`",
+        "live-verified",
+    ),
+    (
+        "tag.getTopArtists",
+        "`model::TagTopArtistsPage`",
+        "live-verified",
+    ),
+    ("tag.getTopTags", "`model::AllTags`", "live-verified"),
+    (
+        "tag.getTopTracks",
+        "`model::TagTopTracksPage`",
+        "live-verified",
+    ),
+    (
+        "tag.getWeeklyChartList",
+        "`model::TagWeeklyChartList`",
+        "live-verified",
+    ),
     ("user.getFriends", "`model::FriendsPage`", "live-verified"),
     ("user.getInfo", "`model::UserInfo`", "live-verified"),
     (

@@ -225,8 +225,9 @@ impl Client {
     pub fn with_session(&self, session: SessionKey) -> Client;   // shares the pool and the pacing clock
     pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any method that is not a write
     pub fn user(&self, name: impl Into<String>) -> User;
-    pub fn chart(&self) -> Chart;                           // the whole service: top_artists, top_tracks, top_tags
+    pub fn chart(&self) -> Chart;                           // the whole service: top_artists, top_tracks, top_tags, all_tags
     pub fn geo(&self, country: impl Into<String>) -> Geo;   // one country: top_artists, top_tracks
+    pub fn tag(&self, name: impl Into<String>) -> Tag;      // one tag: info, similar, top_albums, top_artists, top_tracks, weekly_chart_list
 }
 
 impl Writer {   // Clone, Deref<Target = Client>
@@ -542,7 +543,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Nineteen have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service and the two of a country. All nineteen have been read from the live service through the client.
+Every method gets a typed model for v1. Twenty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country and the seven reads of the `tag` package. All twenty-six have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -558,11 +559,12 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the nineteen is tested against a response the owner recorded, from their own account or from the service's public charts, with three exceptions:
+Each of the twenty-six is tested against a response the owner recorded, from their own account or from the service's public charts, with five exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
-- `user.getWeeklyChartList`: the fixture is four weeks of the 1134 recorded.
+- `user.getWeeklyChartList` and `tag.getWeeklyChartList`: each fixture is four weeks of the 1134 recorded.
+- `tag.getInfo`: a tag's description is text that users of the service wrote, so the fixture follows a recording with that text invented.
 
 ### What the live passes showed
 
@@ -618,6 +620,14 @@ The charts of the service and of a country, on 2026-11-11:
 - `geo.getTopTracks` sent the same rows with a `location` and without, so the client does not offer it.
 - A country code (`DE`), a country the service does not know and no country at all are each error 6. So are a `limit` of 0 or above 1000 and a `page` of 0.
 - These errors arrive with HTTP 200, where the `user` methods send HTTP 400.
+
+Tags, the same day:
+
+- A list of what was given a tag most has `@attr.tag` beside the paging numbers, and rows without counts. A tag nobody has used is an empty page with a `total` of 0, not an error.
+- `tag.getInfo` sends its two counts as JSON numbers, where a page sends strings. A tag nobody has used has counts of 0 and a summary that is only the service's link to its page. With no tag named the answer is HTTP 500 and the body `{}`.
+- `tag.getSimilar` answered `indie`, `rock` and a tag nobody has used with the same 48 bytes: no rows, and `n/a` where the tag's name belongs.
+- `tag.getTopTags` is the 50 most used tags of the service. It ignores a `limit`. Two parameters its page does not list move through the list, `num_res` and `offset`, and its `@attr` echoes them beside the `total`, all three as numbers. Its rows have a `count`, which is the `taggings` of `chart.getTopTags`, and no `url`.
+- `tag.getWeeklyChartList` is the list of 1134 weeks a user gets, for every tag and for one nobody has used.
 
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 

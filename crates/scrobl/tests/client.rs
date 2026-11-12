@@ -3114,3 +3114,123 @@ async fn the_charts_are_read_with_what_was_set_and_the_exact_bytes() {
     })
     .await;
 }
+
+// Tags. Each test scripts the answer with a fixture listed in
+// `fixtures/README.md`.
+
+const TAG_INFO: &[u8] = include_bytes!("../fixtures/derived/tag-info.json");
+const TAG_SIMILAR: &[u8] = include_bytes!("../fixtures/recorded/tag-similar.json");
+const TAG_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/tag-top-albums.json");
+const TAG_ARTISTS: &[u8] = include_bytes!("../fixtures/recorded/tag-top-artists.json");
+const TAG_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/tag-top-tracks.json");
+const TAG_WEEKS: &[u8] = include_bytes!("../fixtures/derived/tag-weekly-chart-list.json");
+const ALL_TAGS: &[u8] = include_bytes!("../fixtures/recorded/tag-all-tags.json");
+
+#[tokio::test]
+async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            TAG_INFO,
+            TAG_INFO,
+            TAG_SIMILAR,
+            TAG_ALBUMS,
+            TAG_ARTISTS,
+            TAG_TRACKS,
+            TAG_WEEKS,
+            ALL_TAGS,
+            ALL_TAGS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let tag = client.tag("hip hop");
+        assert_eq!(tag.name(), "hip hop");
+
+        let info = tag.info().send().await.unwrap();
+        assert_eq!(info.raw().body(), TAG_INFO);
+        assert_eq!(info.total(), 2_068_156);
+        tag.info().lang("de").send().await.unwrap();
+
+        let similar = tag.similar().send().await.unwrap();
+        assert_eq!(similar.raw().body(), TAG_SIMILAR);
+        assert!(similar.tags().is_empty());
+
+        let albums = tag.top_albums().limit(3).page(2).send().await.unwrap();
+        assert_eq!(albums.raw().body(), TAG_ALBUMS);
+        assert_eq!(albums.tag(), "indie");
+        assert_eq!(albums.albums()[0].album().title(), Some("Le Tigre"));
+
+        let artists = tag.top_artists().limit(3).send().await.unwrap();
+        assert_eq!(artists.artists()[1].artist().name(), "Arctic Monkeys");
+
+        let tracks = tag.top_tracks().page(1).send().await.unwrap();
+        assert_eq!(tracks.tracks()[1].track().name(), "505");
+
+        let weeks = tag.weekly_chart_list().send().await.unwrap();
+        assert_eq!(weeks.raw().body(), TAG_WEEKS);
+        assert_eq!(weeks.ranges().len(), 4);
+
+        let all = client.chart().all_tags().send().await.unwrap();
+        assert_eq!(all.raw().body(), ALL_TAGS);
+        assert_eq!(all.tags()[0].name(), "rock");
+        client
+            .chart()
+            .all_tags()
+            .limit(3)
+            .offset(6)
+            .send()
+            .await
+            .unwrap();
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "tag.getInfo"), ("tag", "hip hop")]),
+                pairs(&[
+                    ("method", "tag.getInfo"),
+                    ("tag", "hip hop"),
+                    ("lang", "de")
+                ]),
+                pairs(&[("method", "tag.getSimilar"), ("tag", "hip hop")]),
+                pairs(&[
+                    ("method", "tag.getTopAlbums"),
+                    ("tag", "hip hop"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+                pairs(&[
+                    ("method", "tag.getTopArtists"),
+                    ("tag", "hip hop"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "tag.getTopTracks"),
+                    ("tag", "hip hop"),
+                    ("page", "1")
+                ]),
+                pairs(&[("method", "tag.getWeeklyChartList"), ("tag", "hip hop")]),
+                pairs(&[("method", "tag.getTopTags")]),
+                pairs(&[
+                    ("method", "tag.getTopTags"),
+                    ("num_res", "3"),
+                    ("offset", "6")
+                ]),
+            ]
+        );
+
+        // A 0 is refused here as for the other lists, and nothing is sent.
+        for result in [
+            tag.top_albums().limit(0).send().await.map(drop),
+            tag.top_artists().page(0).send().await.map(drop),
+            tag.top_tracks().limit(0).send().await.map(drop),
+        ] {
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidRequest);
+        }
+        assert_eq!(server.request_count(), 9);
+    })
+    .await;
+}

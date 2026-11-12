@@ -46,13 +46,13 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | **library** | | | | | | | |
 | `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | live-verified |
 | **tag** | | | | | | | |
-| `tag.getInfo` | GET | API key | — | — | _lang_, tag | — | inventoried |
-| `tag.getSimilar` | GET | API key | — | — | tag | — | inventoried |
-| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | — | inventoried |
-| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | — | inventoried |
-| `tag.getTopTags` | GET | API key | — | — | — | — | inventoried |
-| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | — | inventoried |
-| `tag.getWeeklyChartList` | GET | API key | — | — | tag | — | inventoried |
+| `tag.getInfo` | GET | API key | — | — | _lang_, tag | `model::TagInfo` | live-verified |
+| `tag.getSimilar` | GET | API key | — | — | tag | `model::SimilarTags` | typed-derived |
+| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopAlbumsPage` | live-verified |
+| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopArtistsPage` | live-verified |
+| `tag.getTopTags` | GET | API key | — | — | — | `model::AllTags` | live-verified |
+| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopTracksPage` | live-verified |
+| `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::TagWeeklyChartList` | live-verified |
 | **track** | | | | | | | |
 | `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | — | inventoried |
 | `track.getCorrection` | GET | API key | — | — | artist, track | — | inventoried |

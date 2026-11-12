@@ -272,6 +272,7 @@ mod charts;
 mod history;
 mod lists;
 mod pacing;
+mod tags;
 
 use std::fmt;
 use std::sync::Arc;
@@ -291,6 +292,10 @@ pub use lists::{
     TaggedTracksQuery, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
     UserInfoQuery, WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery,
     WeeklyTrackChartQuery,
+};
+pub use tags::{
+    AllTagsQuery, SimilarTagsQuery, Tag, TagInfoQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
+    TagTopTracksQuery, TagWeeklyChartListQuery,
 };
 
 use crate::error::{Error, Retry};
@@ -455,6 +460,12 @@ impl Client {
     /// in English, such as `Germany`.
     pub fn geo(&self, country: impl Into<String>) -> Geo {
         Geo::new(self.clone(), country.into())
+    }
+
+    /// A handle for one tag: what the service says about it, and the
+    /// albums, artists and tracks given it most.
+    pub fn tag(&self, name: impl Into<String>) -> Tag {
+        Tag::new(self.clone(), name.into())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the
