@@ -676,6 +676,7 @@ An artist's lists, read on 2026-11-11 and through the client on 2026-11-12:
 What the service says of an artist and an album, read on 2026-11-11 and through the client on 2026-11-12:
 
 - `artist.getInfo` keeps its two counts under `stats`, with `userplaycount` beside them only when a `username` is sent. A user who never played the artist has a count of `"0"`, not none. It sends five similar artists and five tags at most, and `ontour` as a flag.
+- For an artist nobody has written about, `bio.summary` is still the service's link to its own page, `bio.content` is empty and `bio.published` is `01 Jan 1970, 00:00`. A misspelt name read without `autocorrect` has no similar artists and no tags.
 - `album.getInfo` names the album's artist with a string, where every list sends an object, so that artist has a name and nothing else. Its counts are strings beside the album's other members, and `userplaycount` is a JSON number. `tags` is `""` for an album nobody has tagged, and `wiki` is absent for one nobody has described.
 - An album's tracks each have an `artist` object, a `duration` as a number and a rank that counts through the album.
 - An `image` here has six entries, the last with an empty `size`.

@@ -440,6 +440,16 @@ fn an_info_with_nothing_optional_decodes() {
     assert_eq!((info.summary(), info.content()), (None, Some("text")));
     artist["similar"] = json!("");
     assert!(self::info(&artist).unwrap().similar().is_empty());
+
+    // An artist nobody has written about, as recorded: the summary is the
+    // service's own link, there is no content, and the date is a
+    // placeholder. All three are passed on as sent.
+    artist["bio"] = json!({"published": "01 Jan 1970, 00:00", "content": "",
+        "summary": " <a href=\"https://example.invalid/music/A\">Read more on Last.fm</a>"});
+    let info = self::info(&artist).unwrap();
+    assert!(info.summary().is_some());
+    assert_eq!(info.content(), None);
+    assert_eq!(info.published(), Some("01 Jan 1970, 00:00"));
 }
 
 #[test]

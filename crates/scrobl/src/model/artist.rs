@@ -330,8 +330,9 @@ impl ArtistInfo {
     }
 
     /// A few artists the service finds like this one, most alike first:
-    /// five in every response recorded. Each is a name, a link and images,
-    /// without the likeness that `artist.getSimilar` gives.
+    /// five at most, and none for an artist it knows little about. Each is
+    /// a name, a link and images, without the likeness that
+    /// `artist.getSimilar` gives.
     pub fn similar(&self) -> &[Artist] {
         &self.similar
     }
@@ -342,9 +343,11 @@ impl ArtistInfo {
         &self.tags
     }
 
-    /// The start of what the service's users wrote about the artist, if
-    /// anything. It can hold HTML, and the service ends it with a link to
-    /// its own page.
+    /// The start of what the service's users wrote about the artist. It
+    /// can hold HTML, and the service ends it with a link to its own page.
+    /// It sends that link for an artist nobody has written about too, so
+    /// this is not the way to tell whether there is a description:
+    /// [`content`](Self::content) is.
     pub fn summary(&self) -> Option<&str> {
         self.wiki.summary.as_deref()
     }
@@ -356,7 +359,8 @@ impl ArtistInfo {
     }
 
     /// When that text was last changed, as the service words it, such as
-    /// `01 Feb 2006, 19:27`.
+    /// `01 Feb 2006, 19:27`. For an artist nobody has written about the
+    /// service sent `01 Jan 1970, 00:00`.
     pub fn published(&self) -> Option<&str> {
         self.wiki.published.as_deref()
     }

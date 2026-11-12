@@ -121,11 +121,13 @@ impl fmt::Debug for Images {
     }
 }
 
-/// An artist. [`json`](Self::json) is the object exactly as decoded.
+/// An artist. [`json`](Self::json) is the artist exactly as decoded.
 ///
 /// `mbid` and `url` are `None` when the member is missing or an empty
 /// string. Where an artist is only named inside a row, as the artist of a
-/// scrobble is, the service sends a name and an id and little else.
+/// scrobble is, the service sends a name and an id and little else. In two
+/// replies, `album.getInfo` and `album.search`, it names an album's artist
+/// with a string alone: that artist has a name and nothing more.
 #[derive(Clone)]
 pub struct Artist {
     name: String,
@@ -170,7 +172,8 @@ impl Artist {
         self.playcount
     }
 
-    /// The object exactly as decoded.
+    /// The artist exactly as decoded: an object, or the string where a
+    /// reply names the artist with nothing else.
     pub fn json(&self) -> &Value {
         &self.json
     }
