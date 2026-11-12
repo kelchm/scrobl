@@ -3,5 +3,3 @@
 ## What and why
 
 ## Verified
-
-## Worth a second look
