@@ -232,3 +232,53 @@ pub(super) fn optional_uint(
             .ok_or_else(|| Error::decode_field(&format!("{at}.{key}"), "not an unsigned integer")),
     }
 }
+
+/// The rows a reply nests one level down, at `<outer>.<key>` of `map`, as
+/// the tags, the tracks and the similar artists of a `getInfo` reply are.
+/// `outer` may be absent or `""`, which the service sends where there are
+/// none.
+pub(super) fn nested<T>(
+    map: &Map<String, Value>,
+    at: &str,
+    outer: &str,
+    key: &str,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<Vec<T>, Error> {
+    let path = format!("{at}.{outer}");
+    match map.get(outer) {
+        None => Ok(Vec::new()),
+        Some(Value::String(s)) if s.is_empty() => Ok(Vec::new()),
+        Some(Value::Object(inner)) => {
+            let path = format!("{path}.{key}");
+            let rows = rows(&mut inner.clone(), &path, key)?;
+            each(rows, &path, parse)
+        }
+        Some(_) => Err(Error::decode_field(
+            &path,
+            "expected an object or an empty string",
+        )),
+    }
+}
+
+/// What the service's users wrote about an artist or an album, under `bio`
+/// or `wiki`: the start of it, all of it, and when it was last changed.
+/// Every part is `None` where the reply has no such text.
+#[derive(Clone, Default)]
+pub(super) struct Wiki {
+    pub(super) summary: Option<String>,
+    pub(super) content: Option<String>,
+    pub(super) published: Option<String>,
+}
+
+pub(super) fn wiki(map: &Map<String, Value>, at: &str, key: &str) -> Result<Wiki, Error> {
+    let path = format!("{at}.{key}");
+    match map.get(key) {
+        None => Ok(Wiki::default()),
+        Some(Value::Object(wiki)) => Ok(Wiki {
+            summary: optional_str(wiki, &path, "summary")?,
+            content: optional_str(wiki, &path, "content")?,
+            published: optional_str(wiki, &path, "published")?,
+        }),
+        Some(_) => Err(Error::decode_field(&path, "not an object")),
+    }
+}

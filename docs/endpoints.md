@@ -16,17 +16,17 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 |---|---|---|---|---|---|---|---|
 | **album** | | | | | | | |
 | `album.addTags` | POST | API key, signature, session | yes | — | artist, album, tags | — | inventoried |
-| `album.getInfo` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _username_, _lang_ | — | inventoried |
-| `album.getTags` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _user_ | — | inventoried |
-| `album.getTopTags` | GET | API key | — | — | artist\*, album\*, _autocorrect_, _mbid_ | — | inventoried |
+| `album.getInfo` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _username_, _lang_ | `model::AlbumInfo` | live-verified |
+| `album.getTags` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _user_ | `model::List<Tag>` | live-verified |
+| `album.getTopTags` | GET | API key | — | — | artist\*, album\*, _autocorrect_, _mbid_ | `model::List<TopTag>` | live-verified |
 | `album.removeTag` | POST | API key, signature, session | yes | — | artist, album, tag | — | inventoried |
 | `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | — | inventoried |
 | **artist** | | | | | | | |
 | `artist.addTags` | POST | API key, signature, session | yes | — | artist, tags | — | inventoried |
 | `artist.getCorrection` | GET | API key | — | — | artist | `model::Artist` | live-verified |
-| `artist.getInfo` | GET | API key | — | — | artist\*, _mbid_, _lang_, _autocorrect_, _username_ | — | inventoried |
+| `artist.getInfo` | GET | API key | — | — | artist\*, _mbid_, _lang_, _autocorrect_, _username_ | `model::ArtistInfo` | live-verified |
 | `artist.getSimilar` | GET | API key | — | limit | _limit_, artist\*, _autocorrect_, _mbid_ | `model::List<SimilarArtist>` | live-verified |
-| `artist.getTags` | GET | API key | — | — | artist\*, _mbid_, _user_, _autocorrect_ | — | inventoried |
+| `artist.getTags` | GET | API key | — | — | artist\*, _mbid_, _user_, _autocorrect_ | `model::List<Tag>` | live-verified |
 | `artist.getTopAlbums` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Album>` | live-verified |
 | `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
 | `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Track>` | live-verified |

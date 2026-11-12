@@ -17,8 +17,8 @@
 //! run it.
 //!
 //! 1. A handle says who or what: [`Client::user`], [`Client::artist`],
-//!    [`Client::tag`], [`Client::country`], [`Client::charts`]. It is a
-//!    cheap value and sends nothing.
+//!    [`Client::album`], [`Client::tag`], [`Client::country`],
+//!    [`Client::charts`]. It is a cheap value and sends nothing.
 //! 2. A method of the handle asks the question, such as
 //!    [`UserHandle::top_artists`], and returns a query with a setter for
 //!    each option the method takes.
@@ -288,6 +288,7 @@
 //! [`Error::retry`]: crate::Error::retry
 //! [`Error::delivery`]: crate::Error::delivery
 
+mod album;
 mod artist;
 mod builder;
 mod cause;
@@ -307,9 +308,10 @@ use std::time::Duration;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 
+pub use album::{AlbumHandle, AlbumInfoQuery, AlbumTagsOfQuery, AlbumTopTagsQuery};
 pub use artist::{
-    ArtistCorrectionQuery, ArtistHandle, ArtistSimilarQuery, ArtistTopAlbumsQuery,
-    ArtistTopTagsQuery, ArtistTopTracksQuery,
+    ArtistCorrectionQuery, ArtistHandle, ArtistInfoQuery, ArtistSimilarQuery, ArtistTagsOfQuery,
+    ArtistTopAlbumsQuery, ArtistTopTagsQuery, ArtistTopTracksQuery,
 };
 pub use builder::ClientBuilder;
 pub use charts::{
@@ -483,8 +485,9 @@ impl Client {
         UserHandle::new(self.clone(), name.into())
     }
 
-    /// One artist, by name, to ask about: who is like them, their albums and
-    /// tracks, and the tags they are given.
+    /// One artist, by name, to ask about: what the service says about them,
+    /// who is like them, their albums and tracks, and the tags they are
+    /// given.
     pub fn artist(&self, name: impl Into<String>) -> ArtistHandle {
         ArtistHandle::named(self.clone(), name.into())
     }
@@ -494,6 +497,17 @@ impl Client {
     /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
     pub fn artist_mbid(&self, mbid: impl Into<String>) -> ArtistHandle {
         ArtistHandle::with_mbid(self.clone(), mbid.into())
+    }
+
+    /// One album, by the names of its artist and of the album, to ask
+    /// about: what the service says about it and the tags it is given.
+    pub fn album(&self, artist: impl Into<String>, title: impl Into<String>) -> AlbumHandle {
+        AlbumHandle::named(self.clone(), artist.into(), title.into())
+    }
+
+    /// One album, by MusicBrainz id.
+    pub fn album_mbid(&self, mbid: impl Into<String>) -> AlbumHandle {
+        AlbumHandle::with_mbid(self.clone(), mbid.into())
     }
 
     /// One tag, to ask about: what the service says of it, and the artists,

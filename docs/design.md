@@ -279,7 +279,7 @@ let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).s
 | `.all()` | `Rows<T>`: every row, page after page | every call that gives a `Page` |
 | `.scan()?` | `Scan`: every scrobble of a window, checked | `user.recent_tracks()` only |
 
-The calls so far. There are 33 for the thirty-one typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
+The calls so far. There are 38 for the thirty-six typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
 
 | Handle | Calls |
 |---|---|
@@ -287,15 +287,16 @@ The calls so far. There are 33 for the thirty-one typed methods, because `user.g
 | `client.tag(name)` | `info`, `similar`, `top_artists`, `top_albums`, `top_tracks`, `weeks` |
 | `client.country(name)` | `top_artists`, `top_tracks` |
 | `client.charts()` | `top_artists`, `top_tracks`, `top_tags`, `tags` |
-| `client.artist(name)`, `client.artist_mbid(id)` | `correction`, `similar`, `top_albums`, `top_tracks`, `top_tags` |
+| `client.artist(name)`, `client.artist_mbid(id)` | `info`, `correction`, `similar`, `top_albums`, `top_tracks`, `top_tags`, `tags_of(user)` |
+| `client.album(artist, title)`, `client.album_mbid(id)` | `info`, `top_tags`, `tags_of(user)` |
 
-Still to come: the rest of an artist (`info`, `tags_of(user)`), `client.album(..)`, `client.track(..)`, `client.search()` and `client.auth()`, and the writes on a `Writer`.
+Still to come: `client.track(..)`, `client.search()` and `client.auth()`, and the writes on a `Writer`.
 
 Rules:
 
 - **A call is named for what it asks, not for the Last.fm method.** `user.getWeeklyChartList` is `weeks()`, `user.getWeeklyArtistChart` is `top_artists_in(window)`, the `geo` package is `country`, and `tag.getTopTags`, which is about no one tag, is `charts().tags()`. Every call carries its Last.fm method as a rustdoc alias, so searching the documentation for `user.getWeeklyChartList` finds `weeks()`.
 - **A handle is named `UserHandle`, not `User`,** because the model has a `User`. A query is named after its handle and its call: `UserTopArtistsQuery`, `TagInfoQuery`. All but two are written by one macro around one request builder, so a new method is a few lines.
-- **An artist is named once, on the handle.** `client.artist(name)` or `client.artist_mbid(id)`, and `.autocorrect()` on the handle lets the service correct a misspelt name on every call made through it. A list then says what name it was read as, in `subject()`.
+- **An artist or an album is named once, on the handle.** `client.artist(name)` or `client.artist_mbid(id)`, and `.autocorrect()` on the handle lets the service correct a misspelt name on every call made through it. A list then says what name it was read as, in `subject()`.
 - **`limit` means rows in one request.** On a `Page` that is the page size. On a `List`, where one request is the whole list, it is how long the list is.
 - **What the client refuses itself.** A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) check an upper bound on `limit`. For the others the service refuses a `limit` over its own maximum, which differs by method ([Coverage](#coverage) has what was seen).
 - **A window for `top_*_in` needs both its ends.** With one end or none the service charts a span of its own choosing, so the client refuses to send. It takes any window, not only one of the listed weeks.
@@ -573,7 +574,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Thirty-one have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven reads of the `tag` package and five of the `artist` package. All thirty-one have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Thirty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven reads of the `tag` package, seven of the `artist` package and three of the `album` package. All thirty-six have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -589,12 +590,13 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the thirty-one is tested against a response the owner recorded, from their own account or from what the service shows anyone, with five exceptions:
+Each of the thirty-six is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
 - `user.getWeeklyChartList` and `tag.getWeeklyChartList`: each fixture is four weeks of the 1134 recorded.
-- `tag.getInfo`: a tag's description is text that users of the service wrote, so the fixture follows a recording with that text invented.
+- `tag.getInfo`, `artist.getInfo` and `album.getInfo`: a description is text that users of the service wrote, so each fixture follows a recording with that text invented. A second, small album is recorded as it came, because it has no description.
+- `artist.getTags` and `album.getTags`: the owner has tagged neither, so the recorded replies are empty and a reply with rows is made from the shape of another user's.
 
 ### What the live passes showed
 
@@ -670,6 +672,16 @@ An artist's lists, read on 2026-11-11 and through the client on 2026-11-12:
 - Both paged lists answer a page beyond the last with the first page, where the charts send an empty one. `Rows` counts pages for itself, so `all()` still ends.
 - A top tag's `count` is 100 for the tag given most and less for the others in proportion. It is not a number of uses, so it is on the row and not the tag's `taggings`.
 - The rank of a row starts again on each page of the albums and counts through the list of the tracks. No model reads it.
+
+What the service says of an artist and an album, read on 2026-11-11 and through the client on 2026-11-12:
+
+- `artist.getInfo` keeps its two counts under `stats`, with `userplaycount` beside them only when a `username` is sent. A user who never played the artist has a count of `"0"`, not none. It sends five similar artists and five tags at most, and `ontour` as a flag.
+- `album.getInfo` names the album's artist with a string, where every list sends an object, so that artist has a name and nothing else. Its counts are strings beside the album's other members, and `userplaycount` is a JSON number. `tags` is `""` for an album nobody has tagged, and `wiki` is absent for one nobody has described.
+- An album's tracks each have an `artist` object, a `duration` as a number and a rank that counts through the album.
+- An `image` here has six entries, the last with an empty `size`.
+- `artist.getTags` and `album.getTags` need a `user`. Without one the answer is error 6, as it is for a user the service does not know. A user who has given no tag gets `#text` holding a space and no `tag` member.
+- An album the service does not know is error 6 on all three calls, with HTTP 404 from `album.getInfo` and HTTP 200 from the two lists.
+- `album.getTopTags` for an album named by `mbid` was HTTP 400 with the body `{}`, where `album.getInfo` by the same id answered.
 
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
