@@ -62,7 +62,8 @@ pub(in crate::model) fn week(row: Map<String, Value>, at: &str) -> Result<Window
 macro_rules! chart {
     (
         $(#[$doc:meta])*
-        $name:ident, $spec:ident, $root:literal, $key:literal, $row:ty = $parse:path
+        $name:ident, $spec:ident, $root:literal, $key:literal, $row:ty = $parse:path,
+        needs $needs:literal
     ) => {
         $(#[$doc])*
         ///
@@ -74,7 +75,7 @@ macro_rules! chart {
         ///
         /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every
         /// list shares](crate::model::decode#errors). `@attr.user` is
-        /// required, and a row needs a `name` and a `playcount`.
+        #[doc = concat!("required, and a row needs ", $needs, ".")]
         pub fn $name(raw: &Raw) -> Result<List<$row>, Error> {
             shared::listed(raw, &methods::$spec, $root, $key, Some("user"), $parse)
         }
@@ -104,7 +105,8 @@ chart! {
     /// # Ok::<(), scrobl::Error>(())
     /// ```
     user_get_weekly_artist_chart, USER_GET_WEEKLY_ARTIST_CHART,
-    "weeklyartistchart", "artist", UserArtist = top::user_artist
+    "weeklyartistchart", "artist", UserArtist = top::user_artist,
+    needs "a `name` and a `playcount`"
 }
 
 chart! {
@@ -112,7 +114,8 @@ chart! {
     /// played in one span of time, most played first. Each album's artist
     /// comes as a name and an id, without a `url`.
     user_get_weekly_album_chart, USER_GET_WEEKLY_ALBUM_CHART,
-    "weeklyalbumchart", "album", UserAlbum = top::user_album
+    "weeklyalbumchart", "album", UserAlbum = top::user_album,
+    needs "a `name`, a `playcount` and an `artist` with a name"
 }
 
 chart! {
@@ -125,7 +128,8 @@ chart! {
     /// came back as 1000 tracks holding 1167 of them, with nothing in the
     /// reply to say the rest were left out.
     user_get_weekly_track_chart, USER_GET_WEEKLY_TRACK_CHART,
-    "weeklytrackchart", "track", UserTrack = top::user_track
+    "weeklytrackchart", "track", UserTrack = top::user_track,
+    needs "a `name`, a `playcount` and an `artist` with a name"
 }
 
 #[cfg(test)]

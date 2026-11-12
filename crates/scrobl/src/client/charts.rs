@@ -56,7 +56,7 @@ query! {
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
     /// let page = client.charts().top_artists().limit(10).send().await?;
     /// for (place, artist) in page.ranked() {
-    ///     println!("{place}. {} ({:?} plays)", artist.name(), artist.playcount());
+    ///     println!("{place}. {} ({} plays)", artist.name(), artist.playcount().unwrap_or_default());
     /// }
     /// # Ok(())
     /// # }
