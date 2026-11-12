@@ -217,6 +217,15 @@ async fn recent_tracks_against_the_live_service() {
 
 /// Ranks count up by one from `first`, and no row was played more than the
 /// row before it.
+/// The place the service gives a row of a user's list, which the typed API
+/// leaves to a page's own count.
+fn service_rank(row: &serde_json::Value) -> u64 {
+    row["@attr"]["rank"]
+        .as_str()
+        .and_then(|rank| rank.parse().ok())
+        .expect("a rank on the row")
+}
+
 fn assert_ranked(name: &str, first: u64, rows: &[(u64, u64)]) {
     for (index, (rank, _)) in rows.iter().enumerate() {
         assert_eq!(*rank, first + index as u64, "{name}: rank of row {index}");
@@ -244,10 +253,10 @@ async fn the_lists_of_a_user_against_the_live_service() {
             .is_some_and(|it| it.eq_ignore_ascii_case(&name))
     );
     assert_eq!((artists.number(), artists.per_page()), (1, 5));
-    let ranked = |page: &scrobl::model::Page<scrobl::model::TopArtist>| -> Vec<(u64, u64)> {
+    let ranked = |page: &scrobl::model::Page<scrobl::model::UserArtist>| -> Vec<(u64, u64)> {
         page.items()
             .iter()
-            .map(|a| (a.rank(), a.playcount()))
+            .map(|a| (service_rank(a.json()), a.playcount()))
             .collect()
     };
     assert_ranked("top artists", 1, &ranked(&artists));
@@ -296,7 +305,7 @@ async fn the_lists_of_a_user_against_the_live_service() {
     let rows: Vec<_> = albums
         .items()
         .iter()
-        .map(|a| (a.rank(), a.playcount()))
+        .map(|a| (service_rank(a.json()), a.playcount()))
         .collect();
     assert_ranked("top albums", 1, &rows);
     println!(
@@ -306,7 +315,7 @@ async fn the_lists_of_a_user_against_the_live_service() {
         albums
             .items()
             .iter()
-            .filter(|a| a.album().title().is_none())
+            .filter(|a| a.album().name().is_empty())
             .count(),
         albums
             .items()
@@ -320,7 +329,7 @@ async fn the_lists_of_a_user_against_the_live_service() {
     let rows: Vec<_> = tracks
         .items()
         .iter()
-        .map(|t| (t.rank(), t.playcount()))
+        .map(|t| (service_rank(t.json()), t.playcount()))
         .collect();
     assert_ranked("top tracks", 1, &rows);
     println!(
@@ -330,7 +339,7 @@ async fn the_lists_of_a_user_against_the_live_service() {
         tracks
             .items()
             .iter()
-            .filter(|t| t.duration().is_none())
+            .filter(|t| t.track().duration().is_none())
             .count()
     );
 
@@ -413,7 +422,7 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
     let rows: Vec<_> = artists
         .artists()
         .iter()
-        .map(|a| (a.rank(), a.playcount()))
+        .map(|a| (service_rank(a.json()), a.playcount()))
         .collect();
     assert_ranked("weekly artists", 1, &rows);
 
@@ -428,7 +437,7 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
     let album_rows: Vec<_> = albums
         .albums()
         .iter()
-        .map(|a| (a.rank(), a.playcount()))
+        .map(|a| (service_rank(a.json()), a.playcount()))
         .collect();
     assert_ranked("weekly albums", 1, &album_rows);
 
@@ -443,7 +452,7 @@ async fn the_weekly_charts_of_a_user_against_the_live_service() {
     let track_rows: Vec<_> = tracks
         .tracks()
         .iter()
-        .map(|t| (t.rank(), t.playcount()))
+        .map(|t| (service_rank(t.json()), t.playcount()))
         .collect();
     assert_ranked("weekly tracks", 1, &track_rows);
     // The plays of a week are the same by artist and by track, unless the
@@ -502,7 +511,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     let info = user.info().send().await.unwrap();
     capture("user-info", info.raw());
     assert!(info.name().eq_ignore_ascii_case(&name));
-    assert!(info.registered() > 0);
+    assert!(info.registered_at() > 0);
     let artists = user.top_artists().limit(1).send().await.unwrap();
     capture("top-artists-1", artists.raw());
     let albums = user.top_albums().limit(1).send().await.unwrap();
@@ -511,7 +520,7 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     capture("top-tracks-1", tracks.raw());
     println!(
         "profile: {} scrobbles; artists {:?} (top list {}), albums {:?} ({}), tracks {:?} ({})",
-        info.playcount(),
+        info.playcount().unwrap_or_default(),
         info.artist_count(),
         artists.total(),
         info.album_count(),
@@ -575,21 +584,21 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     capture("top-tags-3", tags.raw());
     for (index, tag) in tags.items().iter().enumerate() {
         let artists = user
-            .tagged_artists(tag.name())
+            .tagged_artists(tag.tag().name())
             .limit(2)
             .send()
             .await
             .unwrap();
         capture(&format!("tagged-artists-{index}"), artists.raw());
         let albums = user
-            .tagged_albums(tag.name())
+            .tagged_albums(tag.tag().name())
             .limit(2)
             .send()
             .await
             .unwrap();
         capture(&format!("tagged-albums-{index}"), albums.raw());
         let tracks = user
-            .tagged_tracks(tag.name())
+            .tagged_tracks(tag.tag().name())
             .limit(2)
             .send()
             .await
@@ -628,10 +637,7 @@ async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
     let second = chart.top_artists().limit(5).page(2).send().await.unwrap();
     capture("chart-artists-page-2", second.raw());
     assert_eq!(second.number(), 2);
-    assert_ne!(
-        second.items()[0].artist().name(),
-        artists.items()[0].artist().name()
-    );
+    assert_ne!(second.items()[0].name(), artists.items()[0].name());
     let full = chart.top_artists().limit(1000).send().await.unwrap();
     capture("chart-artists-1000", full.raw());
     assert_eq!(full.items().len(), 1000);
@@ -647,7 +653,7 @@ async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
     println!(
         "chart artists: {} listed, first {} plays",
         artists.total(),
-        artists.items()[0].playcount()
+        artists.items()[0].playcount().unwrap_or_default()
     );
 
     let tracks = chart.top_tracks().limit(5).send().await.unwrap();
@@ -723,15 +729,15 @@ async fn tags_against_the_live_service() {
     // nobody has used, which is not an error.
     let info = tag.info().send().await.unwrap();
     capture("tag-info", info.raw());
-    assert_eq!(info.name(), "indie");
-    assert!(info.total() >= info.reach());
+    assert_eq!(info.tag().name(), "indie");
+    assert!(info.taggings() >= info.reach());
     assert!(info.summary().is_some());
     let german = tag.info().lang("de").send().await.unwrap();
     capture("tag-info-de", german.raw());
-    assert_eq!(german.total(), info.total());
+    assert_eq!(german.taggings(), info.taggings());
     println!(
         "indie: used {} times by {}; the German description {} the English one",
-        info.total(),
+        info.taggings(),
         info.reach(),
         if german.content() == info.content() {
             "is"
@@ -742,7 +748,7 @@ async fn tags_against_the_live_service() {
     let unused = client.tag("zzqqxx-no-such-tag-scrobl");
     let nothing = unused.info().send().await.unwrap();
     capture("tag-info-unused", nothing.raw());
-    assert_eq!((nothing.total(), nothing.reach()), (0, 0));
+    assert_eq!((nothing.taggings(), nothing.reach()), (0, 0));
 
     // Similar tags. What comes back is printed and not asserted: on
     // 2026-11-11 the service sent no rows for any tag.
@@ -817,7 +823,7 @@ async fn tags_against_the_live_service() {
     // method's page does not list move through the list.
     let all = client.chart().all_tags().send().await.unwrap();
     capture("all-tags", all.raw());
-    assert_eq!((all.offset(), all.tags().len()), (0, 50));
+    assert_eq!(all.items().len(), 50);
     let next = client
         .chart()
         .all_tags()
@@ -827,16 +833,12 @@ async fn tags_against_the_live_service() {
         .await
         .unwrap();
     capture("all-tags-offset", next.raw());
-    assert_eq!((next.offset(), next.tags().len()), (2, 3));
-    assert_eq!(next.tags()[0].name(), all.tags()[2].name());
+    assert_eq!(next.items().len(), 3);
+    assert_eq!(next.items()[0].name(), all.items()[2].name());
     assert!(
-        all.tags()
+        all.items()
             .windows(2)
-            .all(|pair| pair[0].count() >= pair[1].count())
+            .all(|pair| pair[0].taggings() >= pair[1].taggings())
     );
-    println!(
-        "{} tags in all, `{}` first",
-        all.total(),
-        all.tags()[0].name()
-    );
+    println!("all tags: `{}` first", all.items()[0].name());
 }

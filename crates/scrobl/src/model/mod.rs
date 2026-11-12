@@ -9,6 +9,7 @@
 //! The `Debug` output of a model leaves out the text of the response.
 
 mod chart;
+mod entity;
 mod geo;
 mod library;
 mod page;
@@ -16,20 +17,17 @@ mod shared;
 mod tag;
 mod user;
 
-pub use chart::{ChartArtist, ChartTag, ChartTrack};
-pub use geo::{GeoArtist, GeoTrack};
-pub use library::LibraryArtist;
+pub use entity::{Album, Artist, Image, Images, Tag, Track};
+pub use geo::{CountryArtist, CountryTrack};
 pub use page::{List, Page};
-pub use shared::{Album, Artist, Image, Track};
-pub use tag::{AllTag, AllTags, SimilarTag, TagInfo, TagTopAlbum, TagTopArtist, TagTopTrack};
+pub use tag::TagInfo;
 pub use user::{
-    HistoryPage, LovedTrack, NowPlaying, Scrobble, TaggedAlbum, TaggedArtist, TaggedTrack,
-    TopAlbum, TopArtist, TopTag, TopTrack, UserInfo, WeeklyAlbumChart, WeeklyArtistChart,
-    WeeklyChartRange, WeeklyTrackChart,
+    HistoryPage, LovedTrack, NowPlaying, Scrobble, User, UserAlbum, UserArtist, UserTag, UserTrack,
+    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
 };
 
 pub mod decode {
-    //! One function for each typed list method, named after the method:
+    //! One function for each typed method, named after the method:
     //! [`user_get_top_artists`] decodes a `user.getTopArtists` response.
     //!
     //! The client calls these for its typed queries. They are public for a
@@ -59,11 +57,11 @@ pub mod decode {
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;
     pub use super::tag::{
-        tag_get_similar, tag_get_top_albums, tag_get_top_artists, tag_get_top_tracks,
-        tag_get_weekly_chart_list,
+        tag_get_info, tag_get_similar, tag_get_top_albums, tag_get_top_artists, tag_get_top_tags,
+        tag_get_top_tracks, tag_get_weekly_chart_list,
     };
     pub use super::user::{
-        user_get_friends, user_get_loved_tracks, user_get_personal_tags_albums,
+        user_get_friends, user_get_info, user_get_loved_tracks, user_get_personal_tags_albums,
         user_get_personal_tags_artists, user_get_personal_tags_tracks, user_get_recent_tracks,
         user_get_top_albums, user_get_top_artists, user_get_top_tags, user_get_top_tracks,
         user_get_weekly_chart_list,

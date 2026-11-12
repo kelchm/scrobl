@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::Image;
 use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Raw, Request, methods};
 
@@ -32,15 +33,15 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<Page<ChartArtist>, Error> {
+fn artists(body: &Value) -> Result<Page<Artist>, Error> {
     decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<Page<ChartTrack>, Error> {
+fn tracks(body: &Value) -> Result<Page<Track>, Error> {
     decode::chart_get_top_tracks(&raw(&methods::CHART_GET_TOP_TRACKS, body.to_string()))
 }
 
-fn tags(body: &Value) -> Result<List<ChartTag>, Error> {
+fn tags(body: &Value) -> Result<List<Tag>, Error> {
     decode::chart_get_top_tags(&raw(&methods::CHART_GET_TOP_TAGS, body.to_string()))
 }
 
@@ -96,7 +97,7 @@ fn the_recorded_chart_of_artists_decodes() {
     let rows: Vec<_> = page
         .items()
         .iter()
-        .map(|a| (a.artist().name(), a.playcount(), a.listeners()))
+        .map(|a| (a.name(), a.playcount().unwrap(), a.listeners().unwrap()))
         .collect();
     assert_eq!(
         rows,
@@ -107,15 +108,12 @@ fn the_recorded_chart_of_artists_decodes() {
         ]
     );
     let first = &page.items()[0];
+    assert_eq!(first.mbid(), Some("6925db17-f35e-42f3-a4eb-84ee6bf5d4b0"));
     assert_eq!(
-        first.artist().mbid(),
-        Some("6925db17-f35e-42f3-a4eb-84ee6bf5d4b0")
-    );
-    assert_eq!(
-        first.artist().url(),
+        first.url(),
         Some("https://www.last.fm/music/Olivia+Rodrigo")
     );
-    assert_eq!(first.artist().images().len(), 5);
+    assert_eq!(first.images().len(), 5);
     // What the model does not name is still in the row.
     assert_eq!(first.json()["streamable"], "0");
 }
@@ -137,11 +135,11 @@ fn the_recorded_chart_of_tracks_decodes() {
         .iter()
         .map(|t| {
             (
-                t.track().name(),
+                t.name(),
                 t.artist().name(),
-                t.duration(),
-                t.playcount(),
-                t.listeners(),
+                t.duration().map(|length| length.as_secs()),
+                t.playcount().unwrap(),
+                t.listeners().unwrap(),
             )
         })
         .collect();
@@ -154,15 +152,12 @@ fn the_recorded_chart_of_tracks_decodes() {
         ]
     );
     let first = &page.items()[0];
-    assert_eq!(
-        first.track().mbid(),
-        Some("7c959127-f934-4ea8-ae27-99b2533cbf9e")
-    );
+    assert_eq!(first.mbid(), Some("7c959127-f934-4ea8-ae27-99b2533cbf9e"));
     assert_eq!(
         first.artist().url(),
         Some("https://www.last.fm/music/AD%C3%89LA")
     );
-    assert_eq!(first.track().images().len(), 4);
+    assert_eq!(first.images().len(), 4);
     assert_eq!(first.json()["streamable"]["fulltrack"], "0");
 }
 
@@ -175,7 +170,7 @@ fn the_recorded_chart_of_tags_decodes() {
     let rows: Vec<_> = page
         .items()
         .iter()
-        .map(|t| (t.name(), t.reach(), t.taggings()))
+        .map(|t| (t.name(), t.reach().unwrap(), t.taggings().unwrap()))
         .collect();
     assert_eq!(
         rows,
@@ -196,7 +191,7 @@ fn the_recorded_chart_of_tags_decodes() {
 fn a_page_may_be_one_object_or_empty() {
     let one = artists(&paged("artists", "artist", artist_row("Only"), 1)).unwrap();
     assert_eq!(one.items().len(), 1);
-    assert_eq!(one.items()[0].artist().name(), "Only");
+    assert_eq!(one.items()[0].name(), "Only");
 
     for empty in [json!([]), json!("")] {
         let page = tracks(&paged("tracks", "track", empty, 0)).unwrap();
@@ -221,7 +216,7 @@ fn what_a_row_may_leave_out_reads_as_none() {
     let mut artist = artist_row("A");
     artist.as_object_mut().unwrap().remove("mbid");
     let page = artists(&paged("artists", "artist", json!([artist]), 1)).unwrap();
-    assert_eq!(page.items()[0].artist().mbid(), None);
+    assert_eq!(page.items()[0].mbid(), None);
 
     for duration in [Some(json!("0")), Some(json!(0)), None] {
         let mut track = track_row("T");
@@ -315,4 +310,62 @@ fn debug_leaves_out_the_text_of_the_response() {
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("Page {"), "{shown}");
+}
+
+#[test]
+fn the_things_on_a_chart_say_the_counts_for_everyone_and_keep_their_json() {
+    let artists =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let artist: &Artist = artists[0].as_ref();
+    assert_eq!(
+        (artist.listeners(), artist.playcount()),
+        (Some(3_431_916), Some(722_263_496))
+    );
+    assert_eq!(artist.json()["name"], "Olivia Rodrigo");
+
+    let tracks =
+        decode::chart_get_top_tracks(&raw(&methods::CHART_GET_TOP_TRACKS, TRACKS)).unwrap();
+    let track: &Track = tracks[0].as_ref();
+    assert_eq!(track.listeners(), Some(313_352));
+    assert_eq!(track.duration(), Some(std::time::Duration::from_secs(219)));
+    // The artist a track names has no counts of its own in this reply, and
+    // the track names no album.
+    assert_eq!(
+        (track.artist().listeners(), track.artist().playcount()),
+        (None, None)
+    );
+    assert_eq!(track.artist().json()["name"], "ADÉLA");
+    assert!(track.album().is_none());
+
+    let tags = decode::chart_get_top_tags(&raw(&methods::CHART_GET_TOP_TAGS, TAGS)).unwrap();
+    let tag: &Tag = tags[0].as_ref();
+    assert_eq!(
+        (tag.taggings(), tag.reach()),
+        (Some(4_077_917), Some(403_467))
+    );
+    assert_eq!(tag.json()["taggings"], "4077917");
+}
+
+#[test]
+fn an_image_is_asked_for_by_size_or_by_its_place() {
+    let page =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let images = page[0].images();
+    assert_eq!(images.len(), 5);
+    assert_eq!(images.smallest().and_then(Image::size), Some("small"));
+    assert_eq!(images.largest().and_then(Image::size), Some("mega"));
+    assert_eq!(
+        images.get("large").map(Image::url),
+        Some("https://lastfm-img.freetls.fastly.net/i/u/174s/2a96cbd8b46e442fc41c2b86b821562f.png")
+    );
+    assert!(images.get("huge").is_none());
+    let sizes: Vec<_> = images.into_iter().filter_map(Image::size).collect();
+    assert_eq!(sizes, ["small", "medium", "large", "extralarge", "mega"]);
+
+    // An artist without an image has none to give.
+    let bare = artists(&paged("artists", "artist", json!([artist_row("A")]), 1)).unwrap();
+    assert!(bare[0].images().is_empty());
+    assert!(bare[0].images().largest().is_none());
+    assert!(bare[0].images().smallest().is_none());
+    assert!(format!("{:?}", bare[0].images()).contains("Images(0)"));
 }

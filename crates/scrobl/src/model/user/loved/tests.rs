@@ -96,13 +96,13 @@ fn the_derived_page_decodes() {
         first.track().url(),
         Some("https://example.invalid/music/First+Artist/_/First+Song")
     );
-    assert_eq!(first.artist().name(), "First Artist");
+    assert_eq!(first.track().artist().name(), "First Artist");
     assert_eq!(
-        first.artist().mbid(),
+        first.track().artist().mbid(),
         Some("00000000-0000-4000-8000-0000000000a1")
     );
     assert_eq!(second.loved_at(), 1_700_000_100);
-    assert_eq!(second.artist().mbid(), None);
+    assert_eq!(second.track().artist().mbid(), None);
     assert_eq!(
         second.track().mbid(),
         Some("00000000-0000-4000-8000-0000000000b2")
@@ -128,7 +128,7 @@ fn the_recorded_page_decodes() {
     let rows: Vec<_> = page
         .items()
         .iter()
-        .map(|t| (t.loved_at(), t.track().name(), t.artist().name()))
+        .map(|t| (t.loved_at(), t.track().name(), t.track().artist().name()))
         .collect();
     assert_eq!(
         rows,
@@ -140,7 +140,7 @@ fn the_recorded_page_decodes() {
     let first = &page.items()[0];
     assert_eq!(first.track().mbid(), None);
     assert_eq!(
-        first.artist().mbid(),
+        first.track().artist().mbid(),
         Some("5be29c0c-1a6f-481d-bab0-8c805e63ba68")
     );
     assert_eq!(
@@ -148,7 +148,7 @@ fn the_recorded_page_decodes() {
         Some("https://www.last.fm/music/Nolan+Taylor/_/68")
     );
     assert_eq!(first.track().images().len(), 4);
-    assert!(first.artist().images().is_empty());
+    assert!(first.track().artist().images().is_empty());
 }
 
 #[test]
@@ -259,4 +259,14 @@ fn debug_leaves_out_the_text_of_the_response() {
     let shown = format!("{page:?} {:?} {:#?}", page.items()[0], page.items());
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("1700000000"));
+}
+
+#[test]
+fn a_loved_track_wraps_a_track() {
+    let page = decode::user_get_loved_tracks(&raw(RECORDED)).unwrap();
+    let row = page[0].clone();
+    let track: &Track = row.as_ref();
+    assert_eq!((row.loved_at(), track.name()), (1_717_821_545, "68"));
+    assert_eq!(row.json()["name"], "68");
+    assert_eq!(row.into_track().artist().name(), "Nolan Taylor");
 }

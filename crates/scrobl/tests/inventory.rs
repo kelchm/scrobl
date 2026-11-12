@@ -27,67 +27,47 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 const LEVELS: &[(&str, &str, &str)] = &[
     (
         "chart.getTopArtists",
-        "`model::Page<ChartArtist>`",
+        "`model::Page<Artist>`",
         "live-verified",
     ),
-    (
-        "chart.getTopTags",
-        "`model::List<ChartTag>`",
-        "live-verified",
-    ),
+    ("chart.getTopTags", "`model::List<Tag>`", "live-verified"),
     (
         "chart.getTopTracks",
-        "`model::Page<ChartTrack>`",
+        "`model::Page<Track>`",
         "live-verified",
     ),
     (
         "geo.getTopArtists",
-        "`model::Page<GeoArtist>`",
+        "`model::Page<CountryArtist>`",
         "live-verified",
     ),
     (
         "geo.getTopTracks",
-        "`model::Page<GeoTrack>`",
+        "`model::Page<CountryTrack>`",
         "live-verified",
     ),
     (
         "library.getArtists",
-        "`model::Page<LibraryArtist>`",
+        "`model::Page<UserArtist>`",
         "live-verified",
     ),
     ("tag.getInfo", "`model::TagInfo`", "live-verified"),
-    (
-        "tag.getSimilar",
-        "`model::List<SimilarTag>`",
-        "typed-derived",
-    ),
-    (
-        "tag.getTopAlbums",
-        "`model::Page<TagTopAlbum>`",
-        "live-verified",
-    ),
+    ("tag.getSimilar", "`model::List<Tag>`", "typed-derived"),
+    ("tag.getTopAlbums", "`model::Page<Album>`", "live-verified"),
     (
         "tag.getTopArtists",
-        "`model::Page<TagTopArtist>`",
+        "`model::Page<Artist>`",
         "live-verified",
     ),
-    ("tag.getTopTags", "`model::AllTags`", "live-verified"),
-    (
-        "tag.getTopTracks",
-        "`model::Page<TagTopTrack>`",
-        "live-verified",
-    ),
+    ("tag.getTopTags", "`model::List<Tag>`", "live-verified"),
+    ("tag.getTopTracks", "`model::Page<Track>`", "live-verified"),
     (
         "tag.getWeeklyChartList",
         "`model::List<WeeklyChartRange>`",
         "live-verified",
     ),
-    (
-        "user.getFriends",
-        "`model::Page<UserInfo>`",
-        "live-verified",
-    ),
-    ("user.getInfo", "`model::UserInfo`", "live-verified"),
+    ("user.getFriends", "`model::Page<User>`", "live-verified"),
+    ("user.getInfo", "`model::User`", "live-verified"),
     (
         "user.getLovedTracks",
         "`model::Page<LovedTrack>`",
@@ -95,7 +75,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ),
     (
         "user.getPersonalTags",
-        "`model::Page` of `TaggedArtist`, `TaggedAlbum` or `TaggedTrack`",
+        "`model::Page` of `Artist`, `Album` or `Track`",
         "live-verified",
     ),
     (
@@ -105,18 +85,18 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ),
     (
         "user.getTopAlbums",
-        "`model::Page<TopAlbum>`",
+        "`model::Page<UserAlbum>`",
         "live-verified",
     ),
     (
         "user.getTopArtists",
-        "`model::Page<TopArtist>`",
+        "`model::Page<UserArtist>`",
         "live-verified",
     ),
-    ("user.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("user.getTopTags", "`model::List<UserTag>`", "live-verified"),
     (
         "user.getTopTracks",
-        "`model::Page<TopTrack>`",
+        "`model::Page<UserTrack>`",
         "live-verified",
     ),
     (

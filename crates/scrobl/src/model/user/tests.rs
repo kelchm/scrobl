@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
-use crate::model::decode;
+use crate::model::{Album, Artist, decode};
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -127,18 +127,24 @@ fn plain_page_with_now_playing() {
         scrobbles[0].track().url(),
         Some("https://example.invalid/track")
     );
-    assert_eq!(scrobbles[0].artist().name(), "Artist");
-    assert_eq!(scrobbles[0].artist().mbid(), None);
-    assert_eq!(scrobbles[0].artist().url(), None);
-    assert_eq!(scrobbles[0].album().title(), Some("Album"));
-    assert_eq!(scrobbles[0].album().mbid(), None);
+    assert_eq!(scrobbles[0].track().artist().name(), "Artist");
+    assert_eq!(scrobbles[0].track().artist().mbid(), None);
+    assert_eq!(scrobbles[0].track().artist().url(), None);
+    assert_eq!(
+        scrobbles[0].track().album().map(|album| album.name()),
+        Some("Album")
+    );
+    assert_eq!(
+        scrobbles[0].track().album().and_then(|album| album.mbid()),
+        None
+    );
     assert_eq!(scrobbles[0].loved(), None);
     assert_eq!(scrobbles[1].timestamp(), 1_699_999_999);
 
     let playing = page.now_playing().unwrap();
     assert_eq!(playing.track().name(), "Playing");
-    assert_eq!(playing.artist().name(), "Playing Artist");
-    assert_eq!(playing.album().title(), None);
+    assert_eq!(playing.track().artist().name(), "Playing Artist");
+    assert_eq!(playing.track().album().map(|album| album.name()), None);
 }
 
 #[test]
@@ -150,14 +156,17 @@ fn extended_page_reads_artist_name_url_and_loved() {
     .unwrap();
 
     let first = &page.scrobbles()[0];
-    assert_eq!(first.artist().name(), "Artist");
+    assert_eq!(first.track().artist().name(), "Artist");
     assert_eq!(
-        first.artist().mbid(),
+        first.track().artist().mbid(),
         Some("11111111-1111-1111-1111-111111111111")
     );
-    assert_eq!(first.artist().url(), Some("https://example.invalid/artist"));
+    assert_eq!(
+        first.track().artist().url(),
+        Some("https://example.invalid/artist")
+    );
     assert_eq!(first.loved(), Some(true));
-    assert_eq!(first.album().title(), None);
+    assert_eq!(first.track().album().map(|album| album.name()), None);
     assert_eq!(page.scrobbles()[1].loved(), Some(false));
 }
 
@@ -490,8 +499,20 @@ fn a_row_without_an_album_has_no_album() {
     let mut row = plain_row("1700000000", "One");
     row.as_object_mut().unwrap().remove("album");
     let page = decode(&rows(vec![row])).unwrap();
-    assert_eq!(page.scrobbles()[0].album().title(), None);
-    assert_eq!(page.scrobbles()[0].album().mbid(), None);
+    assert_eq!(
+        page.scrobbles()[0]
+            .track()
+            .album()
+            .map(|album| album.name()),
+        None
+    );
+    assert_eq!(
+        page.scrobbles()[0]
+            .track()
+            .album()
+            .and_then(|album| album.mbid()),
+        None
+    );
 }
 
 #[test]
@@ -527,8 +548,8 @@ fn errors_and_debug_never_contain_response_text() {
         "{page:?} {:?} {:?} {:?} {:?}",
         page.scrobbles()[0],
         page.scrobbles()[0].track(),
-        page.scrobbles()[0].artist(),
-        page.scrobbles()[0].album(),
+        page.scrobbles()[0].track().artist(),
+        page.scrobbles()[0].track().album(),
     );
     assert!(!rendered.contains(SECRET), "{rendered}");
 
@@ -714,7 +735,7 @@ fn an_artist_with_both_name_fields_that_agree_is_accepted() {
         json!({"name": "X", "#text": "X", "mbid": ""}),
     )]))
     .unwrap();
-    assert_eq!(page.scrobbles()[0].artist().name(), "X");
+    assert_eq!(page.scrobbles()[0].track().artist().name(), "X");
 }
 
 #[test]
@@ -752,4 +773,24 @@ fn the_artist_name_is_checked_on_the_now_playing_row_too() {
     playing["artist"] = json!({"name": "X", "#text": "Y"});
     let error = decode_error(&rows(vec![playing]));
     assert_names(&error, "recenttracks.track[0].artist");
+}
+
+#[test]
+fn a_scrobble_and_the_track_playing_wrap_a_track() {
+    let page = decode(&rows(vec![
+        now_playing_row(),
+        plain_row("1700000000", "One"),
+    ]))
+    .unwrap();
+    let scrobble = page.scrobbles()[0].clone();
+    let track: &Track = scrobble.as_ref();
+    assert_eq!((track.name(), track.artist().name()), ("One", "Artist"));
+    assert_eq!(scrobble.json()["name"], "One");
+    assert_eq!(scrobble.into_track().name(), "One");
+
+    let playing = page.now_playing().unwrap().clone();
+    let track: &Track = playing.as_ref();
+    assert_eq!(playing.json()["name"], track.name());
+    assert_eq!(playing.clone().into_track().name(), track.name());
+    assert_eq!(page.clone().into_scrobbles().len(), 1);
 }

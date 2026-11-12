@@ -32,14 +32,14 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn info(user: &Value) -> Result<UserInfo, Error> {
-    UserInfo::decode(&raw(
+fn info(user: &Value) -> Result<User, Error> {
+    decode::user_get_info(&raw(
         &methods::USER_GET_INFO,
         json!({"user": user}).to_string(),
     ))
 }
 
-fn friends(body: &Value) -> Result<Page<UserInfo>, Error> {
+fn friends(body: &Value) -> Result<Page<User>, Error> {
     decode::user_get_friends(&raw(&methods::USER_GET_FRIENDS, body.to_string()))
 }
 
@@ -70,17 +70,17 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_recorded_profile_decodes() {
-    let user = UserInfo::decode(&raw(&methods::USER_GET_INFO, INFO)).unwrap();
+    let user = decode::user_get_info(&raw(&methods::USER_GET_INFO, INFO)).unwrap();
     assert_eq!(user.name(), "kelchm");
     assert_eq!(user.realname(), Some("Matt Kelch"));
     assert_eq!(user.url(), Some("https://www.last.fm/user/kelchm"));
     assert_eq!(user.country(), Some("United States"));
-    assert_eq!(user.playcount(), 242_328);
+    assert_eq!(user.playcount(), Some(242_328));
     assert_eq!(
         (user.artist_count(), user.album_count(), user.track_count()),
         (Some(10_105), Some(21_774), Some(47_059))
     );
-    assert_eq!(user.registered(), 1_179_864_814);
+    assert_eq!(user.registered_at(), 1_179_864_814);
     assert_eq!(user.subscriber(), Some(true));
     // What the model does not name is still in the profile.
     assert_eq!(user.json()["type"], "subscriber");
@@ -124,7 +124,7 @@ fn the_derived_friends_page_decodes() {
     let rows: Vec<_> = page
         .items()
         .iter()
-        .map(|u| (u.name(), u.realname(), u.country(), u.registered()))
+        .map(|u| (u.name(), u.realname(), u.country(), u.registered_at()))
         .collect();
     assert_eq!(
         rows,
@@ -147,10 +147,12 @@ fn the_derived_friends_page_decodes() {
     // A friend's row has no counts but the playcount, which the service
     // sent as 0, and `registered.#text` is a date here, not a number.
     let first = &page.items()[0];
+    // The service sends zeros for a friend's counts, and they are not read.
     assert_eq!(
         (first.playcount(), first.artist_count(), first.subscriber()),
-        (0, None, Some(false))
+        (None, None, None)
     );
+    assert_eq!(first.json()["playcount"], "0");
     assert_eq!(first.json()["country"], "None");
     assert_eq!(first.json()["registered"]["#text"], "2017-07-14 02:40");
 }
@@ -181,7 +183,7 @@ fn a_malformed_profile_names_the_field() {
         user
     };
     names(
-        UserInfo::decode(&raw(
+        decode::user_get_info(&raw(
             &methods::USER_GET_INFO,
             json!({"other": SECRET}).to_string(),
         )),
@@ -229,7 +231,7 @@ fn what_a_profile_may_leave_out_reads_as_none() {
     let user = info(&json!({"name": "a", "playcount": 3,
                             "registered": {"unixtime": 1_500_000_000}}))
     .unwrap();
-    assert_eq!(user.playcount(), 3);
+    assert_eq!(user.playcount(), Some(3));
     assert_eq!(
         (
             user.realname(),
@@ -248,7 +250,7 @@ fn what_a_profile_may_leave_out_reads_as_none() {
 #[test]
 fn a_response_to_another_method_is_refused() {
     let as_friends = raw(&methods::USER_GET_FRIENDS, INFO);
-    let error = UserInfo::decode(&as_friends).unwrap_err();
+    let error = decode::user_get_info(&as_friends).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert!(error.to_string().contains("different method"));
 
@@ -266,5 +268,16 @@ fn debug_leaves_out_the_text_of_the_response() {
     let page = friends(&page(json!([named]), 1)).unwrap();
     let shown = format!("{user:?} {page:?} {:?}", page.items());
     assert!(!shown.contains(SECRET), "{shown}");
-    assert!(shown.contains("registered: 1500000000"), "{shown}");
+    assert!(shown.contains("registered_at: 1500000000"), "{shown}");
+}
+
+#[test]
+fn a_user_is_a_user_wherever_it_comes_from() {
+    fn name(user: &impl AsRef<User>) -> &str {
+        user.as_ref().name()
+    }
+    let user = decode::user_get_info(&raw(&methods::USER_GET_INFO, INFO)).unwrap();
+    assert_eq!(name(&user), "kelchm");
+    let page = decode::user_get_friends(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
+    assert_eq!(name(&page[0]), page[0].name());
 }

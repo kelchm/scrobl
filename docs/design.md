@@ -119,14 +119,19 @@ Typed models are decoded from `Raw` on request, by one function for each method 
 
 A list is one of two types. `Page<T>` is one page of a list the service pages: its rows, its place (`number()`, `per_page()`, `total_pages()`, `total()`, `next_page()`), who or what it is about (`subject()`), and `ranked()`, which gives each row its place in the whole list. `List<T>` is a list the service sends whole. A page of the history is a `HistoryPage`: the scrobbles, the track playing now, and the same place accessors.
 
+Five things have one type each wherever a reply names them: `Artist`, `Album`, `Track`, `Tag` and `User`. Each carries what identifies it (`name`, `mbid`, `url`, `images`), what is true of it everywhere (a track's `artist`, `album` and `duration`), and the service's counts for everyone (`listeners`, `playcount`, a tag's `taggings` and `reach`) where a reply has them. A count a reply does not send is `None`.
+
+A number that is true only inside one list is on a row of that list, which wraps the thing: `UserArtist`, `UserAlbum`, `UserTrack` and `UserTag` hold a user's own play or use count, `CountryArtist` and `CountryTrack` the listeners in one country, `LovedTrack` when a track was loved. So the chart of the service is a `Page<Artist>`, and a user's top artists a `Page<UserArtist>`: the two play counts mean different things and cannot be mistaken for each other. The rank the service sends with a row is not read. On some methods it starts again on every page, and `ranked()` is right on all of them.
+
 ```rust
 let page = decode::user_get_recent_tracks(&raw)?;   // a HistoryPage
 for scrobble in page.scrobbles() {
     scrobble.timestamp();        // seconds since the epoch, always present for a scrobble
     scrobble.track().name();
-    scrobble.artist().mbid();    // None when missing or empty
+    scrobble.track().artist().mbid();   // None when missing or empty
+    scrobble.track().album();    // None for a scrobble without an album
     scrobble.loved();            // None unless the page was requested with extended=1
-    scrobble.track().images();   // &[Image]: one address for each size, in the service's order
+    scrobble.track().images().largest();   // one address for each size, in the service's order
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
@@ -254,7 +259,7 @@ impl ClientBuilder {   // each setting has a default; build() fails with ErrorKi
 impl User {
     pub fn recent_tracks(&self) -> RecentTracksQuery;     // the history: one page, or a checked scan
     pub fn loved_tracks(&self) -> LovedTracksQuery;       // one page, newest first; limit 1 to 1000
-    pub fn info(&self) -> UserInfoQuery;
+    pub fn info(&self) -> UserInfoQuery;                  // a User
     pub fn friends(&self) -> FriendsQuery;
     pub fn top_artists(&self) -> TopArtistsQuery;         // also top_albums, top_tracks, top_tags
     pub fn weekly_chart_list(&self) -> WeeklyChartListQuery;
@@ -265,7 +270,7 @@ impl User {
 impl TopArtistsQuery {   // the shape of a list query
     pub fn period(self, Period) -> Self;   // the top lists of artists, albums and tracks
     pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;   // where the method pages
-    pub async fn send(self) -> Result<Response<Page<TopArtist>>, Error>;   // one page
+    pub async fn send(self) -> Result<Response<Page<UserArtist>>, Error>;   // one page
 }
 impl RecentTracksQuery {
     pub fn window(self, Window) -> Self;  pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;
@@ -587,7 +592,7 @@ The four top lists and `library.getArtists`, on 2026-11-10, read through the cli
 - A page far beyond the last is HTTP 200 with an empty array and the true `total` and `totalPages`, not an error.
 - `@attr.rank` counts through the whole list: page 2 at `limit=5` holds ranks 6 to 10.
 - `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400. Its message names the parameter and its range, but a message is text the network chose, which no error of this library prints. So the client refuses a 0 itself, naming the parameter. It sets no upper bound: the ranges differ by method, and `library.getArtists` applied `limit=2000`.
-- 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `TopTrack::duration()` reads it as `None`.
+- 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `Track::duration()` reads it as `None`.
 - The `@attr` of `user.getTopTags` holds the user and nothing else: no page and no total.
 
 The weekly charts, the same day:

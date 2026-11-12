@@ -1,14 +1,34 @@
 //! What a country plays most: the replies to `geo.getTopArtists` and
 //! `geo.getTopTracks`.
 
-use std::fmt;
-
 use serde_json::{Map, Value};
 
+use super::entity::{self, Artist, Counts, Length, Track, counted_row};
+use super::{Page, shared};
 use crate::error::Error;
-use crate::model::Page;
-use crate::model::shared::{self, Artist, Track};
 use crate::protocol::{Raw, methods};
+
+counted_row! {
+    /// An artist in a country's chart, with how many listeners it has there.
+    CountryArtist {
+        /// How many listeners the artist has in the country. This is the
+        /// row's own number: the artist's `listeners` everywhere are not in
+        /// this reply.
+        listeners,
+        artist / into_artist: Artist
+    }
+}
+
+counted_row! {
+    /// A track in a country's chart, with how many listeners it has there.
+    CountryTrack {
+        /// How many listeners the track has in the country. This is the
+        /// row's own number: the track's `listeners` everywhere are not in
+        /// this reply.
+        listeners,
+        track / into_track: Track
+    }
+}
 
 /// Decodes a `geo.getTopArtists` response: one page of the artists a country
 /// plays most. The page's subject is the country, as the service spells it.
@@ -33,6 +53,8 @@ use crate::protocol::{Raw, methods};
 /// assert_eq!(page.subject(), Some("Germany"));
 /// assert_eq!(page[0].artist().name(), "A");
 /// assert_eq!(page[0].listeners(), 30);
+/// // The count is the country's, so the artist's own stays unsaid.
+/// assert_eq!(page[0].artist().listeners(), None);
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 ///
@@ -41,14 +63,14 @@ use crate::protocol::{Raw, methods};
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.country` is required, and a row
 /// needs a `name` and `listeners`.
-pub fn geo_get_top_artists(raw: &Raw) -> Result<Page<GeoArtist>, Error> {
+pub fn geo_get_top_artists(raw: &Raw) -> Result<Page<CountryArtist>, Error> {
     shared::paged(
         raw,
         &methods::GEO_GET_TOP_ARTISTS,
         "topartists",
         "artist",
         Some("country"),
-        geo_artist,
+        country_artist,
     )
 }
 
@@ -61,115 +83,28 @@ pub fn geo_get_top_artists(raw: &Raw) -> Result<Page<GeoArtist>, Error> {
 /// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
 /// shares](super::decode#errors). `@attr.country` is required, and a row
 /// needs a `name`, an `artist` and `listeners`.
-pub fn geo_get_top_tracks(raw: &Raw) -> Result<Page<GeoTrack>, Error> {
+pub fn geo_get_top_tracks(raw: &Raw) -> Result<Page<CountryTrack>, Error> {
     shared::paged(
         raw,
         &methods::GEO_GET_TOP_TRACKS,
         "tracks",
         "track",
         Some("country"),
-        geo_track,
+        country_track,
     )
 }
 
-/// An artist in a country's chart. [`json`](Self::json) is the row exactly
-/// as decoded.
-#[derive(Clone)]
-pub struct GeoArtist {
-    listeners: u64,
-    artist: Artist,
-    json: Value,
-}
-
-impl GeoArtist {
-    /// The service's `listeners` for the artist in this chart.
-    pub fn listeners(&self) -> u64 {
-        self.listeners
-    }
-
-    /// The artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for GeoArtist {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GeoArtist")
-            .field("listeners", &self.listeners)
-            .finish_non_exhaustive()
-    }
-}
-
-/// A track in a country's chart. [`json`](Self::json) is the row exactly as
-/// decoded.
-#[derive(Clone)]
-pub struct GeoTrack {
-    listeners: u64,
-    duration: Option<u64>,
-    track: Track,
-    artist: Artist,
-    json: Value,
-}
-
-impl GeoTrack {
-    /// The service's `listeners` for the track in this chart.
-    pub fn listeners(&self) -> u64 {
-        self.listeners
-    }
-
-    /// The length of the track in seconds. `None` when the row has no
-    /// `duration` or gives 0, which is read as a length the service does
-    /// not know; [`json`](Self::json) tells the two apart.
-    pub fn duration(&self) -> Option<u64> {
-        self.duration
-    }
-
-    /// The track.
-    pub fn track(&self) -> &Track {
-        &self.track
-    }
-
-    /// The track's artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The row exactly as decoded.
-    pub fn json(&self) -> &Value {
-        &self.json
-    }
-}
-
-impl fmt::Debug for GeoTrack {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GeoTrack")
-            .field("listeners", &self.listeners)
-            .field("duration", &self.duration)
-            .finish_non_exhaustive()
-    }
-}
-
-fn geo_artist(row: Map<String, Value>, at: &str) -> Result<GeoArtist, Error> {
-    Ok(GeoArtist {
+fn country_artist(row: Map<String, Value>, at: &str) -> Result<CountryArtist, Error> {
+    Ok(CountryArtist {
         listeners: shared::required_uint(&row, at, "listeners")?,
-        artist: shared::parse_artist_row(&row, at)?,
-        json: Value::Object(row),
+        artist: entity::artist(row, at, Counts::Neither)?,
     })
 }
 
-fn geo_track(row: Map<String, Value>, at: &str) -> Result<GeoTrack, Error> {
-    Ok(GeoTrack {
+fn country_track(row: Map<String, Value>, at: &str) -> Result<CountryTrack, Error> {
+    Ok(CountryTrack {
         listeners: shared::required_uint(&row, at, "listeners")?,
-        duration: shared::duration(&row, at)?,
-        track: shared::parse_track(&row, at)?,
-        artist: shared::parse_artist(&row, at)?,
-        json: Value::Object(row),
+        track: entity::track(row, at, Counts::Neither, Length::Read)?,
     })
 }
 

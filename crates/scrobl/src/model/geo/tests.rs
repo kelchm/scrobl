@@ -30,11 +30,11 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<Page<GeoArtist>, Error> {
+fn artists(body: &Value) -> Result<Page<CountryArtist>, Error> {
     decode::geo_get_top_artists(&raw(&methods::GEO_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<Page<GeoTrack>, Error> {
+fn tracks(body: &Value) -> Result<Page<CountryTrack>, Error> {
     decode::geo_get_top_tracks(&raw(&methods::GEO_GET_TOP_TRACKS, body.to_string()))
 }
 
@@ -120,8 +120,8 @@ fn the_recorded_tracks_of_a_country_decode() {
         .map(|t| {
             (
                 t.track().name(),
-                t.artist().name(),
-                t.duration(),
+                t.track().artist().name(),
+                t.track().duration().map(|length| length.as_secs()),
                 t.listeners(),
             )
         })
@@ -153,7 +153,7 @@ fn a_page_may_be_one_object_or_empty_and_needs_no_rank() {
     let mut track = track_row("T");
     track["duration"] = json!("0");
     let page = tracks(&paged("tracks", "track", json!([track]), 1)).unwrap();
-    assert_eq!(page.items()[0].duration(), None);
+    assert_eq!(page.items()[0].track().duration(), None);
 }
 
 #[test]
@@ -214,4 +214,21 @@ fn debug_leaves_out_the_text_of_the_response() {
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("Page {"), "{shown}");
+}
+
+#[test]
+fn a_row_of_a_country_keeps_its_count_apart_from_the_things() {
+    let page = decode::geo_get_top_artists(&raw(&methods::GEO_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let row = page[0].clone();
+    let artist: &Artist = row.as_ref();
+    // The listeners are the country's, so the artist's own stay unsaid.
+    assert_eq!((row.listeners(), artist.listeners()), (69_663, None));
+    assert_eq!(row.json()["listeners"], "69663");
+    assert_eq!(row.into_artist().name(), "Radiohead");
+
+    let page = decode::geo_get_top_tracks(&raw(&methods::GEO_GET_TOP_TRACKS, TRACKS)).unwrap();
+    let row = page[0].clone();
+    let track: &Track = row.as_ref();
+    assert_eq!((row.listeners(), track.listeners()), (19_359, None));
+    assert_eq!(row.into_track().name(), "Nicole Kidman");
 }

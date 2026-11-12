@@ -37,21 +37,21 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |
 | `auth.getToken` | GET | API key, signature | — | — | — | — | inventoried |
 | **chart** | | | | | | | |
-| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<ChartArtist>` | live-verified |
-| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::List<ChartTag>` | live-verified |
-| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<ChartTrack>` | live-verified |
+| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<Artist>` | live-verified |
+| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::List<Tag>` | live-verified |
+| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<Track>` | live-verified |
 | **geo** | | | | | | | |
-| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::Page<GeoArtist>` | live-verified |
-| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::Page<GeoTrack>` | live-verified |
+| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::Page<CountryArtist>` | live-verified |
+| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::Page<CountryTrack>` | live-verified |
 | **library** | | | | | | | |
-| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::Page<LibraryArtist>` | live-verified |
+| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::Page<UserArtist>` | live-verified |
 | **tag** | | | | | | | |
 | `tag.getInfo` | GET | API key | — | — | _lang_, tag | `model::TagInfo` | live-verified |
-| `tag.getSimilar` | GET | API key | — | — | tag | `model::List<SimilarTag>` | typed-derived |
-| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<TagTopAlbum>` | live-verified |
-| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<TagTopArtist>` | live-verified |
-| `tag.getTopTags` | GET | API key | — | — | — | `model::AllTags` | live-verified |
-| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<TagTopTrack>` | live-verified |
+| `tag.getSimilar` | GET | API key | — | — | tag | `model::List<Tag>` | typed-derived |
+| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Album>` | live-verified |
+| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Artist>` | live-verified |
+| `tag.getTopTags` | GET | API key | — | — | — | `model::List<Tag>` | live-verified |
+| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Track>` | live-verified |
 | `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::List<WeeklyChartRange>` | live-verified |
 | **track** | | | | | | | |
 | `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | — | inventoried |
@@ -67,15 +67,15 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `track.unlove` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
 | `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | — | inventoried |
 | **user** | | | | | | | |
-| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::Page<UserInfo>` | live-verified |
-| `user.getInfo` | GET | API key | — | — | _user_ | `model::UserInfo` | live-verified |
+| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::Page<User>` | live-verified |
+| `user.getInfo` | GET | API key | — | — | _user_ | `model::User` | live-verified |
 | `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::Page<LovedTrack>` | live-verified |
-| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | `model::Page` of `TaggedArtist`, `TaggedAlbum` or `TaggedTrack` | live-verified |
+| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | `model::Page` of `Artist`, `Album` or `Track` | live-verified |
 | `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::HistoryPage` | live-verified |
-| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<TopAlbum>` | live-verified |
-| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<TopArtist>` | live-verified |
-| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::List<TopTag>` | live-verified |
-| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<TopTrack>` | live-verified |
+| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserAlbum>` | live-verified |
+| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserArtist>` | live-verified |
+| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::List<UserTag>` | live-verified |
+| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserTrack>` | live-verified |
 | `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyAlbumChart` | live-verified |
 | `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyArtistChart` | live-verified |
 | `user.getWeeklyChartList` | GET | API key | — | — | user | `model::List<WeeklyChartRange>` | live-verified |

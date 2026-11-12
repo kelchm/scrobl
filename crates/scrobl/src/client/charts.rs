@@ -4,7 +4,7 @@
 use super::Client;
 use super::lists::Listing;
 use crate::error::Error;
-use crate::model::{ChartArtist, ChartTag, ChartTrack, GeoArtist, GeoTrack, List, Page, decode};
+use crate::model::{Artist, CountryArtist, CountryTrack, List, Page, Tag, Track, decode};
 use crate::protocol::methods;
 use crate::response::Response;
 
@@ -132,18 +132,18 @@ page_query! {
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
     /// let page = client.chart().top_artists().limit(10).send().await?;
     /// for (place, row) in page.ranked() {
-    ///     println!("{place}. {} ({} plays)", row.artist().name(), row.playcount());
+    ///     println!("{place}. {} ({:?} plays)", row.name(), row.playcount());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    ChartArtistsQuery, CHART_GET_TOP_ARTISTS, ChartArtist, decode::chart_get_top_artists
+    ChartArtistsQuery, CHART_GET_TOP_ARTISTS, Artist, decode::chart_get_top_artists
 }
 
 page_query! {
     /// A `chart.getTopTracks` query: the tracks played most on the whole
     /// service. Made by [`Chart::top_tracks`].
-    ChartTracksQuery, CHART_GET_TOP_TRACKS, ChartTrack, decode::chart_get_top_tracks
+    ChartTracksQuery, CHART_GET_TOP_TRACKS, Track, decode::chart_get_top_tracks
 }
 
 /// A `chart.getTopTags` query: the tags used most on the whole service.
@@ -175,7 +175,7 @@ impl ChartTagsQuery {
     /// before anything is sent; any error of [`Client::call`]; and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<List<ChartTag>>, Error> {
+    pub async fn send(self) -> Result<Response<List<Tag>>, Error> {
         self.list
             .send(&methods::CHART_GET_TOP_TAGS, decode::chart_get_top_tags)
             .await
@@ -198,7 +198,7 @@ page_query! {
     /// # Ok(())
     /// # }
     /// ```
-    GeoArtistsQuery, GEO_GET_TOP_ARTISTS, GeoArtist, decode::geo_get_top_artists
+    GeoArtistsQuery, GEO_GET_TOP_ARTISTS, CountryArtist, decode::geo_get_top_artists
 }
 
 page_query! {
@@ -209,5 +209,5 @@ page_query! {
     /// The method's `location` parameter, a city within the country, is not
     /// offered: on 2026-11-11 the service sent the same rows with it and
     /// without.
-    GeoTracksQuery, GEO_GET_TOP_TRACKS, GeoTrack, decode::geo_get_top_tracks
+    GeoTracksQuery, GEO_GET_TOP_TRACKS, CountryTrack, decode::geo_get_top_tracks
 }

@@ -6,8 +6,7 @@ use super::charts::{Chart, page_query};
 use super::lists::Listing;
 use crate::error::Error;
 use crate::model::{
-    AllTags, List, Page, SimilarTag, TagInfo, TagTopAlbum, TagTopArtist, TagTopTrack,
-    WeeklyChartRange, decode,
+    Album, Artist, List, Page, Tag as TagEntity, TagInfo, Track, WeeklyChartRange, decode,
 };
 use crate::protocol::{Request, methods};
 use crate::response::Response;
@@ -87,7 +86,7 @@ impl Chart {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let tag = client.tag("indie").info().send().await?;
-/// println!("{}: used {} times by {} users", tag.name(), tag.total(), tag.reach());
+/// println!("{}: used {} times by {} users", tag.tag().name(), tag.taggings(), tag.reach());
 /// # Ok(())
 /// # }
 /// ```
@@ -122,7 +121,7 @@ impl TagInfoQuery {
             request = request.param("lang", lang);
         }
         let raw = self.client.call(&request).await?;
-        let value = TagInfo::decode(&raw)?;
+        let value = decode::tag_get_info(&raw)?;
         Ok(Response::new(value, raw))
     }
 }
@@ -145,7 +144,7 @@ impl SimilarTagsQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<List<SimilarTag>>, Error> {
+    pub async fn send(self) -> Result<Response<List<TagEntity>>, Error> {
         self.list
             .send(&methods::TAG_GET_SIMILAR, decode::tag_get_similar)
             .await
@@ -160,24 +159,24 @@ page_query! {
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
     /// let page = client.tag("indie").top_albums().limit(10).send().await?;
     /// for row in page.items() {
-    ///     println!("{} by {}", row.album().title().unwrap_or("?"), row.artist().name());
+    ///     println!("{} by {}", row.name(), row.artist().map_or("?", |artist| artist.name()));
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    TagTopAlbumsQuery, TAG_GET_TOP_ALBUMS, TagTopAlbum, decode::tag_get_top_albums
+    TagTopAlbumsQuery, TAG_GET_TOP_ALBUMS, Album, decode::tag_get_top_albums
 }
 
 page_query! {
     /// A `tag.getTopArtists` query: the artists given a tag most. Made by
     /// [`Tag::top_artists`].
-    TagTopArtistsQuery, TAG_GET_TOP_ARTISTS, TagTopArtist, decode::tag_get_top_artists
+    TagTopArtistsQuery, TAG_GET_TOP_ARTISTS, Artist, decode::tag_get_top_artists
 }
 
 page_query! {
     /// A `tag.getTopTracks` query: the tracks given a tag most. Made by
     /// [`Tag::top_tracks`].
-    TagTopTracksQuery, TAG_GET_TOP_TRACKS, TagTopTrack, decode::tag_get_top_tracks
+    TagTopTracksQuery, TAG_GET_TOP_TRACKS, Track, decode::tag_get_top_tracks
 }
 
 /// A `tag.getWeeklyChartList` query: the weeks the service keeps charts
@@ -220,7 +219,7 @@ impl TagWeeklyChartListQuery {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let list = client.chart().all_tags().limit(100).offset(100).send().await?;
-/// println!("tags {} to {} of {}", list.offset() + 1, list.offset() + 100, list.total());
+/// println!("tags 101 to {}", 100 + list.len());
 /// # Ok(())
 /// # }
 /// ```
@@ -254,7 +253,7 @@ impl AllTagsQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<AllTags>, Error> {
+    pub async fn send(self) -> Result<Response<List<TagEntity>>, Error> {
         let mut request = Request::new(&methods::TAG_GET_TOP_TAGS);
         if let Some(limit) = self.limit {
             request = request.param("num_res", limit);
@@ -263,7 +262,7 @@ impl AllTagsQuery {
             request = request.param("offset", offset);
         }
         let raw = self.client.call(&request).await?;
-        let value = AllTags::decode(&raw)?;
+        let value = decode::tag_get_top_tags(&raw)?;
         Ok(Response::new(value, raw))
     }
 }

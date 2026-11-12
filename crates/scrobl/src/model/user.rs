@@ -8,14 +8,14 @@ mod tagged;
 mod top;
 mod weekly;
 
-pub use info::{UserInfo, user_get_friends};
+pub use info::{User, user_get_friends, user_get_info};
 pub use loved::{LovedTrack, user_get_loved_tracks};
 pub use tagged::{
-    TaggedAlbum, TaggedArtist, TaggedTrack, user_get_personal_tags_albums,
-    user_get_personal_tags_artists, user_get_personal_tags_tracks,
+    user_get_personal_tags_albums, user_get_personal_tags_artists, user_get_personal_tags_tracks,
 };
+pub(super) use top::user_artist;
 pub use top::{
-    TopAlbum, TopArtist, TopTag, TopTrack, user_get_top_albums, user_get_top_artists,
+    UserAlbum, UserArtist, UserTag, UserTrack, user_get_top_albums, user_get_top_artists,
     user_get_top_tags, user_get_top_tracks,
 };
 pub(super) use weekly::chart_range;
@@ -28,8 +28,9 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
+use super::entity::{self, Counts, Length, Track};
 use super::page::Paging;
-use super::shared::{self, Album, Artist, Track, missing_or};
+use super::shared::{self, missing_or};
 use crate::de;
 use crate::error::Error;
 use crate::protocol::{Raw, methods};
@@ -86,7 +87,7 @@ const ROOT: &str = "recenttracks";
 /// assert_eq!(page.total(), 1);
 /// assert_eq!(page.scrobbles().len(), 1);
 /// assert_eq!(page.scrobbles()[0].timestamp(), 1_700_000_000);
-/// assert_eq!(page.scrobbles()[0].album().title(), Some("Album"));
+/// assert_eq!(page.scrobbles()[0].track().album().map(|album| album.name()), Some("Album"));
 /// assert_eq!(page.now_playing().map(|n| n.track().name()), Some("Playing"));
 /// # Ok::<(), scrobl::Error>(())
 /// ```
@@ -181,10 +182,7 @@ pub fn user_get_recent_tracks(raw: &Raw) -> Result<HistoryPage, Error> {
 pub struct Scrobble {
     timestamp: u64,
     track: Track,
-    artist: Artist,
-    album: Album,
     loved: Option<bool>,
-    json: Value,
 }
 
 impl Scrobble {
@@ -193,19 +191,15 @@ impl Scrobble {
         self.timestamp
     }
 
-    /// The track.
+    /// The track, with its artist and, where the scrobble names one, its
+    /// album.
     pub fn track(&self) -> &Track {
         &self.track
     }
 
-    /// The artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The album.
-    pub fn album(&self) -> &Album {
-        &self.album
+    /// The track, to keep.
+    pub fn into_track(self) -> Track {
+        self.track
     }
 
     /// Whether the user loved the track, as the row returned it. The field is
@@ -217,7 +211,13 @@ impl Scrobble {
 
     /// The row exactly as decoded.
     pub fn json(&self) -> &Value {
-        &self.json
+        self.track.json()
+    }
+}
+
+impl AsRef<Track> for Scrobble {
+    fn as_ref(&self) -> &Track {
+        &self.track
     }
 }
 
@@ -240,26 +240,18 @@ impl fmt::Debug for Scrobble {
 #[derive(Clone)]
 pub struct NowPlaying {
     track: Track,
-    artist: Artist,
-    album: Album,
     loved: Option<bool>,
-    json: Value,
 }
 
 impl NowPlaying {
-    /// The track.
+    /// The track, with its artist and, where the row names one, its album.
     pub fn track(&self) -> &Track {
         &self.track
     }
 
-    /// The artist.
-    pub fn artist(&self) -> &Artist {
-        &self.artist
-    }
-
-    /// The album.
-    pub fn album(&self) -> &Album {
-        &self.album
+    /// The track, to keep.
+    pub fn into_track(self) -> Track {
+        self.track
     }
 
     /// Whether the user loved the track, as the row returned it. The field is
@@ -271,7 +263,13 @@ impl NowPlaying {
 
     /// The row exactly as decoded.
     pub fn json(&self) -> &Value {
-        &self.json
+        self.track.json()
+    }
+}
+
+impl AsRef<Track> for NowPlaying {
+    fn as_ref(&self) -> &Track {
+        &self.track
     }
 }
 
@@ -315,7 +313,7 @@ enum Row {
 
 fn parse_row(index: usize, json: Value) -> Result<Row, Error> {
     let at = format!("recenttracks.track[{index}]");
-    let Value::Object(map) = &json else {
+    let Value::Object(map) = json else {
         return Err(Error::decode_field(&at, "the row is not an object"));
     };
 
@@ -330,40 +328,25 @@ fn parse_row(index: usize, json: Value) -> Result<Row, Error> {
         Some(_) => return Err(Error::decode_field(&format!("{at}.@attr"), "not an object")),
     };
 
-    let track = shared::parse_track(map, &at)?;
-    let artist = shared::parse_artist(map, &at)?;
-    let album = shared::parse_album(map, &at)?;
-    let loved = match map.get("loved") {
-        None => None,
-        Some(value) => Some(
-            de::flag(value)
-                .ok_or_else(|| Error::decode_field(&format!("{at}.loved"), "not a 0/1 flag"))?,
-        ),
-    };
-
-    if flagged {
-        return Ok(Row::NowPlaying(NowPlaying {
-            track,
-            artist,
-            album,
-            loved,
-            json,
-        }));
-    }
-
-    let path = format!("{at}.date.uts");
+    // The track, its artist and its album are held to their shape first,
+    // then `loved`, then the date: a row that is wrong twice names the
+    // first of them.
+    let loved = entity::optional_flag(&map, &at, "loved");
     let timestamp = map
         .get("date")
         .and_then(|date| date.get("uts"))
         .and_then(de::uint)
-        .ok_or_else(|| missing_or(&path, "an unsigned integer"))?;
+        .ok_or_else(|| missing_or(&format!("{at}.date.uts"), "an unsigned integer"));
+    let track = entity::track(map, &at, Counts::Neither, Length::Read)?;
+    let loved = loved?;
+
+    if flagged {
+        return Ok(Row::NowPlaying(NowPlaying { track, loved }));
+    }
     Ok(Row::Scrobble(Scrobble {
-        timestamp,
+        timestamp: timestamp?,
         track,
-        artist,
-        album,
         loved,
-        json,
     }))
 }
 
