@@ -3529,3 +3529,110 @@ async fn the_lists_of_an_artist_are_read_by_name_or_by_id_with_what_was_set() {
     })
     .await;
 }
+
+const ARTIST_INFO: &[u8] = include_bytes!("../fixtures/derived/artist-info.json");
+const ARTIST_USER_TAGS: &[u8] = include_bytes!("../fixtures/derived/artist-tags.json");
+const ALBUM_INFO: &[u8] = include_bytes!("../fixtures/derived/album-info.json");
+const ALBUM_TOP_TAGS: &[u8] = include_bytes!("../fixtures/recorded/album-top-tags.json");
+const ALBUM_USER_TAGS: &[u8] = include_bytes!("../fixtures/derived/album-tags.json");
+
+#[tokio::test]
+async fn what_the_service_says_of_an_artist_and_an_album_is_read_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            ARTIST_INFO,
+            ARTIST_INFO,
+            ARTIST_USER_TAGS,
+            ALBUM_INFO,
+            ALBUM_INFO,
+            ALBUM_TOP_TAGS,
+            ALBUM_USER_TAGS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let artist = client.artist("radiohead");
+
+        let info = artist.info().send().await.unwrap();
+        assert_eq!(info.raw().body(), ARTIST_INFO);
+        assert_eq!(info.artist().name(), "Radiohead");
+        let info = artist
+            .clone()
+            .autocorrect()
+            .info()
+            .lang("de")
+            .for_user(USER)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(info.user_playcount(), Some(386));
+        let tags = artist.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags.raw().body(), ARTIST_USER_TAGS);
+        assert_eq!(tags[0].name(), "synthetic tag");
+
+        let album = client.album("radiohead", "ok computer");
+        let info = album.info().for_user(USER).send().await.unwrap();
+        assert_eq!(info.raw().body(), ALBUM_INFO);
+        assert_eq!(info.album().name(), "OK Computer");
+        assert_eq!(info.tracks().len(), 12);
+        client
+            .album_mbid("0b6b4ba0-d36f-47bd-b4ea-6a5b91842d29")
+            .info()
+            .lang("de")
+            .send()
+            .await
+            .unwrap();
+        let top = album.clone().autocorrect().top_tags().send().await.unwrap();
+        assert_eq!(top.subject(), Some("OK Computer"));
+        assert_eq!(top[0].count(), 100);
+        let tags = album.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags.len(), 2);
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "artist.getInfo"), ("artist", "radiohead")]),
+                pairs(&[
+                    ("method", "artist.getInfo"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1"),
+                    ("lang", "de"),
+                    ("username", USER)
+                ]),
+                pairs(&[
+                    ("method", "artist.getTags"),
+                    ("artist", "radiohead"),
+                    ("user", USER)
+                ]),
+                pairs(&[
+                    ("method", "album.getInfo"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("username", USER)
+                ]),
+                pairs(&[
+                    ("method", "album.getInfo"),
+                    ("mbid", "0b6b4ba0-d36f-47bd-b4ea-6a5b91842d29"),
+                    ("lang", "de")
+                ]),
+                pairs(&[
+                    ("method", "album.getTopTags"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "album.getTags"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("user", USER)
+                ]),
+            ]
+        );
+    })
+    .await;
+}

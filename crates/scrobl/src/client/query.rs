@@ -23,6 +23,8 @@ pub(super) struct Ask {
     /// Why the call cannot be made as it was put together, if it cannot.
     refused: Option<&'static str>,
     pub(super) lang: Option<String>,
+    /// The user whose own play count a `getInfo` reply should carry.
+    pub(super) for_user: Option<String>,
     pub(super) period: Option<Period>,
     pub(super) limit: Option<u32>,
     pub(super) page: Option<u32>,
@@ -38,6 +40,7 @@ impl Ask {
             window: None,
             refused: None,
             lang: None,
+            for_user: None,
             period: None,
             limit: None,
             page: None,
@@ -93,6 +96,9 @@ impl Ask {
         }
         if let Some(lang) = &self.lang {
             request = request.param("lang", lang);
+        }
+        if let Some(user) = &self.for_user {
+            request = request.param("username", user);
         }
         if let Some(period) = self.period {
             request = request.param("period", period.as_str());
@@ -238,6 +244,14 @@ macro_rules! query {
         /// counts all of the user's history when none is sent.
         pub fn period(mut self, period: $crate::client::Period) -> Self {
             self.ask.period = Some(period);
+            self
+        }
+    };
+    (@option for_user) => {
+        /// Asks for one user's own play count as well, which the reply then
+        /// carries as `user_playcount`. Sent as `username`.
+        pub fn for_user(mut self, user: impl Into<String>) -> Self {
+            self.ask.for_user = Some(user.into());
             self
         }
     };

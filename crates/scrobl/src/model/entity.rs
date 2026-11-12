@@ -121,11 +121,13 @@ impl fmt::Debug for Images {
     }
 }
 
-/// An artist. [`json`](Self::json) is the object exactly as decoded.
+/// An artist. [`json`](Self::json) is the artist exactly as decoded.
 ///
 /// `mbid` and `url` are `None` when the member is missing or an empty
 /// string. Where an artist is only named inside a row, as the artist of a
-/// scrobble is, the service sends a name and an id and little else.
+/// scrobble is, the service sends a name and an id and little else. In two
+/// replies, `album.getInfo` and `album.search`, it names an album's artist
+/// with a string alone: that artist has a name and nothing more.
 #[derive(Clone)]
 pub struct Artist {
     name: String,
@@ -170,7 +172,8 @@ impl Artist {
         self.playcount
     }
 
-    /// The object exactly as decoded.
+    /// The artist exactly as decoded: an object, or the string where a
+    /// reply names the artist with nothing else.
     pub fn json(&self) -> &Value {
         &self.json
     }
@@ -499,6 +502,16 @@ impl Counts {
     }
 }
 
+impl Artist {
+    /// The same artist with its counts for everyone, for a reply that keeps
+    /// them apart from the artist's other members.
+    pub(super) fn counted(mut self, listeners: u64, playcount: u64) -> Self {
+        self.listeners = Some(listeners);
+        self.playcount = Some(playcount);
+        self
+    }
+}
+
 /// The artist a row is: its own `name`, `mbid`, `url` and `image`.
 pub(super) fn artist(row: Map<String, Value>, at: &str, counts: Counts) -> Result<Artist, Error> {
     let (listeners, playcount) = counts.read(&row, at)?;
@@ -557,16 +570,57 @@ pub(super) fn named_artist(row: &Map<String, Value>, at: &str) -> Result<Artist,
     })
 }
 
+/// The artist a row names with nothing but a string under `artist`, as
+/// `album.getInfo` does. The artist's JSON is that string.
+fn artist_by_name(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
+    match row.get("artist") {
+        Some(Value::String(name)) if !name.is_empty() => Ok(Artist {
+            name: name.clone(),
+            mbid: None,
+            url: None,
+            images: Images(Vec::new()),
+            listeners: None,
+            playcount: None,
+            json: Value::String(name.clone()),
+        }),
+        _ => Err(missing_or(
+            &format!("{at}.artist"),
+            "a string that is not empty",
+        )),
+    }
+}
+
 /// The album a row is: its own `name`, `mbid`, `url` and `image`, and the
 /// artist it names.
 pub(super) fn album(row: Map<String, Value>, at: &str, counts: Counts) -> Result<Album, Error> {
+    let artist = named_artist(&row, at)?;
+    album_of(row, at, counts, artist)
+}
+
+/// The album a row is, where the row names its artist with a string and
+/// not an object.
+pub(super) fn album_by_name(
+    row: Map<String, Value>,
+    at: &str,
+    counts: Counts,
+) -> Result<Album, Error> {
+    let artist = artist_by_name(&row, at)?;
+    album_of(row, at, counts, artist)
+}
+
+fn album_of(
+    row: Map<String, Value>,
+    at: &str,
+    counts: Counts,
+    artist: Artist,
+) -> Result<Album, Error> {
     let (listeners, playcount) = counts.read(&row, at)?;
     Ok(Album {
         name: required_str(&row, at, "name")?.to_owned(),
         mbid: optional_str(&row, at, "mbid")?,
         url: optional_str(&row, at, "url")?,
         images: images(&row, at)?,
-        artist: Some(named_artist(&row, at)?),
+        artist: Some(artist),
         listeners,
         playcount,
         json: Value::Object(row),

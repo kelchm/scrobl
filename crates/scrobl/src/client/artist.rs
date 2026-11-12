@@ -1,10 +1,10 @@
-//! Typed reads about one artist: who is like them, their albums and
-//! tracks, the tags they are given, and the name the service files them
-//! under.
+//! Typed reads about one artist: what the service says about them, who is
+//! like them, their albums and tracks, the tags they are given, and the
+//! name the service files them under.
 
 use super::Client;
 use super::query::{Ask, query};
-use crate::model::{Album, Artist, List, SimilarArtist, TopTag, Track, decode};
+use crate::model::{Album, Artist, ArtistInfo, List, SimilarArtist, Tag, TopTag, Track, decode};
 use crate::protocol::{MethodSpec, methods};
 
 /// One artist, to ask about. Made by [`Client::artist`] from a name, or by
@@ -70,6 +70,19 @@ impl ArtistHandle {
         }
     }
 
+    /// What the service says about the artist: counts, a few similar
+    /// artists and tags, and what its users wrote.
+    #[doc(alias = "artist.getInfo")]
+    pub fn info(&self) -> ArtistInfoQuery {
+        ArtistInfoQuery::new(self.ask(&methods::ARTIST_GET_INFO))
+    }
+
+    /// The tags `user` has given the artist.
+    #[doc(alias = "artist.getTags")]
+    pub fn tags_of(&self, user: impl Into<String>) -> ArtistTagsOfQuery {
+        ArtistTagsOfQuery::new(self.ask(&methods::ARTIST_GET_TAGS).about("user", user))
+    }
+
     /// The artist the service files this name under. A name that is
     /// already right comes back as itself.
     #[doc(alias = "artist.getCorrection")]
@@ -104,6 +117,36 @@ impl ArtistHandle {
     pub fn top_tags(&self) -> ArtistTopTagsQuery {
         ArtistTopTagsQuery::new(self.ask(&methods::ARTIST_GET_TOP_TAGS))
     }
+}
+
+query! {
+    /// What the service says about one artist. Made by
+    /// [`ArtistHandle::info`].
+    ///
+    /// ```no_run
+    /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+    /// let info = client.artist("Radiohead").info().for_user("rj").send().await?;
+    /// println!(
+    ///     "{}: {} listeners, {:?} plays by rj",
+    ///     info.artist().name(),
+    ///     info.listeners(),
+    ///     info.user_playcount()
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The reply holds five similar artists and five tags at most. An
+    /// artist's albums and tracks are calls of their own.
+    ArtistInfoQuery => ArtistInfo = decode::artist_get_info;
+    lang, for_user
+}
+
+query! {
+    /// The tags one user has given an artist. Made by
+    /// [`ArtistHandle::tags_of`]. A user who has given none is an empty
+    /// list, and a user the service does not know is an error.
+    ArtistTagsOfQuery => List<Tag> = decode::artist_get_tags;
 }
 
 query! {

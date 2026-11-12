@@ -25,12 +25,17 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 /// Methods whose typed model or verification level is above the default, as
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
 const LEVELS: &[(&str, &str, &str)] = &[
+    ("album.getInfo", "`model::AlbumInfo`", "live-verified"),
+    ("album.getTags", "`model::List<Tag>`", "live-verified"),
+    ("album.getTopTags", "`model::List<TopTag>`", "live-verified"),
     ("artist.getCorrection", "`model::Artist`", "live-verified"),
+    ("artist.getInfo", "`model::ArtistInfo`", "live-verified"),
     (
         "artist.getSimilar",
         "`model::List<SimilarArtist>`",
         "live-verified",
     ),
+    ("artist.getTags", "`model::List<Tag>`", "live-verified"),
     (
         "artist.getTopAlbums",
         "`model::Page<Album>`",

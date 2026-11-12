@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The seven tests send about 120 key-only requests between them, a
+//! The eight tests send about 140 key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -940,4 +940,144 @@ async fn the_lists_of_an_artist_against_the_live_service() {
         assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
     }
     println!("unknown artist: error 6 on all five");
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY and SCROBL_LIVE_USER"]
+async fn what_the_service_says_of_an_artist_and_an_album_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let name = env("SCROBL_LIVE_USER");
+    let client = client(&key);
+
+    // An artist: both counts, a few similar artists and tags, and a
+    // description. The counts on the artist are the reply's own.
+    let artist = client.artist("radiohead");
+    let info = artist.info().send().await.unwrap();
+    capture("artist-info", info.raw());
+    assert_eq!(info.artist().name(), "Radiohead");
+    assert_eq!(info.artist().listeners(), Some(info.listeners()));
+    assert!(info.listeners() > 0 && info.playcount() > info.listeners());
+    assert_eq!(info.user_playcount(), None);
+    assert!(!info.similar().is_empty() && !info.tags().is_empty());
+    assert!(info.summary().is_some() && info.published().is_some());
+    println!(
+        "artist: {} listeners, {} similar, {} tags, on tour {}",
+        info.listeners(),
+        info.similar().len(),
+        info.tags().len(),
+        info.on_tour()
+    );
+
+    // With a user named, that user's own plays; by id, the same artist; in
+    // German, another description.
+    let mine = artist.info().for_user(&name).send().await.unwrap();
+    capture("artist-info-user", mine.raw());
+    println!("artist: {:?} plays by the user", mine.user_playcount());
+    assert!(mine.user_playcount().is_some());
+    // An artist the user has never played, on 2026-11-12, has a count of
+    // 0 and not none.
+    let never = client
+        .artist("Crazy Frog")
+        .info()
+        .for_user(&name)
+        .send()
+        .await
+        .unwrap();
+    capture("artist-info-user-never", never.raw());
+    println!(
+        "an artist the user may never have played: {:?}",
+        never.user_playcount()
+    );
+    let by_id = client
+        .artist_mbid("a74b1b7f-71a5-4011-9441-d0b5e4122711")
+        .info()
+        .lang("de")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(by_id.artist().name(), "Radiohead");
+    assert_ne!(by_id.summary(), info.summary());
+    let corrected = client
+        .artist("Guns and Roses")
+        .autocorrect()
+        .info()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(corrected.artist().name(), "Guns N' Roses");
+
+    // The tags of a user: none is an empty list, and no such user an error.
+    let tags = artist.tags_of(&name).send().await.unwrap();
+    capture("artist-tags", tags.raw());
+    assert_eq!(tags.subject(), Some("Radiohead"));
+    println!("artist: {} tags by the user", tags.len());
+    let error = artist
+        .tags_of("zzqqxx-no-such-user-scrobl")
+        .send()
+        .await
+        .unwrap_err();
+    assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+
+    // An album: its artist is a name alone, its tracks are in order and
+    // each has its artist.
+    let album = client.album("radiohead", "ok computer");
+    let info = album.info().for_user(&name).send().await.unwrap();
+    capture("album-info", info.raw());
+    assert_eq!(info.album().name(), "OK Computer");
+    let by = info.album().artist().expect("the album's artist");
+    assert_eq!((by.name(), by.url()), ("Radiohead", None));
+    assert!(info.tracks().len() >= 12);
+    assert!(
+        info.tracks()
+            .iter()
+            .all(|track| track.artist().name() == "Radiohead")
+    );
+    assert!(info.user_playcount().is_some());
+    println!(
+        "album: {} listeners, {} tracks, {} tags, {:?} plays by the user",
+        info.listeners(),
+        info.tracks().len(),
+        info.tags().len(),
+        info.user_playcount()
+    );
+    let small = client
+        .album("Nolan Taylor", "68")
+        .info()
+        .send()
+        .await
+        .unwrap();
+    capture("album-info-small", small.raw());
+    println!(
+        "a small album: {} tracks, {} tags, a description: {}",
+        small.tracks().len(),
+        small.tags().len(),
+        small.summary().is_some()
+    );
+    let by_id = client
+        .album_mbid("233b7916-ae58-3278-9907-f3b591390651")
+        .info()
+        .send()
+        .await
+        .unwrap();
+    capture("album-info-mbid", by_id.raw());
+    println!("an album by id: `{}`", by_id.album().name());
+
+    let top = album.top_tags().send().await.unwrap();
+    capture("album-top-tags", top.raw());
+    assert_eq!(top.subject(), Some("OK Computer"));
+    assert_eq!(top[0].count(), 100);
+    let tags = album.tags_of(&name).send().await.unwrap();
+    capture("album-tags", tags.raw());
+    assert_eq!(tags.subject(), Some("OK Computer"));
+
+    // An album the service does not know is an error on all three.
+    let unknown = client.album("radiohead", "zzqqxx-no-such-album-scrobl");
+    for error in [
+        unknown.info().send().await.map(drop).unwrap_err(),
+        unknown.top_tags().send().await.map(drop).unwrap_err(),
+        unknown.tags_of(&name).send().await.map(drop).unwrap_err(),
+    ] {
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+    }
+    println!("unknown album: error 6 on all three");
 }
