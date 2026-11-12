@@ -11,7 +11,7 @@ This crate stores nothing. To keep a listening history in a SQLite file, see [`s
 ## Status
 
 - Any of the 57 API methods can be called raw, signed where the method needs it.
-- Typed so far: every read in `user` (scrobble history, profile, friends, loved tracks, top lists, weekly charts, tagged items), `library.getArtists`, the charts of the whole service and of a country, and every read in `tag`. All twenty-six have been run against the live service.
+- Typed so far: everything about a user (scrobble history, profile, friends, loved tracks, top lists of all time or of one week, tagged items, library), a tag, a country's charts and the charts of the whole service. All twenty-six methods have been run against the live service.
 - Not built yet: typed models for the other methods, the authentication flows, typed scrobbling.
 
 ## Install
@@ -25,6 +25,39 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 The client is the default feature `client` and runs on Tokio. It spawns nothing, and a current-thread runtime with I/O and time enabled is enough. Without the feature, the crate is the protocol alone, with no I/O, for use with another HTTP client.
 
 ## Example
+
+A typed call is who or what, which question, then `send()`:
+
+```rust
+use scrobl::client::Period;
+use scrobl::{ApiKey, Client};
+
+async fn charts() -> Result<(), scrobl::Error> {
+    let client = Client::builder(ApiKey::new("your-api-key"))
+        .user_agent("example/0.1 (+https://example.org)")
+        .build()?;
+
+    // One page of a user's most played artists.
+    let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).send().await?;
+    for (place, row) in page.ranked() {
+        println!("{place}. {} ({} plays)", row.artist().name(), row.playcount());
+    }
+
+    // Every row of a list, page after page.
+    let mut rows = client.tag("indie").top_tracks().all();
+    while let Some(track) = rows.next().await? {
+        println!("{} by {}", track.name(), track.artist().name());
+    }
+    Ok(())
+}
+```
+
+- An `Artist`, `Album`, `Track`, `Tag` and `User` are the same type wherever a reply names one.
+- A number that is true only in one list, such as a user's own play count, is on a row of that list: `row.playcount()`, `row.artist()`.
+- A fact Last.fm did not send is `None`, never 0. The exact response is on every result as `raw()`.
+- Searching [the documentation](https://docs.rs/scrobl) for a Last.fm method name, such as `user.getTopArtists`, finds its call.
+
+A history is read with a scan, which checks every page against the others:
 
 ```rust
 use scrobl::history::Window;
