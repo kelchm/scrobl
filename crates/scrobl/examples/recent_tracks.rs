@@ -36,7 +36,7 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    println!("{} scrobbles", page.attr().total());
+    println!("{} scrobbles", page.total());
     for scrobble in page.scrobbles() {
         let (artist, track) = (scrobble.artist().name(), scrobble.track().name());
         println!("{} {artist} - {track}", scrobble.timestamp());

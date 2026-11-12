@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Raw, Request, methods};
 
 // Fixtures. Provenance for each:
@@ -29,12 +30,12 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<GeoArtistsPage, Error> {
-    GeoArtistsPage::decode(&raw(&methods::GEO_GET_TOP_ARTISTS, body.to_string()))
+fn artists(body: &Value) -> Result<Page<GeoArtist>, Error> {
+    decode::geo_get_top_artists(&raw(&methods::GEO_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<GeoTracksPage, Error> {
-    GeoTracksPage::decode(&raw(&methods::GEO_GET_TOP_TRACKS, body.to_string()))
+fn tracks(body: &Value) -> Result<Page<GeoTrack>, Error> {
+    decode::geo_get_top_tracks(&raw(&methods::GEO_GET_TOP_TRACKS, body.to_string()))
 }
 
 /// A page of `total` rows in all, of which `rows` are on this one.
@@ -71,20 +72,19 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_recorded_artists_of_a_country_decode() {
-    let page = GeoArtistsPage::decode(&raw(&methods::GEO_GET_TOP_ARTISTS, ARTISTS)).unwrap();
-    assert_eq!(page.country(), "United States");
-    let attr = page.attr();
+    let page = decode::geo_get_top_artists(&raw(&methods::GEO_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    assert_eq!(page.subject(), Some("United States"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 746, 2238)
     );
     let rows: Vec<_> = page
-        .artists()
+        .items()
         .iter()
         .map(|a| {
             (
@@ -103,19 +103,19 @@ fn the_recorded_artists_of_a_country_decode() {
             ("Tyler, The Creator", 62_022, true)
         ]
     );
-    assert!(page.artists()[1].json().get("mbid").is_none());
-    assert_eq!(page.artists()[0].artist().images().len(), 5);
+    assert!(page.items()[1].json().get("mbid").is_none());
+    assert_eq!(page.items()[0].artist().images().len(), 5);
     // The rank the model does not read is still in the row.
-    assert_eq!(page.artists()[2].json()["@attr"]["rank"], "3");
+    assert_eq!(page.items()[2].json()["@attr"]["rank"], "3");
 }
 
 #[test]
 fn the_recorded_tracks_of_a_country_decode() {
-    let page = GeoTracksPage::decode(&raw(&methods::GEO_GET_TOP_TRACKS, TRACKS)).unwrap();
-    assert_eq!(page.country(), "United States");
-    assert_eq!(page.attr().total(), 10_000);
+    let page = decode::geo_get_top_tracks(&raw(&methods::GEO_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!(page.subject(), Some("United States"));
+    assert_eq!(page.total(), 10_000);
     let rows: Vec<_> = page
-        .tracks()
+        .items()
         .iter()
         .map(|t| {
             (
@@ -134,9 +134,9 @@ fn the_recorded_tracks_of_a_country_decode() {
             ("Earrings", "Malcolm Todd", Some(153), 17_525)
         ]
     );
-    assert_eq!(page.tracks()[0].track().images().len(), 4);
+    assert_eq!(page.items()[0].track().images().len(), 4);
     // The service counts this list's ranks from 0.
-    assert_eq!(page.tracks()[0].json()["@attr"]["rank"], "0");
+    assert_eq!(page.items()[0].json()["@attr"]["rank"], "0");
 }
 
 #[test]
@@ -144,16 +144,16 @@ fn a_page_may_be_one_object_or_empty_and_needs_no_rank() {
     let mut row = artist_row("Only");
     row.as_object_mut().unwrap().remove("@attr");
     let one = artists(&paged("topartists", "artist", row, 1)).unwrap();
-    assert_eq!(one.artists()[0].artist().name(), "Only");
+    assert_eq!(one.items()[0].artist().name(), "Only");
 
     let none = tracks(&paged("tracks", "track", json!([]), 0)).unwrap();
-    assert!(none.tracks().is_empty());
-    assert_eq!(none.country(), "Germany");
+    assert!(none.items().is_empty());
+    assert_eq!(none.subject(), Some("Germany"));
 
     let mut track = track_row("T");
     track["duration"] = json!("0");
     let page = tracks(&paged("tracks", "track", json!([track]), 1)).unwrap();
-    assert_eq!(page.tracks()[0].duration(), None);
+    assert_eq!(page.items()[0].duration(), None);
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn a_malformed_page_names_the_field() {
 #[test]
 fn a_response_to_another_method_is_refused() {
     let raw = raw(&methods::GEO_GET_TOP_TRACKS, TRACKS);
-    let error = GeoArtistsPage::decode(&raw).unwrap_err();
+    let error = decode::geo_get_top_artists(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert_eq!(error.method(), Some("geo.getTopTracks"));
 }
@@ -209,9 +209,9 @@ fn debug_leaves_out_the_text_of_the_response() {
     let tracks = tracks(&paged("tracks", "track", json!([track_row(SECRET)]), 1)).unwrap();
     let shown = format!(
         "{artists:?} {:?} {tracks:?} {:?}",
-        artists.artists()[0],
-        tracks.tracks()[0]
+        artists.items()[0],
+        tracks.items()[0]
     );
     assert!(!shown.contains(SECRET), "{shown}");
-    assert!(shown.contains("GeoArtistsPage"), "{shown}");
+    assert!(shown.contains("Page {"), "{shown}");
 }

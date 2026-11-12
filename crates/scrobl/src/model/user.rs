@@ -1,4 +1,4 @@
-//! The `user` package: [`RecentTracksPage`], the reply to
+//! The `user` package: a page of the history, the reply to
 //! `user.getRecentTracks`, here, and the replies to its other reads in the
 //! modules below.
 
@@ -8,34 +8,39 @@ mod tagged;
 mod top;
 mod weekly;
 
-pub use info::{FriendsPage, UserInfo};
-pub use loved::{LovedTrack, LovedTracksPage};
+pub use info::{UserInfo, user_get_friends};
+pub use loved::{LovedTrack, user_get_loved_tracks};
 pub use tagged::{
-    TaggedAlbum, TaggedAlbumsPage, TaggedArtist, TaggedArtistsPage, TaggedTrack, TaggedTracksPage,
+    TaggedAlbum, TaggedArtist, TaggedTrack, user_get_personal_tags_albums,
+    user_get_personal_tags_artists, user_get_personal_tags_tracks,
 };
 pub use top::{
-    TopAlbum, TopAlbumsPage, TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
+    TopAlbum, TopArtist, TopTag, TopTrack, user_get_top_albums, user_get_top_artists,
+    user_get_top_tags, user_get_top_tracks,
 };
 pub(super) use weekly::chart_range;
 pub use weekly::{
-    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartList, WeeklyChartRange, WeeklyTrackChart,
+    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
+    user_get_weekly_chart_list,
 };
 
 use std::fmt;
 
 use serde_json::{Map, Value};
 
-use super::shared::{self, Album, Artist, PageAttr, Track, missing_or};
+use super::page::Paging;
+use super::shared::{self, Album, Artist, Track, missing_or};
 use crate::de;
 use crate::error::Error;
 use crate::protocol::{Raw, methods};
 
 const ROOT: &str = "recenttracks";
 
-/// One page of `user.getRecentTracks`.
+/// One page of a user's history: the reply to `user.getRecentTracks`.
 ///
-/// A page holds the historical rows, the optional now-playing row and the
-/// paging attributes. Decode it with [`decode`](Self::decode).
+/// A page holds the scrobbles, the track playing now if there is one, and
+/// what a [`Page`](super::Page) says about its place in the list. Decode it
+/// with [`user_get_recent_tracks`].
 ///
 /// # Shapes
 ///
@@ -59,7 +64,7 @@ const ROOT: &str = "recenttracks";
 ///   would keep one of the two and drop the other without a word.
 ///
 /// ```
-/// use scrobl::model::RecentTracksPage;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"recenttracks": {
@@ -77,8 +82,8 @@ const ROOT: &str = "recenttracks";
 /// let request = Request::new(&methods::USER_GET_RECENT_TRACKS).param("user", "rj");
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let page = RecentTracksPage::decode(&raw)?;
-/// assert_eq!(page.attr().total(), 1);
+/// let page = decode::user_get_recent_tracks(&raw)?;
+/// assert_eq!(page.total(), 1);
 /// assert_eq!(page.scrobbles().len(), 1);
 /// assert_eq!(page.scrobbles()[0].timestamp(), 1_700_000_000);
 /// assert_eq!(page.scrobbles()[0].album().title(), Some("Album"));
@@ -86,62 +91,84 @@ const ROOT: &str = "recenttracks";
 /// # Ok::<(), scrobl::Error>(())
 /// ```
 #[derive(Clone)]
-pub struct RecentTracksPage {
-    user: String,
-    attr: PageAttr,
+pub struct HistoryPage {
+    paging: Paging,
     scrobbles: Vec<Scrobble>,
     now_playing: Option<NowPlaying>,
 }
 
-impl RecentTracksPage {
-    /// Decodes a `user.getRecentTracks` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `recenttracks`, `@attr` or any of its five
-    /// members is missing or malformed, when a row is not an object, when a
-    /// row has neither the now-playing flag nor a valid `date.uts`, when more
-    /// than one row is flagged now-playing, when `track` is absent or empty
-    /// although `@attr` promises rows on the page, when an object repeats a
-    /// member name, when `artist` has two names that differ, or when a field
-    /// of a row has the wrong type. The message names the field, such as
-    /// `recenttracks.@attr.total` or `recenttracks.track[3].date.uts`, and
-    /// never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        shared::decode(raw, &methods::USER_GET_RECENT_TRACKS, ROOT, parse)
-    }
-
-    /// The user the service says the page is for, in its own spelling.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
-    /// The paging attributes.
-    pub fn attr(&self) -> &PageAttr {
-        &self.attr
-    }
-
-    /// The historical rows, in the order the service sent them. The
+impl HistoryPage {
+    /// The scrobbles, in the order the service sent them, newest first. The
     /// now-playing row is never among them.
     pub fn scrobbles(&self) -> &[Scrobble] {
         &self.scrobbles
+    }
+
+    /// The scrobbles, to keep.
+    pub fn into_scrobbles(self) -> Vec<Scrobble> {
+        self.scrobbles
     }
 
     /// The row flagged now-playing, if the page has one.
     pub fn now_playing(&self) -> Option<&NowPlaying> {
         self.now_playing.as_ref()
     }
+
+    /// Which page this is, from 1.
+    pub fn number(&self) -> u32 {
+        self.paging.number
+    }
+
+    /// The page size the service applied.
+    pub fn per_page(&self) -> u32 {
+        self.paging.per_page
+    }
+
+    /// The number of pages the service says there are.
+    pub fn total_pages(&self) -> u32 {
+        self.paging.total_pages
+    }
+
+    /// The number of scrobbles the service says match the request: those
+    /// within the `from` and `to` bounds, if any were sent.
+    pub fn total(&self) -> u64 {
+        self.paging.total
+    }
+
+    /// The number of the page after this one. `None` on the last page and
+    /// on any page beyond it.
+    pub fn next_page(&self) -> Option<u32> {
+        self.paging.next_page()
+    }
+
+    /// The user the service says the page is for, in its own spelling.
+    pub fn subject(&self) -> Option<&str> {
+        self.paging.subject.as_deref()
+    }
 }
 
-impl fmt::Debug for RecentTracksPage {
+impl fmt::Debug for HistoryPage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RecentTracksPage")
-            .field("attr", &self.attr)
+        f.debug_struct("HistoryPage")
+            .field("paging", &self.paging)
             .field("scrobbles", &self.scrobbles.len())
             .field("now_playing", &self.now_playing.is_some())
             .finish()
     }
+}
+
+/// Decodes a `user.getRecentTracks` response.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors), and when a row has neither the now-playing
+/// flag nor a valid `date.uts`, when more than one row is flagged
+/// now-playing, or when `artist` has two names that differ. The message
+/// names the field, such as `recenttracks.@attr.total` or
+/// `recenttracks.track[3].date.uts`.
+pub fn user_get_recent_tracks(raw: &Raw) -> Result<HistoryPage, Error> {
+    shared::decode(raw, &methods::USER_GET_RECENT_TRACKS, ROOT, parse)
 }
 
 /// One historical row: a scrobble with its timestamp.
@@ -256,9 +283,8 @@ impl fmt::Debug for NowPlaying {
     }
 }
 
-fn parse(mut recent: Map<String, Value>) -> Result<RecentTracksPage, Error> {
-    let user = shared::owner(&recent, ROOT, "user")?;
-    let (attr, rows) = shared::page(&mut recent, ROOT, "track")?;
+fn parse(mut recent: Map<String, Value>) -> Result<HistoryPage, Error> {
+    let (paging, rows) = shared::page(&mut recent, ROOT, "track", Some("user"))?;
 
     let mut scrobbles = Vec::with_capacity(rows.len());
     let mut now_playing = None;
@@ -275,9 +301,8 @@ fn parse(mut recent: Map<String, Value>) -> Result<RecentTracksPage, Error> {
             }
         }
     }
-    Ok(RecentTracksPage {
-        user,
-        attr,
+    Ok(HistoryPage {
+        paging,
         scrobbles,
         now_playing,
     })

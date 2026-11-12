@@ -7,7 +7,8 @@ use serde_json::{Map, Value};
 
 use crate::de;
 use crate::error::Error;
-use crate::model::shared::{self, Image, PageAttr, missing_or};
+use crate::model::Page;
+use crate::model::shared::{self, Image, missing_or};
 use crate::protocol::{Raw, methods};
 
 /// A user's profile: the reply to `user.getInfo`, and a row of
@@ -153,67 +154,27 @@ impl fmt::Debug for UserInfo {
     }
 }
 
-/// One page of `user.getFriends`: the users a user follows, with the paging
-/// attributes.
+/// Decodes a `user.getFriends` response: one page of the users a user
+/// follows. The page's subject is the user whose friends these are.
 ///
-/// `user` is an array, a single object when the page has exactly one row,
-/// and for an empty page absent, `[]` or `""`, under the same rule as
-/// [`RecentTracksPage`](super::RecentTracksPage): only when `@attr` allows
-/// no rows. The service answers a page beyond the last with
+/// The service answers a page beyond the last with
 /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS), not
 /// with an empty page.
-#[derive(Clone)]
-pub struct FriendsPage {
-    user: String,
-    attr: PageAttr,
-    users: Vec<UserInfo>,
-}
-
-impl FriendsPage {
-    /// Decodes a `user.getFriends` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `friends`, `@attr` or any of its five members
-    /// is missing or malformed, when a row is not an object or is not a
-    /// profile as [`UserInfo::decode`] requires, when `user` is absent or
-    /// empty although `@attr` promises rows on the page, or when an object
-    /// repeats a member name. The message names the field, such as
-    /// `friends.user[3].name`, and never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        const ROOT: &str = "friends";
-        shared::decode(raw, &methods::USER_GET_FRIENDS, ROOT, |mut list| {
-            let user = shared::owner(&list, ROOT, "user")?;
-            let (attr, rows) = shared::page(&mut list, ROOT, "user")?;
-            let users = shared::each(rows, "friends.user", parse)?;
-            Ok(Self { user, attr, users })
-        })
-    }
-
-    /// The user whose friends these are, as the service spells the name.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
-    /// The paging attributes.
-    pub fn attr(&self) -> &PageAttr {
-        &self.attr
-    }
-
-    /// The friends, in the order the service sent them.
-    pub fn users(&self) -> &[UserInfo] {
-        &self.users
-    }
-}
-
-impl fmt::Debug for FriendsPage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FriendsPage")
-            .field("attr", &self.attr)
-            .field("users", &self.users.len())
-            .finish()
-    }
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](crate::model::decode#errors). `@attr.user` is required, and a row
+/// must be a profile as [`UserInfo::decode`] requires.
+pub fn user_get_friends(raw: &Raw) -> Result<Page<UserInfo>, Error> {
+    shared::paged(
+        raw,
+        &methods::USER_GET_FRIENDS,
+        "friends",
+        "user",
+        Some("user"),
+        parse,
+    )
 }
 
 fn parse(user: Map<String, Value>, at: &str) -> Result<UserInfo, Error> {

@@ -14,7 +14,7 @@
 
 use scrobl::ErrorKind;
 use scrobl::history::{RecentTracks, Window, WindowScan};
-use scrobl::model::{RecentTracksPage, Scrobble};
+use scrobl::model::{HistoryPage, Scrobble, decode};
 use scrobl::protocol::{self, HttpResponse, Raw, Request};
 
 /// The first page of the extended recording, `limit=2`.
@@ -59,11 +59,11 @@ fn answer(request: &Request, body: &'static [u8]) -> Raw {
     protocol::decode(request, HttpResponse::new(200, body)).unwrap()
 }
 
-fn decode(body: &'static [u8]) -> RecentTracksPage {
+fn decode(body: &'static [u8]) -> HistoryPage {
     let request = Request::new(&protocol::methods::USER_GET_RECENT_TRACKS).param("user", "kelchm");
     let raw = answer(&request, body);
     assert_eq!(raw.body(), body, "the body is kept byte for byte");
-    RecentTracksPage::decode(&raw).unwrap()
+    decode::user_get_recent_tracks(&raw).unwrap()
 }
 
 fn timestamps(scrobbles: &[Scrobble]) -> Vec<u64> {
@@ -78,12 +78,11 @@ fn names(scrobbles: &[Scrobble]) -> Vec<&str> {
 fn the_first_extended_page_decodes() {
     let page = decode(EXTENDED_1);
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
-    assert_eq!(attr.page(), 1);
-    assert_eq!(attr.per_page(), 2);
-    assert_eq!(attr.total_pages(), 2);
-    assert_eq!(attr.total(), 4);
+    assert_eq!(page.subject(), Some("kelchm"));
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.per_page(), 2);
+    assert_eq!(page.total_pages(), 2);
+    assert_eq!(page.total(), 4);
 
     assert!(page.now_playing().is_none());
     let scrobbles = page.scrobbles();
@@ -125,12 +124,11 @@ fn the_first_extended_page_decodes() {
 fn the_second_extended_page_decodes() {
     let page = decode(EXTENDED_2);
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
-    assert_eq!(attr.page(), 2);
-    assert_eq!(attr.per_page(), 2);
-    assert_eq!(attr.total_pages(), 2);
-    assert_eq!(attr.total(), 4);
+    assert_eq!(page.subject(), Some("kelchm"));
+    assert_eq!(page.number(), 2);
+    assert_eq!(page.per_page(), 2);
+    assert_eq!(page.total_pages(), 2);
+    assert_eq!(page.total(), 4);
 
     assert!(page.now_playing().is_none());
     let scrobbles = page.scrobbles();
@@ -145,12 +143,11 @@ fn the_second_extended_page_decodes() {
 fn the_plain_page_decodes() {
     let page = decode(PLAIN);
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
-    assert_eq!(attr.page(), 1);
-    assert_eq!(attr.per_page(), 200);
-    assert_eq!(attr.total_pages(), 1);
-    assert_eq!(attr.total(), 4);
+    assert_eq!(page.subject(), Some("kelchm"));
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.per_page(), 200);
+    assert_eq!(page.total_pages(), 1);
+    assert_eq!(page.total(), 4);
 
     assert!(page.now_playing().is_none());
     let scrobbles = page.scrobbles();
@@ -341,12 +338,11 @@ fn a_later_start_refuses_the_last_recorded_scrobble() {
 fn the_now_playing_page_decodes_with_its_now_playing_row() {
     let page = decode(NOW_PLAYING);
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "example_listener");
-    assert_eq!(attr.page(), 1);
-    assert_eq!(attr.per_page(), 200);
-    assert_eq!(attr.total_pages(), 1);
-    assert_eq!(attr.total(), 2);
+    assert_eq!(page.subject(), Some("example_listener"));
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.per_page(), 200);
+    assert_eq!(page.total_pages(), 1);
+    assert_eq!(page.total(), 2);
 
     let playing = page.now_playing().expect("the first row is now-playing");
     assert_eq!(playing.track().name(), "Slow Harbour");

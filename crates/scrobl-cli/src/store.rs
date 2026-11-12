@@ -22,7 +22,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use scrobl::Response;
 use scrobl::history::{ScanPage, ScanSummary};
-use scrobl::model::LovedTracksPage;
+use scrobl::model::{LovedTrack, Page};
 
 use crate::Error;
 
@@ -270,7 +270,7 @@ impl Store {
     /// `loved_read_at`.
     pub(crate) fn replace_loved(
         &mut self,
-        pages: &[Response<LovedTracksPage>],
+        pages: &[Response<Page<LovedTrack>>],
         read_at: u64,
     ) -> Result<(), Error> {
         let transaction = self
@@ -282,7 +282,7 @@ impl Store {
                 "INSERT INTO loved (loved_at, artist, artist_mbid, track, track_mbid)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
-            for loved in pages.iter().flat_map(|page| page.tracks()) {
+            for loved in pages.iter().flat_map(|page| page.items()) {
                 insert.execute(params![
                     loved.loved_at(),
                     loved.artist().name(),

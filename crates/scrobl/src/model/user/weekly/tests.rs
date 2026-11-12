@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Request};
 
 // Fixtures. Provenance for each:
@@ -39,8 +40,8 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn list(body: &Value) -> Result<WeeklyChartList, Error> {
-    WeeklyChartList::decode(&raw(&methods::USER_GET_WEEKLY_CHART_LIST, body.to_string()))
+fn list(body: &Value) -> Result<List<WeeklyChartRange>, Error> {
+    decode::user_get_weekly_chart_list(&raw(&methods::USER_GET_WEEKLY_CHART_LIST, body.to_string()))
 }
 
 fn artists(body: &Value) -> Result<WeeklyArtistChart, Error> {
@@ -74,9 +75,10 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_chart_list_decodes() {
-    let list = WeeklyChartList::decode(&raw(&methods::USER_GET_WEEKLY_CHART_LIST, LIST)).unwrap();
-    assert_eq!(list.user(), "kelchm");
-    let weeks: Vec<_> = list.ranges().iter().map(|w| (w.from(), w.to())).collect();
+    let list = decode::user_get_weekly_chart_list(&raw(&methods::USER_GET_WEEKLY_CHART_LIST, LIST))
+        .unwrap();
+    assert_eq!(list.subject(), Some("kelchm"));
+    let weeks: Vec<_> = list.items().iter().map(|w| (w.from(), w.to())).collect();
     assert_eq!(
         weeks,
         [
@@ -86,7 +88,7 @@ fn the_chart_list_decodes() {
             (1_793_534_400, 1_794_139_200)
         ]
     );
-    assert_eq!(list.ranges()[0].json()["#text"], "");
+    assert_eq!(list.items()[0].json()["#text"], "");
 }
 
 #[test]
@@ -235,7 +237,7 @@ fn rows_may_be_one_object_or_none_at_all() {
             }
         }
         assert!(artists(&body).unwrap().artists().is_empty());
-        assert!(list(&weeks).unwrap().ranges().is_empty());
+        assert!(list(&weeks).unwrap().items().is_empty());
     }
 }
 
@@ -300,7 +302,9 @@ fn a_malformed_chart_list_names_the_field() {
 fn a_response_to_another_method_is_refused() {
     let other = raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS);
     for error in [
-        WeeklyChartList::decode(&other).map(drop).unwrap_err(),
+        decode::user_get_weekly_chart_list(&other)
+            .map(drop)
+            .unwrap_err(),
         WeeklyArtistChart::decode(&other).map(drop).unwrap_err(),
         WeeklyAlbumChart::decode(&other).map(drop).unwrap_err(),
         WeeklyTrackChart::decode(&other).map(drop).unwrap_err(),
@@ -320,7 +324,7 @@ fn debug_leaves_out_the_text_of_the_response() {
     let shown = format!(
         "{chart:?} {:?} {weeks:?} {:?}",
         chart.artists(),
-        weeks.ranges()
+        weeks.items()
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("rj"), "{shown}");

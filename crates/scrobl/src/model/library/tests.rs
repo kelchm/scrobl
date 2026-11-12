@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -31,8 +32,8 @@ fn raw(body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn decode(body: &Value) -> Result<LibraryArtistsPage, Error> {
-    LibraryArtistsPage::decode(&raw(body.to_string()))
+fn decode(body: &Value) -> Result<Page<LibraryArtist>, Error> {
+    decode::library_get_artists(&raw(body.to_string()))
 }
 
 fn row(name: &str) -> Value {
@@ -58,22 +59,21 @@ fn decode_error(body: &Value, field: &str) {
 
 #[test]
 fn the_recorded_page_decodes() {
-    let page = LibraryArtistsPage::decode(&raw(THREE)).unwrap();
+    let page = decode::library_get_artists(&raw(THREE)).unwrap();
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
+    assert_eq!(page.subject(), Some("kelchm"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 3369, 10_105)
     );
 
     let rows: Vec<_> = page
-        .artists()
+        .items()
         .iter()
         .map(|a| (a.artist().name(), a.playcount(), a.tagcount()))
         .collect();
@@ -85,7 +85,7 @@ fn the_recorded_page_decodes() {
             ("Elliott Smith", 3726, Some(0))
         ]
     );
-    let first = &page.artists()[0];
+    let first = &page.items()[0];
     assert_eq!(
         first.artist().mbid(),
         Some("3599a39e-4e10-4cb5-90d4-c8a015ebc73b")
@@ -107,9 +107,9 @@ fn the_recorded_page_of_one_is_a_single_object_and_decodes() {
         raw.json::<Value>().unwrap()["artists"]["artist"].is_object(),
         "the service sent one row as an object, not an array of one"
     );
-    let page = LibraryArtistsPage::decode(&raw).unwrap();
-    assert_eq!((page.attr().per_page(), page.attr().total()), (1, 10_105));
-    let [only] = page.artists() else {
+    let page = decode::library_get_artists(&raw).unwrap();
+    assert_eq!((page.per_page(), page.total()), (1, 10_105));
+    let [only] = page.items() else {
         panic!("one artist expected");
     };
     assert_eq!(only.artist().name(), "Portugal. The Man");
@@ -126,7 +126,7 @@ fn an_empty_list_decodes_in_each_of_its_forms() {
                 body["artists"].as_object_mut().unwrap().remove("artist");
             }
         }
-        assert!(decode(&body).unwrap().artists().is_empty());
+        assert!(decode(&body).unwrap().items().is_empty());
     }
 }
 
@@ -169,15 +169,15 @@ fn a_row_without_a_tagcount_has_none() {
     let mut bare = row("A");
     bare.as_object_mut().unwrap().remove("tagcount");
     let page = decode(&page(json!([bare]), 1)).unwrap();
-    assert_eq!(page.artists()[0].tagcount(), None);
-    assert_eq!(page.artists()[0].artist().mbid(), None);
+    assert_eq!(page.items()[0].tagcount(), None);
+    assert_eq!(page.items()[0].artist().mbid(), None);
 }
 
 #[test]
 fn a_response_to_another_method_is_refused() {
     let request = Request::new(&methods::USER_GET_TOP_ARTISTS).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, THREE)).unwrap();
-    let error = LibraryArtistsPage::decode(&raw).unwrap_err();
+    let error = decode::library_get_artists(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert!(error.to_string().contains("different method"));
 }
@@ -185,7 +185,7 @@ fn a_response_to_another_method_is_refused() {
 #[test]
 fn debug_leaves_out_the_text_of_the_response() {
     let page = decode(&page(json!([row(SECRET)]), 1)).unwrap();
-    let shown = format!("{page:?} {:?}", page.artists());
+    let shown = format!("{page:?} {:?}", page.items());
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("playcount: 7"), "{shown}");
 }

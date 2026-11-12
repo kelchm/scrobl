@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -35,8 +36,8 @@ fn raw(body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request(), HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn decode(body: &Value) -> Result<LovedTracksPage, crate::Error> {
-    LovedTracksPage::decode(&raw(body.to_string()))
+fn decode(body: &Value) -> Result<Page<LovedTrack>, crate::Error> {
+    decode::user_get_loved_tracks(&raw(body.to_string()))
 }
 
 fn attr(total: u64, total_pages: u64) -> Value {
@@ -72,21 +73,20 @@ fn decode_error(body: &Value, field: &str) {
 #[test]
 fn the_derived_page_decodes() {
     let raw = raw(PAGE);
-    let page = LovedTracksPage::decode(&raw).unwrap();
+    let page = decode::user_get_loved_tracks(&raw).unwrap();
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "rj_Synthetic");
+    assert_eq!(page.subject(), Some("rj_Synthetic"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 2, 130, 259)
     );
 
-    let [first, second] = page.tracks() else {
+    let [first, second] = page.items() else {
         panic!("two tracks expected");
     };
     assert_eq!(first.loved_at(), 1_700_000_200);
@@ -114,20 +114,19 @@ fn the_derived_page_decodes() {
 
 #[test]
 fn the_recorded_page_decodes() {
-    let page = LovedTracksPage::decode(&raw(RECORDED)).unwrap();
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
+    let page = decode::user_get_loved_tracks(&raw(RECORDED)).unwrap();
+    assert_eq!(page.subject(), Some("kelchm"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 2, 130, 259)
     );
     let rows: Vec<_> = page
-        .tracks()
+        .items()
         .iter()
         .map(|t| (t.loved_at(), t.track().name(), t.artist().name()))
         .collect();
@@ -138,7 +137,7 @@ fn the_recorded_page_decodes() {
             (1_715_748_724, "& (Audiotree Live Version)", "Pinegrove")
         ]
     );
-    let first = &page.tracks()[0];
+    let first = &page.items()[0];
     assert_eq!(first.track().mbid(), None);
     assert_eq!(
         first.artist().mbid(),
@@ -155,8 +154,8 @@ fn the_recorded_page_decodes() {
 #[test]
 fn a_single_row_may_come_as_an_object() {
     let page = decode(&page(row("1700000000", "Only"), 1)).unwrap();
-    assert_eq!(page.tracks().len(), 1);
-    assert_eq!(page.tracks()[0].track().name(), "Only");
+    assert_eq!(page.items().len(), 1);
+    assert_eq!(page.items()[0].track().name(), "Only");
 }
 
 #[test]
@@ -169,7 +168,7 @@ fn an_empty_list_decodes_in_each_of_its_forms() {
                 body["lovedtracks"].as_object_mut().unwrap().remove("track");
             }
         }
-        assert!(decode(&body).unwrap().tracks().is_empty());
+        assert!(decode(&body).unwrap().items().is_empty());
     }
 }
 
@@ -177,7 +176,7 @@ fn an_empty_list_decodes_in_each_of_its_forms() {
 fn a_page_beyond_the_last_may_be_empty() {
     let mut body = page(json!([]), 3);
     body["lovedtracks"]["@attr"]["page"] = json!("2");
-    assert!(decode(&body).unwrap().tracks().is_empty());
+    assert!(decode(&body).unwrap().items().is_empty());
 }
 
 #[test]
@@ -241,7 +240,7 @@ fn a_repeated_member_is_an_error() {
     let body = r#"{"lovedtracks": {"track": [], "track": [],
         "@attr": {"user": "rj", "page": "1", "perPage": "50",
                   "totalPages": "0", "total": "0"}}}"#;
-    let error = LovedTracksPage::decode(&raw(body)).unwrap_err();
+    let error = decode::user_get_loved_tracks(&raw(body)).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
 }
 
@@ -249,7 +248,7 @@ fn a_repeated_member_is_an_error() {
 fn a_response_to_another_method_is_refused() {
     let request = Request::new(&methods::USER_GET_RECENT_TRACKS).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, PAGE)).unwrap();
-    let error = LovedTracksPage::decode(&raw).unwrap_err();
+    let error = decode::user_get_loved_tracks(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert!(error.to_string().contains("different method"));
 }
@@ -257,7 +256,7 @@ fn a_response_to_another_method_is_refused() {
 #[test]
 fn debug_leaves_out_the_text_of_the_response() {
     let page = decode(&page(json!([row("1700000000", SECRET)]), 1)).unwrap();
-    let shown = format!("{page:?} {:?} {:#?}", page.tracks()[0], page.tracks());
+    let shown = format!("{page:?} {:?} {:#?}", page.items()[0], page.items());
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("1700000000"));
 }

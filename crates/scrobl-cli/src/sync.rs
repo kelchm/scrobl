@@ -176,7 +176,7 @@ async fn count(client: &Client, user: &str, from: u64, to: u64) -> Result<u64, E
         .limit(1)
         .send()
         .await?;
-    Ok(page.attr().total())
+    Ok(page.total())
 }
 
 /// Reads `[from, to)` completely, as one scan.
@@ -247,7 +247,7 @@ pub async fn loved(client: &Client, store: &mut Store, user: &str) -> Result<u64
             .page(pages.len() as u32 + 1)
             .send()
             .await?;
-        let (rows, total) = (page.tracks().len() as u64, page.attr().total());
+        let (rows, total) = (page.len() as u64, page.total());
         read += rows;
         pages.push(page);
         if rows == 0 || read >= total {

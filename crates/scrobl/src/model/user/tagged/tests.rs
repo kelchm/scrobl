@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -40,12 +41,12 @@ fn raw(kind: &str, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<TaggedArtistsPage, Error> {
-    TaggedArtistsPage::decode(&raw("artist", body.to_string()))
+fn artists(body: &Value) -> Result<Page<TaggedArtist>, Error> {
+    decode::user_get_personal_tags_artists(&raw("artist", body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<TaggedTracksPage, Error> {
-    TaggedTracksPage::decode(&raw("track", body.to_string()))
+fn tracks(body: &Value) -> Result<Page<TaggedTrack>, Error> {
+    decode::user_get_personal_tags_tracks(&raw("track", body.to_string()))
 }
 
 fn taggings(kind: &str, key: &str, rows: Value, total: u64) -> Value {
@@ -78,20 +79,18 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_recorded_tagged_artists_decode() {
-    let page = TaggedArtistsPage::decode(&raw("artist", ARTISTS)).unwrap();
-    assert_eq!(page.tag(), "indie");
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
+    let page = decode::user_get_personal_tags_artists(&raw("artist", ARTISTS)).unwrap();
+    assert_eq!(page.subject(), Some("kelchm"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 1, 1)
     );
-    let [only] = page.artists() else {
+    let [only] = page.items() else {
         panic!("one artist expected");
     };
     assert_eq!(only.artist().name(), "Panic at the Disco");
@@ -110,10 +109,9 @@ fn the_recorded_tagged_artists_decode() {
 
 #[test]
 fn the_recorded_tagged_tracks_decode_whatever_their_duration_says() {
-    let page = TaggedTracksPage::decode(&raw("track", TRACKS)).unwrap();
-    assert_eq!((page.tag(), page.attr().total()), ("interesting", 1));
-    assert_eq!(page.user(), "kelchm");
-    let [only] = page.tracks() else {
+    let page = decode::user_get_personal_tags_tracks(&raw("track", TRACKS)).unwrap();
+    assert_eq!((page.subject(), page.total()), (Some("kelchm"), 1));
+    let [only] = page.items() else {
         panic!("one track expected");
     };
     assert_eq!(only.track().name(), "Bedroom in Hell");
@@ -126,26 +124,21 @@ fn the_recorded_tagged_tracks_decode_whatever_their_duration_says() {
 
 #[test]
 fn the_recorded_page_without_an_album_is_empty() {
-    let page = TaggedAlbumsPage::decode(&raw("album", NO_ALBUMS)).unwrap();
-    assert!(page.albums().is_empty());
-    assert_eq!((page.tag(), page.attr().total()), ("indie", 0));
-    assert_eq!(page.user(), "kelchm");
+    let page = decode::user_get_personal_tags_albums(&raw("album", NO_ALBUMS)).unwrap();
+    assert!(page.items().is_empty());
+    assert_eq!((page.subject(), page.total()), (Some("kelchm"), 0));
 }
 
 #[test]
 fn the_derived_tagged_albums_decode() {
-    let page = TaggedAlbumsPage::decode(&raw("album", ALBUMS)).unwrap();
-    assert_eq!(page.tag(), "synthetic tag");
+    let page = decode::user_get_personal_tags_albums(&raw("album", ALBUMS)).unwrap();
+    assert_eq!(page.subject(), Some("rj_Synthetic"));
     assert_eq!(
-        (
-            page.attr().per_page(),
-            page.attr().total_pages(),
-            page.attr().total()
-        ),
+        (page.per_page(), page.total_pages(), page.total()),
         (2, 2, 3)
     );
     let rows: Vec<_> = page
-        .albums()
+        .items()
         .iter()
         .map(|a| (a.album().title(), a.album().mbid(), a.artist().name()))
         .collect();
@@ -157,17 +150,17 @@ fn the_derived_tagged_albums_decode() {
         ]
     );
     assert_eq!(
-        page.albums()[0].album().url(),
+        page.items()[0].album().url(),
         Some("https://example.invalid/music/Tagged+Artist/Album+1")
     );
     // What the model does not name is still in the row.
-    assert_eq!(page.albums()[0].json()["image"][0]["size"], "small");
+    assert_eq!(page.items()[0].json()["image"][0]["size"], "small");
 }
 
 #[test]
 fn rows_may_be_one_object_or_none_at_all() {
     let page = artists(&taggings("artists", "artist", artist_row("Only"), 1)).unwrap();
-    assert_eq!(page.artists()[0].artist().name(), "Only");
+    assert_eq!(page.items()[0].artist().name(), "Only");
 
     for rows in [Some(json!([])), Some(json!("")), None] {
         let mut body = taggings("tracks", "track", json!([]), 0);
@@ -180,7 +173,7 @@ fn rows_may_be_one_object_or_none_at_all() {
                     .remove("track");
             }
         }
-        assert!(tracks(&body).unwrap().tracks().is_empty());
+        assert!(tracks(&body).unwrap().items().is_empty());
     }
     names(
         tracks(&taggings("tracks", "track", json!([]), 3)),
@@ -192,20 +185,26 @@ fn rows_may_be_one_object_or_none_at_all() {
 fn a_reply_of_another_kind_is_refused() {
     // The same method, asked for tracks: there are no `artists` in it.
     names(
-        TaggedArtistsPage::decode(&raw("artist", TRACKS)),
+        decode::user_get_personal_tags_artists(&raw("artist", TRACKS)),
         "taggings.artists",
     );
     names(
-        TaggedAlbumsPage::decode(&raw("album", ARTISTS)),
+        decode::user_get_personal_tags_albums(&raw("album", ARTISTS)),
         "taggings.albums",
     );
 
     let request = Request::new(&methods::USER_GET_TOP_TAGS).param("user", "rj");
     let other = protocol::decode(&request, HttpResponse::new(200, ARTISTS)).unwrap();
     for error in [
-        TaggedArtistsPage::decode(&other).map(drop).unwrap_err(),
-        TaggedAlbumsPage::decode(&other).map(drop).unwrap_err(),
-        TaggedTracksPage::decode(&other).map(drop).unwrap_err(),
+        decode::user_get_personal_tags_artists(&other)
+            .map(drop)
+            .unwrap_err(),
+        decode::user_get_personal_tags_albums(&other)
+            .map(drop)
+            .unwrap_err(),
+        decode::user_get_personal_tags_tracks(&other)
+            .map(drop)
+            .unwrap_err(),
     ] {
         assert_eq!(error.kind(), ErrorKind::Decode);
         assert!(error.to_string().contains("different method"));
@@ -273,14 +272,14 @@ fn debug_leaves_out_the_text_of_the_response() {
         1,
     ))
     .unwrap();
-    let albums = TaggedAlbumsPage::decode(&raw("album", ALBUMS)).unwrap();
+    let albums = decode::user_get_personal_tags_albums(&raw("album", ALBUMS)).unwrap();
     let shown = format!(
         "{page:?} {:?} {artists:?} {:?} {albums:?} {:?}",
-        page.tracks(),
-        artists.artists(),
-        albums.albums()
+        page.items(),
+        artists.items(),
+        albums.items()
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("First Album"), "{shown}");
-    assert!(shown.contains("TaggedTracksPage"), "{shown}");
+    assert!(shown.contains("Page {"), "{shown}");
 }

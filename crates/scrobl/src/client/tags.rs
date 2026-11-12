@@ -3,11 +3,11 @@
 
 use super::Client;
 use super::charts::{Chart, page_query};
-use super::lists::List;
+use super::lists::Listing;
 use crate::error::Error;
 use crate::model::{
-    AllTags, SimilarTags, TagInfo, TagTopAlbumsPage, TagTopArtistsPage, TagTopTracksPage,
-    TagWeeklyChartList,
+    AllTags, List, Page, SimilarTag, TagInfo, TagTopAlbum, TagTopArtist, TagTopTrack,
+    WeeklyChartRange, decode,
 };
 use crate::protocol::{Request, methods};
 use crate::response::Response;
@@ -63,8 +63,8 @@ impl Tag {
         TagWeeklyChartListQuery { list: self.list() }
     }
 
-    fn list(&self) -> List {
-        List::new(self.client.clone(), Some(("tag", self.name.clone())))
+    fn list(&self) -> Listing {
+        Listing::new(self.client.clone(), Some(("tag", self.name.clone())))
     }
 }
 
@@ -128,12 +128,12 @@ impl TagInfoQuery {
 }
 
 /// A `tag.getSimilar` query: the tags the service finds like one tag. Made
-/// by [`Tag::similar`]. See [`SimilarTags`] for what the service has
+/// by [`Tag::similar`]. See [`decode::tag_get_similar`] for what the service has
 /// answered.
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct SimilarTagsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl SimilarTagsQuery {
@@ -145,9 +145,9 @@ impl SimilarTagsQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<SimilarTags>, Error> {
+    pub async fn send(self) -> Result<Response<List<SimilarTag>>, Error> {
         self.list
-            .send(&methods::TAG_GET_SIMILAR, SimilarTags::decode)
+            .send(&methods::TAG_GET_SIMILAR, decode::tag_get_similar)
             .await
     }
 }
@@ -159,25 +159,25 @@ page_query! {
     /// ```no_run
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
     /// let page = client.tag("indie").top_albums().limit(10).send().await?;
-    /// for row in page.albums() {
+    /// for row in page.items() {
     ///     println!("{} by {}", row.album().title().unwrap_or("?"), row.artist().name());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    TagTopAlbumsQuery, TAG_GET_TOP_ALBUMS, TagTopAlbumsPage
+    TagTopAlbumsQuery, TAG_GET_TOP_ALBUMS, TagTopAlbum, decode::tag_get_top_albums
 }
 
 page_query! {
     /// A `tag.getTopArtists` query: the artists given a tag most. Made by
     /// [`Tag::top_artists`].
-    TagTopArtistsQuery, TAG_GET_TOP_ARTISTS, TagTopArtistsPage
+    TagTopArtistsQuery, TAG_GET_TOP_ARTISTS, TagTopArtist, decode::tag_get_top_artists
 }
 
 page_query! {
     /// A `tag.getTopTracks` query: the tracks given a tag most. Made by
     /// [`Tag::top_tracks`].
-    TagTopTracksQuery, TAG_GET_TOP_TRACKS, TagTopTracksPage
+    TagTopTracksQuery, TAG_GET_TOP_TRACKS, TagTopTrack, decode::tag_get_top_tracks
 }
 
 /// A `tag.getWeeklyChartList` query: the weeks the service keeps charts
@@ -185,7 +185,7 @@ page_query! {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TagWeeklyChartListQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TagWeeklyChartListQuery {
@@ -197,11 +197,11 @@ impl TagWeeklyChartListQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<TagWeeklyChartList>, Error> {
+    pub async fn send(self) -> Result<Response<List<WeeklyChartRange>>, Error> {
         self.list
             .send(
                 &methods::TAG_GET_WEEKLY_CHART_LIST,
-                TagWeeklyChartList::decode,
+                decode::tag_get_weekly_chart_list,
             )
             .await
     }

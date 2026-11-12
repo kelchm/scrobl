@@ -3,7 +3,7 @@
 use super::Client;
 use crate::error::Error;
 use crate::history::{RecentTracks, ScanPage, ScanSummary, Window, WindowScan};
-use crate::model::{LovedTracksPage, RecentTracksPage};
+use crate::model::{HistoryPage, LovedTrack, Page, decode};
 use crate::protocol::{Request, methods};
 use crate::response::Response;
 
@@ -62,12 +62,12 @@ const MAX_LOVED_LIMIT: u32 = 1000;
 /// [`send`](Self::send) reads one page. Nothing ties one page to the next:
 /// a track loved or unloved between two requests moves every later row, so
 /// a caller reading the whole list should compare each page's
-/// [`total`](crate::model::PageAttr::total) and start again when it changes.
+/// [`total`](crate::model::Page::total) and start again when it changes.
 ///
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let page = client.user("rj").loved_tracks().limit(200).send().await?;
-/// for loved in page.tracks() {
+/// for loved in page.items() {
 ///     println!("{} at {}", loved.track().name(), loved.loved_at());
 /// }
 /// # Ok(())
@@ -105,7 +105,7 @@ impl LovedTracksQuery {
     /// 1 to 1000 or a `page` of 0, before anything is sent; any error of
     /// [`Client::call`]; and [`ErrorKind::Decode`](crate::ErrorKind) when the
     /// page is not the expected shape.
-    pub async fn send(self) -> Result<Response<LovedTracksPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<LovedTrack>>, Error> {
         let spec = &methods::USER_GET_LOVED_TRACKS;
         if self
             .limit
@@ -127,7 +127,7 @@ impl LovedTracksQuery {
             request = request.param("page", page);
         }
         let raw = self.client.call(&request).await?;
-        let page = LovedTracksPage::decode(&raw)?;
+        let page = decode::user_get_loved_tracks(&raw)?;
         Ok(Response::new(page, raw))
     }
 }
@@ -210,10 +210,10 @@ impl RecentTracksQuery {
     /// 1 to 200 or a `page` of 0, before anything is sent; any error of
     /// [`Client::call`]; and [`ErrorKind::Decode`](crate::ErrorKind) when the
     /// page is not the expected shape.
-    pub async fn send(self) -> Result<Response<RecentTracksPage>, Error> {
+    pub async fn send(self) -> Result<Response<HistoryPage>, Error> {
         let (client, query) = self.into_core();
         let raw = client.call(&query.request()?).await?;
-        let page = RecentTracksPage::decode(&raw)?;
+        let page = decode::user_get_recent_tracks(&raw)?;
         Ok(Response::new(page, raw))
     }
 

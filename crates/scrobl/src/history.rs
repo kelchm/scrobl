@@ -5,7 +5,7 @@
 //! responses it is given; the caller, or the async client, moves the bytes.
 
 use crate::error::Error;
-use crate::model::{NowPlaying, PageAttr, RecentTracksPage, Scrobble};
+use crate::model::{HistoryPage, NowPlaying, Scrobble, decode};
 use crate::protocol::{MethodSpec, Raw, Request, methods};
 
 /// The largest `limit` the documentation allows for `user.getRecentTracks`.
@@ -502,38 +502,38 @@ impl WindowScan {
     }
 
     /// Checks `raw` against the rules without changing the scan.
-    fn validate(&self, raw: &Raw) -> Result<(RecentTracksPage, Progress), Error> {
+    fn validate(&self, raw: &Raw) -> Result<(HistoryPage, Progress), Error> {
         if raw.request() != &self.query.build() {
             return Err(Error::inconsistent(
                 "the response answers a different request",
             ));
         }
-        let page = RecentTracksPage::decode(raw)?;
-        let attr = page.attr();
+        let page = decode::user_get_recent_tracks(raw)?;
         let limit = u64::from(self.page_size());
         let number = self.next_page;
 
         // 1
-        if page.user().to_lowercase() != self.query.user.to_lowercase() {
+        let user = page.subject().unwrap_or_default();
+        if user.to_lowercase() != self.query.user.to_lowercase() {
             return Err(Error::inconsistent(
                 "rule 1: the page is for a different user",
             ));
         }
         // 2
-        if attr.page() != u64::from(number) {
+        if page.number() != number {
             return Err(Error::inconsistent(
                 "rule 2: `page` is not the requested page",
             ));
         }
-        if attr.per_page() != limit {
+        if u64::from(page.per_page()) != limit {
             return Err(Error::inconsistent(
                 "rule 2: `perPage` is not the requested limit",
             ));
         }
         // 3
         let totals = Totals {
-            total: attr.total(),
-            total_pages: attr.total_pages(),
+            total: page.total(),
+            total_pages: u64::from(page.total_pages()),
         };
         if self.totals.is_some_and(|first| first != totals) {
             return Err(Error::inconsistent(
@@ -551,8 +551,7 @@ impl WindowScan {
             ));
         }
         // A scan of an empty window is one page.
-        let last_page = u32::try_from(totals.total_pages.max(1))
-            .map_err(|_| Error::inconsistent("rule 3: `totalPages` is out of range"))?;
+        let last_page = page.total_pages().max(1);
 
         // 4
         let count = page.scrobbles().len() as u64;
@@ -601,9 +600,9 @@ impl WindowScan {
     }
 
     /// Records a page that passed.
-    fn commit(&mut self, page: &RecentTracksPage, progress: Progress) {
+    fn commit(&mut self, page: &HistoryPage, progress: Progress) {
         if self.echoed_user.is_none() {
-            self.echoed_user = Some(page.user().to_owned());
+            self.echoed_user = page.subject().map(str::to_owned);
         }
         self.totals = Some(progress.totals);
         self.last_timestamp = progress.last_timestamp;
@@ -639,7 +638,7 @@ fn abandoned() -> Error {
 pub struct ScanPage {
     raw: Raw,
     number: u32,
-    page: RecentTracksPage,
+    page: HistoryPage,
 }
 
 impl ScanPage {
@@ -654,7 +653,7 @@ impl ScanPage {
     }
 
     /// The decoded page.
-    pub fn page(&self) -> &RecentTracksPage {
+    pub fn page(&self) -> &HistoryPage {
         &self.page
     }
 
@@ -666,11 +665,6 @@ impl ScanPage {
     /// The now-playing row, if the page had one.
     pub fn now_playing(&self) -> Option<&NowPlaying> {
         self.page.now_playing()
-    }
-
-    /// The paging attributes.
-    pub fn attr(&self) -> &PageAttr {
-        self.page.attr()
     }
 }
 
