@@ -371,7 +371,6 @@ fn the_recorded_list_of_every_tag_decodes() {
 fn a_malformed_list_of_every_tag_names_the_field() {
     let row = json!({"name": "t", "count": 7, "reach": 3});
     assert_eq!(all(&all_of(row.clone())).unwrap().tags().len(), 1);
-    assert!(all(&all_of(json!([]))).unwrap().tags().is_empty());
 
     for (field, path) in [
         ("name", "toptags.tag[0].name"),
@@ -388,6 +387,39 @@ fn a_malformed_list_of_every_tag_names_the_field() {
         names(all(&body), &format!("toptags.@attr.{field}"));
     }
     names(all(&json!({"toptags": {"tag": []}})), "toptags.@attr");
+}
+
+#[test]
+fn a_list_of_every_tag_is_empty_only_where_its_attr_allows() {
+    // `all_of` puts the offset at 0 of 9 tags, so rows are owed.
+    for missing in [json!([]), json!("")] {
+        names(all(&all_of(missing)), "toptags.tag");
+    }
+    let mut renamed = all_of(json!([]));
+    let list = renamed["toptags"].as_object_mut().unwrap();
+    let rows = list.remove("tag").unwrap();
+    list.insert("tags".to_owned(), rows);
+    names(all(&renamed), "toptags.tag");
+
+    // Past the last tag, or with none asked for, there is nothing to owe.
+    for (member, value) in [
+        ("offset", json!(9)),
+        ("offset", json!(50)),
+        ("num_res", json!(0)),
+    ] {
+        let mut body = all_of(json!([]));
+        body["toptags"]["@attr"][member] = value;
+        assert!(all(&body).unwrap().tags().is_empty(), "{member}");
+    }
+    // The number asked for is not required, but a malformed one is named.
+    let mut body = all_of(json!([{"name": "t", "count": 7, "reach": 3}]));
+    body["toptags"]["@attr"]
+        .as_object_mut()
+        .unwrap()
+        .remove("num_res");
+    assert_eq!(all(&body).unwrap().tags().len(), 1);
+    body["toptags"]["@attr"]["num_res"] = json!(SECRET);
+    names(all(&body), "toptags.@attr.num_res");
 }
 
 #[test]

@@ -424,20 +424,31 @@ impl AllTags {
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
     /// another method, when `toptags`, `@attr.offset` or `@attr.total` is
     /// missing or malformed, when a row is not an object or lacks a
-    /// `name`, a `count` or a `reach`, or when an object repeats a member
+    /// `name`, a `count` or a `reach`, when `tag` is absent or empty
+    /// although `@attr` puts the offset before the last tag and does not
+    /// say that none was asked for, or when an object repeats a member
     /// name. The message names the field, such as `toptags.tag[3].count`,
     /// and never repeats response text.
     pub fn decode(raw: &Raw) -> Result<Self, Error> {
         const ROOT: &str = "toptags";
         shared::decode(raw, &methods::TAG_GET_TOP_TAGS, ROOT, |mut list| {
-            let (offset, total) = match list.get("@attr") {
+            let (offset, asked, total) = match list.get("@attr") {
                 Some(Value::Object(attr)) => (
                     shared::required_uint(attr, "toptags.@attr", "offset")?,
+                    shared::optional_uint(attr, "toptags.@attr", "num_res")?,
                     shared::required_uint(attr, "toptags.@attr", "total")?,
                 ),
                 _ => return Err(missing_or("toptags.@attr", "an object")),
             };
             let rows = shared::rows(&mut list, "toptags.tag", "tag")?;
+            // As for a page: no rows where `@attr` says there are some is
+            // a member gone missing, not an empty list.
+            if rows.is_empty() && offset < total && asked != Some(0) {
+                return Err(Error::decode_field(
+                    "toptags.tag",
+                    "absent or empty, but `@attr` says there are tags to list",
+                ));
+            }
             let tags = shared::each(rows, "toptags.tag", |row, at| {
                 Ok(AllTag {
                     name: shared::required_str(&row, at, "name")?.to_owned(),
