@@ -94,6 +94,16 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::List<Window>`",
         "live-verified",
     ),
+    ("track.getCorrection", "`model::Track`", "live-verified"),
+    ("track.getInfo", "`model::TrackInfo`", "live-verified"),
+    (
+        "track.getSimilar",
+        "`model::List<SimilarTrack>`",
+        "live-verified",
+    ),
+    ("track.getTags", "`model::List<Tag>`", "live-verified"),
+    ("track.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("track.search", "`model::Page<Track>`", "live-verified"),
     ("user.getFriends", "`model::Page<User>`", "live-verified"),
     ("user.getInfo", "`model::User`", "live-verified"),
     (

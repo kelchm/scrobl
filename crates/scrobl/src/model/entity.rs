@@ -630,21 +630,34 @@ fn album_of(
     })
 }
 
-/// The album a track's row names, under `album`: a `#text` and an `mbid`.
-/// `None` for a row without the member and for one whose album has no name.
+/// The album a track's row names, under `album`. `None` for a row without
+/// the member and for one whose album has no name.
+///
+/// The name is `#text` where the row gives a name and an id, as a scrobble
+/// does, and `title` in `track.getInfo`, which also gives the album a
+/// `url`, an `image` and its artist's name as a string.
 fn named_album(row: &Map<String, Value>, at: &str) -> Result<Option<Album>, Error> {
     let path = format!("{at}.album");
     match row.get("album") {
         None => Ok(None),
         Some(Value::Object(album)) => {
+            let name = match optional_str(album, &path, "#text")? {
+                Some(name) => Some(name),
+                None => optional_str(album, &path, "title")?,
+            };
+            let artist = match album.get("artist") {
+                None => None,
+                Some(_) => Some(artist_by_name(album, &path)?),
+            };
             let mbid = optional_str(album, &path, "mbid")?;
+            let url = optional_str(album, &path, "url")?;
             let images = images(album, &path)?;
-            Ok(optional_str(album, &path, "#text")?.map(|name| Album {
+            Ok(name.map(|name| Album {
                 name,
                 mbid,
-                url: None,
+                url,
                 images,
-                artist: None,
+                artist,
                 listeners: None,
                 playcount: None,
                 json: Value::Object(album.clone()),
@@ -654,11 +667,15 @@ fn named_album(row: &Map<String, Value>, at: &str) -> Result<Option<Album>, Erro
     }
 }
 
-/// Whether a track's row has a `duration` worth reading. One method sends a
-/// word there.
+/// How a track's row says how long the track is, under `duration`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Length {
+    /// In seconds, as the lists do. A row without the member has no
+    /// length.
     Read,
+    /// In milliseconds, as `track.getInfo` does.
+    Millis,
+    /// Not at all: one method sends a word there.
     Leave,
 }
 
@@ -670,18 +687,39 @@ pub(super) fn track(
     counts: Counts,
     length: Length,
 ) -> Result<Track, Error> {
+    track_of(row, at, counts, length, named_artist)
+}
+
+/// The track a row is, where the row names its artist with a string and
+/// not an object, as a track found by a search does.
+pub(super) fn track_by_name(
+    row: Map<String, Value>,
+    at: &str,
+    counts: Counts,
+    length: Length,
+) -> Result<Track, Error> {
+    track_of(row, at, counts, length, artist_by_name)
+}
+
+fn track_of(
+    row: Map<String, Value>,
+    at: &str,
+    counts: Counts,
+    length: Length,
+    artist: fn(&Map<String, Value>, &str) -> Result<Artist, Error>,
+) -> Result<Track, Error> {
     let name = required_str(&row, at, "name")?.to_owned();
     let mbid = optional_str(&row, at, "mbid")?;
     let url = optional_str(&row, at, "url")?;
     let images = images(&row, at)?;
-    let artist = named_artist(&row, at)?;
+    let artist = artist(&row, at)?;
     let album = named_album(&row, at)?;
     let (listeners, playcount) = counts.read(&row, at)?;
     // 0 is what the service sends for a length it does not know.
+    let known = |length: Option<u64>| length.filter(|&length| length != 0);
     let duration = match length {
-        Length::Read => optional_uint(&row, at, "duration")?
-            .filter(|&seconds| seconds != 0)
-            .map(Duration::from_secs),
+        Length::Read => known(optional_uint(&row, at, "duration")?).map(Duration::from_secs),
+        Length::Millis => known(optional_uint(&row, at, "duration")?).map(Duration::from_millis),
         Length::Leave => None,
     };
     Ok(Track {

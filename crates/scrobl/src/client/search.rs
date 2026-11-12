@@ -1,8 +1,8 @@
-//! Typed searches: artists and albums by name.
+//! Typed searches: artists, albums and tracks by name.
 
 use super::Client;
 use super::query::{Ask, query};
-use crate::model::{Album, Artist, decode};
+use crate::model::{Album, Artist, Track, decode};
 use crate::protocol::{MethodSpec, methods};
 
 /// The service's search. Made by [`Client::search`].
@@ -39,6 +39,12 @@ impl SearchHandle {
     pub fn albums(&self, query: impl Into<String>) -> SearchAlbumsQuery {
         SearchAlbumsQuery::new(self.ask(&methods::ALBUM_SEARCH, "album", query.into()))
     }
+
+    /// The tracks whose names match `query`, the best match first.
+    #[doc(alias = "track.search")]
+    pub fn tracks(&self, query: impl Into<String>) -> SearchTracksQuery {
+        SearchTracksQuery::new(self.ask(&methods::TRACK_SEARCH, "track", query.into()))
+    }
 }
 
 query! {
@@ -72,4 +78,26 @@ query! {
              and uses 30 when none is set.",
     page = "Sets `page`, from 1 to 10000. The service refuses a larger one, however many \
             matches there are."
+}
+
+query! {
+    /// One page of the tracks a search found. Made by
+    /// [`SearchHandle::tracks`]. Each names its artist and has its
+    /// listeners.
+    ///
+    /// ```no_run
+    /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+    /// let page = client.search().tracks("creep").artist("radiohead").limit(5).send().await?;
+    /// for track in page.iter() {
+    ///     println!("{} by {}", track.name(), track.artist().name());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    SearchTracksQuery => Page<Track> = decode::track_search;
+    artist,
+    limit = "Sets `limit`, the page size, from 1 to 1000. The service refuses a larger one, \
+             and uses 30 when none is set.",
+    page = "Sets `page`, from 1 to 1000. The service refuses a larger one, however many \
+            matches there are: a tenth of what the other two searches allow."
 }

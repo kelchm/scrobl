@@ -3697,3 +3697,115 @@ async fn a_search_is_read_with_what_was_set_and_an_empty_one_is_refused() {
     })
     .await;
 }
+
+const TRACK_INFO: &[u8] = include_bytes!("../fixtures/derived/track-info.json");
+const TRACK_CORRECTION: &[u8] = include_bytes!("../fixtures/recorded/track-correction.json");
+const TRACK_SIMILAR: &[u8] = include_bytes!("../fixtures/recorded/track-similar.json");
+const TRACK_TOP_TAGS: &[u8] = include_bytes!("../fixtures/recorded/track-top-tags.json");
+const TRACK_USER_TAGS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-track-tags.json");
+const TRACK_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/track-search.json");
+
+#[tokio::test]
+async fn a_track_is_read_by_name_or_by_id_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            TRACK_INFO,
+            TRACK_INFO,
+            TRACK_CORRECTION,
+            TRACK_SIMILAR,
+            TRACK_TOP_TAGS,
+            TRACK_USER_TAGS,
+            TRACK_SEARCH,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let track = client.track("radiohead", "creep");
+
+        let info = track.info().for_user(USER).send().await.unwrap();
+        assert_eq!(info.raw().body(), TRACK_INFO);
+        assert_eq!(info.track().name(), "Creep");
+        assert_eq!(info.user_loved(), Some(false));
+        let by_id = client.track_mbid("012e70cd-4ef6-37bf-8ebf-02d318fe5151");
+        by_id.clone().autocorrect().info().send().await.unwrap();
+
+        // A correction is asked for by name, and never with `autocorrect`.
+        let filed = client
+            .track("Guns and Roses", "Paradise City")
+            .autocorrect()
+            .correction()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(filed.raw().body(), TRACK_CORRECTION);
+        assert_eq!(filed.artist().name(), "Guns N' Roses");
+
+        let similar = track.similar().limit(3).send().await.unwrap();
+        assert_eq!(similar.subject(), Some("Creep"));
+        assert_eq!(similar[2].track().artist().name(), "Foo Fighters");
+        let top = track.clone().autocorrect().top_tags().send().await.unwrap();
+        assert_eq!(top[0].count(), 100);
+        let tags = track.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags[0].name(), "interesting");
+
+        let found = client
+            .search()
+            .tracks("creep")
+            .artist("radiohead")
+            .limit(3)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(found.raw().body(), TRACK_SEARCH);
+        assert_eq!(found[1].artist().name(), "Frost Children");
+
+        let named = [("artist", "radiohead"), ("track", "creep")];
+        let with = |method: &'static str, more: &[(&'static str, &'static str)]| {
+            let mut sent = vec![("method", method)];
+            sent.extend(named);
+            sent.extend(more);
+            pairs(&sent)
+        };
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                with("track.getInfo", &[("username", USER)]),
+                pairs(&[
+                    ("method", "track.getInfo"),
+                    ("mbid", "012e70cd-4ef6-37bf-8ebf-02d318fe5151"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "track.getCorrection"),
+                    ("artist", "Guns and Roses"),
+                    ("track", "Paradise City")
+                ]),
+                with("track.getSimilar", &[("limit", "3")]),
+                with("track.getTopTags", &[("autocorrect", "1")]),
+                with("track.getTags", &[("user", USER)]),
+                pairs(&[
+                    ("method", "track.search"),
+                    ("track", "creep"),
+                    ("artist", "radiohead"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+            ]
+        );
+
+        // Refused before anything is sent: a correction by id, and a search
+        // for nothing.
+        let error = by_id.correction().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("by name"), "{error}");
+        let error = client.search().tracks("").send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert_eq!(server.requests().len(), 7);
+    })
+    .await;
+}

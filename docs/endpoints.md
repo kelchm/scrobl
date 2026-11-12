@@ -55,15 +55,15 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::List<Window>` | live-verified |
 | **track** | | | | | | | |
 | `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | — | inventoried |
-| `track.getCorrection` | GET | API key | — | — | artist, track | — | inventoried |
-| `track.getInfo` | GET | API key | — | — | _mbid_, track\*, artist\*, _username_, _autocorrect_ | — | inventoried |
-| `track.getSimilar` | GET | API key | — | limit | track\*, artist\*, _mbid_, _autocorrect_, _limit_ | — | inventoried |
-| `track.getTags` | GET | API key | — | — | artist\*, track\*, _mbid_, _autocorrect_, _user_ | — | inventoried |
-| `track.getTopTags` | GET | API key | — | — | track\*, artist\*, _mbid_, _autocorrect_ | — | inventoried |
+| `track.getCorrection` | GET | API key | — | — | artist, track | `model::Track` | live-verified |
+| `track.getInfo` | GET | API key | — | — | _mbid_, track\*, artist\*, _username_, _autocorrect_ | `model::TrackInfo` | live-verified |
+| `track.getSimilar` | GET | API key | — | limit | track\*, artist\*, _mbid_, _autocorrect_, _limit_ | `model::List<SimilarTrack>` | live-verified |
+| `track.getTags` | GET | API key | — | — | artist\*, track\*, _mbid_, _autocorrect_, _user_ | `model::List<Tag>` | live-verified |
+| `track.getTopTags` | GET | API key | — | — | track\*, artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
 | `track.love` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
 | `track.removeTag` | POST | API key, signature, session | yes | — | artist, track, tag | — | inventoried |
 | `track.scrobble` | POST | API key, signature, session | yes | — | artist[i], track[i], timestamp[i], _album[i]_, _context[i]_, _streamId[i]_, _chosenByUser[i]_, _trackNumber[i]_, _mbid[i]_, _albumArtist[i]_, _duration[i]_ | — | inventoried |
-| `track.search` | GET | API key | — | page, limit | _limit_, _page_, track, _artist_ | — | inventoried |
+| `track.search` | GET | API key | — | page, limit | _limit_, _page_, track, _artist_ | `model::Page<Track>` | live-verified |
 | `track.unlove` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
 | `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | — | inventoried |
 | **user** | | | | | | | |
