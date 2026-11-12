@@ -482,7 +482,7 @@ pub(super) fn top_track(row: Map<String, Value>, at: &str) -> Result<TopTrack, E
     Ok(TopTrack {
         rank: rank(&row, at)?,
         playcount: shared::required_uint(&row, at, "playcount")?,
-        duration: shared::optional_uint(&row, at, "duration")?.filter(|&seconds| seconds != 0),
+        duration: shared::duration(&row, at)?,
         track: shared::parse_track(&row, at)?,
         artist: shared::parse_artist(&row, at)?,
         json: Value::Object(row),

@@ -8,9 +8,9 @@
 //! a user's scrobble history, and typed reads of everything else the `user`
 //! package offers (a profile, friends, loved tracks, the artists, albums,
 //! tracks and tags played and used most, the weekly charts, and what was
-//! given a tag) and of the artists in a user's library. Not built yet: typed
-//! models for the other methods, the authentication flows and typed
-//! scrobbling.
+//! given a tag), of the artists in a user's library, and of the charts of
+//! the whole service and of a country. Not built yet: typed models for the
+//! other methods, the authentication flows and typed scrobbling.
 //!
 //! The crate is built in layers:
 //!

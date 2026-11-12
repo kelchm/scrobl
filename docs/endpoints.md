@@ -37,12 +37,12 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |
 | `auth.getToken` | GET | API key, signature | — | — | — | — | inventoried |
 | **chart** | | | | | | | |
-| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
-| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
-| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | — | inventoried |
+| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartArtistsPage` | live-verified |
+| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTagsPage` | live-verified |
+| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTracksPage` | live-verified |
 | **geo** | | | | | | | |
-| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | — | inventoried |
-| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | — | inventoried |
+| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::GeoArtistsPage` | live-verified |
+| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::GeoTracksPage` | live-verified |
 | **library** | | | | | | | |
 | `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | live-verified |
 | **tag** | | | | | | | |
@@ -86,6 +86,8 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 ## Documentation discrepancies
 
 Places where the official pages contradict themselves, contradict the authentication guides, or look like documentation errors. The table follows the pages except where a row below says otherwise; the snapshot fixture keeps the documented spelling next to the normalised name.
+
+This list is about the pages. Where the live service was seen to do something other than its page says, the table still follows the page, and what was seen is in [`design.md`](design.md#what-the-live-passes-showed). `chart.getTopTags` is one: its page documents `page`, and the service sent the same rows for every page.
 
 - **`autocorrect[0|1]`** (13 methods: `album.getInfo`, `album.getTags`, `album.getTopTags`, `artist.getInfo`, `artist.getSimilar`, `artist.getTags`, `artist.getTopAlbums`, `artist.getTopTags`, `artist.getTopTracks`, `track.getInfo`, `track.getSimilar`, `track.getTags`, `track.getTopTags`). The page spells the parameter name with its value set. The table lists `autocorrect`, optional; the fixture keeps `autocorrect[0|1]`.
 - **`taggingtype[artist|album|track]`** (`user.getPersonalTags`). Same artefact, and here the bracket lists the accepted values. The table lists `taggingtype`, required; the accepted values are a request-level check, not part of the table.

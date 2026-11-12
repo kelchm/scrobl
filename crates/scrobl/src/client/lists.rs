@@ -150,13 +150,15 @@ impl User {
     }
 }
 
-/// What every query here holds: whose list, and which part of it.
+/// What every list query holds: whose list, and which part of it.
 #[derive(Debug, Clone)]
-struct List {
+pub(super) struct List {
     client: Client,
-    user: String,
-    limit: Option<u32>,
-    page: Option<u32>,
+    /// The parameter that says whose list it is, such as `user` or `tag`,
+    /// with its value. A chart of the whole service has none.
+    owner: Option<(&'static str, String)>,
+    pub(super) limit: Option<u32>,
+    pub(super) page: Option<u32>,
     period: Option<Period>,
     range: Option<(u64, u64)>,
     /// The tag and the `taggingtype` of a `user.getPersonalTags` query.
@@ -165,9 +167,13 @@ struct List {
 
 impl List {
     fn of(user: &User) -> Self {
+        Self::new(user.client.clone(), Some(("user", user.name.clone())))
+    }
+
+    pub(super) fn new(client: Client, owner: Option<(&'static str, String)>) -> Self {
         Self {
-            client: user.client.clone(),
-            user: user.name.clone(),
+            client,
+            owner,
             limit: None,
             page: None,
             period: None,
@@ -183,9 +189,9 @@ impl List {
         }
     }
 
-    /// Sends the request for `spec`, with `user` and whatever else was set,
-    /// and decodes the answer.
-    async fn send<T>(
+    /// Sends the request for `spec`, with the owner and whatever else was
+    /// set, and decodes the answer.
+    pub(super) async fn send<T>(
         self,
         spec: &'static MethodSpec,
         decode: fn(&Raw) -> Result<T, Error>,
@@ -198,7 +204,10 @@ impl List {
         if self.page == Some(0) {
             return Err(Error::invalid_request(spec, "`page` starts at 1"));
         }
-        let mut request = Request::new(spec).param("user", &self.user);
+        let mut request = Request::new(spec);
+        if let Some((name, value)) = &self.owner {
+            request = request.param(name, value);
+        }
         if let Some((tag, kind)) = &self.tagged {
             request = request.param("tag", tag).param("taggingtype", *kind);
         }

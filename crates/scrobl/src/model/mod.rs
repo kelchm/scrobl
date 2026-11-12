@@ -8,10 +8,16 @@
 //!
 //! The `Debug` output of a model leaves out the text of the response.
 
+mod chart;
+mod geo;
 mod library;
 mod shared;
 mod user;
 
+pub use chart::{
+    ChartArtist, ChartArtistsPage, ChartTag, ChartTagsPage, ChartTrack, ChartTracksPage,
+};
+pub use geo::{GeoArtist, GeoArtistsPage, GeoTrack, GeoTracksPage};
 pub use library::{LibraryArtist, LibraryArtistsPage};
 pub use shared::{Album, Artist, Image, PageAttr, Track};
 pub use user::{
