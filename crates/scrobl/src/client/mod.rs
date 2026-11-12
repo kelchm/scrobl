@@ -8,9 +8,30 @@
 //! crate chose to send. Responses are requested and kept unencoded: the client
 //! sends no `Accept-Encoding` and decodes no compression, whatever other
 //! crates in the program have switched on in `reqwest`, so [`Raw::body`] is
-//! exactly the bytes the service sent. Use [`Client::user`] for typed history access and
-//! [`Client::call`] for any method that reads or authenticates, as a raw
-//! [`Raw`] response. A `Client` never changes the account; a [`Writer`] does.
+//! exactly the bytes the service sent. A `Client` never changes the account;
+//! a [`Writer`] does.
+//!
+//! # Typed calls
+//!
+//! A typed call is three steps: who or what, which question, and how to
+//! run it.
+//!
+//! 1. A handle says who or what: [`Client::user`], [`Client::tag`],
+//!    [`Client::country`], [`Client::charts`]. It is a cheap value and
+//!    sends nothing.
+//! 2. A method of the handle asks the question, such as
+//!    [`UserHandle::top_artists`], and returns a query with a setter for
+//!    each option the method takes.
+//! 3. `send` makes the call and gives a [`Response`]: the typed value, and
+//!    next to it the exact response. On a query for a paged list, `all`
+//!    gives [`Rows`], every row page after page. On
+//!    [`UserHandle::recent_tracks`], `scan` gives a [`Scan`], which reads a
+//!    whole window of a history and checks every page against the others.
+//!
+//! Each call has the name of its Last.fm method as a search alias, so
+//! looking for `user.getWeeklyChartList` finds [`UserHandle::weeks`].
+//! [`Client::call`] makes any method that reads or authenticates, typed or
+//! not, and returns the [`Raw`] response.
 //!
 //! ```no_run
 //! use scrobl::history::Window;
@@ -254,6 +275,7 @@
 //! [`no_proxy`]: ClientBuilder::no_proxy
 //! [`Raw::body`]: crate::protocol::Raw::body
 //! [`Raw`]: crate::protocol::Raw
+//! [`Response`]: crate::Response
 //! [`Retry`]: crate::Retry
 //! [`Retry::Later`]: crate::Retry::Later
 //! [`Retry::AfterBackoff`]: crate::Retry::AfterBackoff
