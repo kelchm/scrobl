@@ -577,19 +577,24 @@ pub(super) fn named_artist(row: &Map<String, Value>, at: &str) -> Result<Artist,
 /// `album.getInfo` does. The artist's JSON is that string.
 fn artist_by_name(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
     match row.get("artist") {
-        Some(Value::String(name)) if !name.is_empty() => Ok(Artist {
-            name: name.clone(),
-            mbid: None,
-            url: None,
-            images: Images(Vec::new()),
-            listeners: None,
-            playcount: None,
-            json: Value::String(name.clone()),
-        }),
+        Some(Value::String(name)) if !name.is_empty() => Ok(artist_called(name.clone())),
         _ => Err(missing_or(
             &format!("{at}.artist"),
             "a string that is not empty",
         )),
+    }
+}
+
+/// An artist of whom a reply gives the name and nothing else.
+fn artist_called(name: String) -> Artist {
+    Artist {
+        json: Value::String(name.clone()),
+        name,
+        mbid: None,
+        url: None,
+        images: Images(Vec::new()),
+        listeners: None,
+        playcount: None,
     }
 }
 
@@ -635,7 +640,8 @@ fn album_of(
 ///
 /// The name is `#text` where the row gives a name and an id, as a scrobble
 /// does, and `title` in `track.getInfo`, which also gives the album a
-/// `url`, an `image` and its artist's name as a string.
+/// `url`, an `image` and its artist's name as a string. An artist's name
+/// that is missing or empty leaves the album without one.
 fn named_album(row: &Map<String, Value>, at: &str) -> Result<Option<Album>, Error> {
     let path = format!("{at}.album");
     match row.get("album") {
@@ -645,10 +651,7 @@ fn named_album(row: &Map<String, Value>, at: &str) -> Result<Option<Album>, Erro
                 Some(name) => Some(name),
                 None => optional_str(album, &path, "title")?,
             };
-            let artist = match album.get("artist") {
-                None => None,
-                Some(_) => Some(artist_by_name(album, &path)?),
-            };
+            let artist = optional_str(album, &path, "artist")?.map(artist_called);
             let mbid = optional_str(album, &path, "mbid")?;
             let url = optional_str(album, &path, "url")?;
             let images = images(album, &path)?;

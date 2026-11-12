@@ -62,7 +62,9 @@ query! {
     /// # }
     /// ```
     ///
-    /// A search that finds nothing is an empty page, not an error.
+    /// A search that finds nothing is an empty page, not an error. The
+    /// service gives out no more than 10000 pages, so `all()` on a search
+    /// with more matches than that ends with its error for the page after.
     SearchArtistsQuery => Page<Artist> = decode::artist_search;
     limit = "Sets `limit`, the page size, from 1 to 10000. The service refuses a larger one, \
              and uses 30 when none is set.",
@@ -84,6 +86,13 @@ query! {
     /// One page of the tracks a search found. Made by
     /// [`SearchHandle::tracks`]. Each names its artist and has its
     /// listeners.
+    ///
+    /// The service gives out no more than 1000 pages of a search for
+    /// tracks. `all()` on a search with more matches than that ends with
+    /// the service's error for page 1001,
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS),
+    /// after the rows of the 1000 pages. A larger `limit` reaches further:
+    /// 30 to a page is 30,000 tracks, and 1000 to a page a million.
     ///
     /// ```no_run
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {

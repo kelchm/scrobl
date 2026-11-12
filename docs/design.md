@@ -308,6 +308,7 @@ Rules:
 - It starts at the `page` that was set, or the first, and uses `limit` as the size of every page.
 - Each request is paced and retried like any read. An error leaves it where it was, so calling `next()` again asks for the same page.
 - It checks nothing across pages. If the list changes while it is read, a row can come twice or be missed. Only the scan of a history checks, which is why `recent_tracks()` has `scan()` and no `all()`.
+- A search has more matches than the service will page through: it gives out 1000 pages of tracks and 10000 of artists or albums. `all()` on a larger search ends with the service's error for the page after, once the rows before it have been given out. A larger `limit` reaches further.
 - It counts pages from the one it asked for, not from the number in the reply: some methods answer a page past the end with the first page again, and following that would never end.
 - It is not a `Stream`, so that the library needs no crate for the trait.
 

@@ -186,6 +186,14 @@ fn an_info_with_nothing_optional_decodes() {
         (Some(0), Some(true))
     );
     assert_eq!(info.tags()[0].name(), "only");
+    // An album's artist that is missing or empty leaves the album without
+    // one, and an album with neither a name nor an artist is still none.
+    track["album"] = json!({"title": "B", "artist": ""});
+    let info = self::info(&track).unwrap();
+    let album = info.track().album().unwrap();
+    assert_eq!((album.name(), album.artist().is_none()), ("B", true));
+    track["album"] = json!({"artist": ""});
+    assert!(self::info(&track).unwrap().track().album().is_none());
     track["duration"] = json!(1500);
     assert_eq!(
         self::info(&track).unwrap().track().duration(),
