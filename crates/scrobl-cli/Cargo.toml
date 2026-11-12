@@ -28,7 +28,7 @@ doc = false
 [dependencies]
 # SQLite is compiled in ("bundled"), so the tool needs no system library and
 # the database format does not depend on the host.
-rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "fallible_uint"] }
 scrobl.workspace = true
 # The current-thread runtime the client is driven on.
 tokio = { version = "1.53.2", features = ["rt"] }
