@@ -18,7 +18,7 @@ This crate stores nothing. To keep a listening history in a SQLite file, see [`s
 
 ```toml
 [dependencies]
-scrobl = "0.1"
+scrobl = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
