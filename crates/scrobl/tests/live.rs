@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The six tests send about a hundred key-only requests between them, a
+//! The seven tests send about 120 key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -812,4 +812,132 @@ async fn tags_against_the_live_service() {
             .all(|pair| pair[0].taggings() >= pair[1].taggings())
     );
     println!("all tags: `{}` first", all.items()[0].name());
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY"]
+async fn the_lists_of_an_artist_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let client = client(&key);
+    let artist = client.artist("radiohead");
+
+    // Similar artists: most alike first, the name spelt back the service's
+    // way, and never more than 250 whatever is asked.
+    let similar = artist.similar().limit(5).send().await.unwrap();
+    capture("artist-similar", similar.raw());
+    assert_eq!(similar.subject(), Some("Radiohead"));
+    assert_eq!(similar.len(), 5);
+    assert!(
+        similar
+            .windows(2)
+            .all(|pair| pair[0].similarity() >= pair[1].similarity())
+    );
+    assert!(similar.iter().all(|row| row.similarity() <= 1.0));
+    let most = artist.similar().limit(1000).send().await.unwrap();
+    capture("artist-similar-1000", most.raw());
+    assert_eq!(most.len(), 250);
+    println!(
+        "similar: {} at most, from {} down to {}",
+        most.len(),
+        most[0].similarity(),
+        most[249].similarity()
+    );
+
+    // Albums: a page of 1000 decodes, a second page holds other albums, and
+    // a page beyond the last is the first page again.
+    let albums = artist.top_albums().limit(5).send().await.unwrap();
+    capture("artist-albums", albums.raw());
+    assert_eq!(albums.subject(), Some("Radiohead"));
+    assert_eq!((albums.number(), albums.len()), (1, 5));
+    assert!(albums.iter().all(|album| album.playcount().is_some()));
+    let second = artist.top_albums().limit(5).page(2).send().await.unwrap();
+    assert_eq!(second.number(), 2);
+    assert_ne!(second[0].name(), albums[0].name());
+    let full = artist.top_albums().limit(1000).send().await.unwrap();
+    capture("artist-albums-1000", full.raw());
+    assert_eq!(full.len(), 1000);
+    let beyond = artist
+        .top_albums()
+        .limit(5)
+        .page(999_999)
+        .send()
+        .await
+        .unwrap();
+    capture("artist-albums-beyond", beyond.raw());
+    println!(
+        "albums: {} in all; a page beyond the last came back as page {} with {} rows",
+        albums.total(),
+        beyond.number(),
+        beyond.len()
+    );
+
+    // Tracks: each with both counts, and in order of listeners, not plays.
+    let tracks = artist.top_tracks().limit(5).send().await.unwrap();
+    capture("artist-tracks", tracks.raw());
+    assert_eq!(tracks.subject(), Some("Radiohead"));
+    assert!(tracks.iter().all(|track| track.playcount().is_some()));
+    let full = artist.top_tracks().limit(1000).send().await.unwrap();
+    capture("artist-tracks-1000", full.raw());
+    assert_eq!(full.len(), 1000);
+    assert!(
+        full.windows(2)
+            .all(|pair| pair[0].listeners() >= pair[1].listeners()),
+        "tracks: most listeners first"
+    );
+    println!("tracks: {} in all", tracks.total());
+
+    // Every row of a paged list, page after page.
+    let mut rows = artist.top_tracks().limit(3).page(1).all();
+    let mut seen = Vec::new();
+    while seen.len() < 7 {
+        seen.push(rows.next().await.unwrap().expect("a track"));
+    }
+    assert_eq!(seen[0].name(), tracks[0].name());
+    assert_eq!(seen[4].name(), tracks[4].name());
+
+    // Tags: the first is given most, at 100.
+    let tags = artist.top_tags().send().await.unwrap();
+    capture("artist-top-tags", tags.raw());
+    assert_eq!(tags.subject(), Some("Radiohead"));
+    assert_eq!(tags[0].count(), 100);
+    assert!(
+        tags.windows(2)
+            .all(|pair| pair[0].count() >= pair[1].count())
+    );
+    println!("tags: {}, `{}` first", tags.len(), tags[0].tag().name());
+
+    // By id, the same artist.
+    let by_id = client.artist_mbid("a74b1b7f-71a5-4011-9441-d0b5e4122711");
+    let same = by_id.top_tags().send().await.unwrap();
+    assert_eq!(same.subject(), Some("Radiohead"));
+
+    // A misspelt name: corrected when asked, and filed under the right one.
+    let misspelt = client.artist("Guns and Roses");
+    let corrected = misspelt
+        .clone()
+        .autocorrect()
+        .top_tags()
+        .send()
+        .await
+        .unwrap();
+    capture("artist-top-tags-autocorrect", corrected.raw());
+    assert_eq!(corrected.subject(), Some("Guns N' Roses"));
+    let filed = misspelt.correction().send().await.unwrap();
+    capture("artist-correction", filed.raw());
+    assert_eq!(filed.name(), "Guns N' Roses");
+    let right = artist.correction().send().await.unwrap();
+    assert_eq!(right.name(), "Radiohead");
+
+    // An artist the service does not know is an error, not an empty answer.
+    let unknown = client.artist("zzqqxx-no-such-artist-scrobl");
+    for error in [
+        unknown.similar().send().await.map(drop).unwrap_err(),
+        unknown.top_albums().send().await.map(drop).unwrap_err(),
+        unknown.top_tracks().send().await.map(drop).unwrap_err(),
+        unknown.top_tags().send().await.map(drop).unwrap_err(),
+        unknown.correction().send().await.map(drop).unwrap_err(),
+    ] {
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+    }
+    println!("unknown artist: error 6 on all five");
 }

@@ -11,7 +11,7 @@ This crate stores nothing. To keep a listening history in a SQLite file, see [`s
 ## Status
 
 - Any of the 57 API methods can be called raw, signed where the method needs it.
-- Typed so far: everything about a user (scrobble history, profile, friends, loved tracks, top lists of all time or of one week, tagged items, library), a tag, a country's charts and the charts of the whole service. All twenty-six methods have been run against the live service.
+- Typed so far: everything about a user (scrobble history, profile, friends, loved tracks, top lists of all time or of one week, tagged items, library), a tag, a country's charts, the charts of the whole service, and an artist's lists (similar artists, albums, tracks, tags, the name it is filed under). All thirty-one methods have been run against the live service.
 - Not built yet: typed models for the other methods, the authentication flows, typed scrobbling.
 
 ## Install

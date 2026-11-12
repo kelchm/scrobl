@@ -23,13 +23,13 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | — | inventoried |
 | **artist** | | | | | | | |
 | `artist.addTags` | POST | API key, signature, session | yes | — | artist, tags | — | inventoried |
-| `artist.getCorrection` | GET | API key | — | — | artist | — | inventoried |
+| `artist.getCorrection` | GET | API key | — | — | artist | `model::Artist` | live-verified |
 | `artist.getInfo` | GET | API key | — | — | artist\*, _mbid_, _lang_, _autocorrect_, _username_ | — | inventoried |
-| `artist.getSimilar` | GET | API key | — | limit | _limit_, artist\*, _autocorrect_, _mbid_ | — | inventoried |
+| `artist.getSimilar` | GET | API key | — | limit | _limit_, artist\*, _autocorrect_, _mbid_ | `model::List<SimilarArtist>` | live-verified |
 | `artist.getTags` | GET | API key | — | — | artist\*, _mbid_, _user_, _autocorrect_ | — | inventoried |
-| `artist.getTopAlbums` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | — | inventoried |
-| `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | — | inventoried |
-| `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | — | inventoried |
+| `artist.getTopAlbums` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Album>` | live-verified |
+| `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
+| `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Track>` | live-verified |
 | `artist.removeTag` | POST | API key, signature, session | yes | — | artist, tag | — | inventoried |
 | `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | — | inventoried |
 | **auth** | | | | | | | |

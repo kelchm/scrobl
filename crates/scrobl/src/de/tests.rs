@@ -29,6 +29,47 @@ fn uint_accepts_integers_and_digit_strings() {
 }
 
 #[test]
+fn decimal_accepts_numbers_and_plain_decimal_strings() {
+    for (value, wanted) in [
+        (json!("1"), 1.0),
+        (json!("0.944133"), 0.944_133),
+        (json!("0.000243"), 0.000_243),
+        (json!("0"), 0.0),
+        (json!(".5"), 0.5),
+        (json!("2."), 2.0),
+        (json!(1), 1.0),
+        (json!(0.25), 0.25),
+    ] {
+        let read = decimal(&value).unwrap();
+        assert!((read - wanted).abs() < 1e-12, "{value}: {read}");
+    }
+}
+
+#[test]
+fn decimal_rejects_everything_else() {
+    let rejected = [
+        json!(""),
+        json!("."),
+        json!("-1"),
+        json!("+1"),
+        json!("1e3"),
+        json!("1.2.3"),
+        json!(" 1"),
+        json!("nan"),
+        json!("inf"),
+        json!("one"),
+        json!(-0.5),
+        json!(true),
+        json!(null),
+        json!([1]),
+        json!({"n": 1}),
+    ];
+    for value in rejected {
+        assert_eq!(decimal(&value), None, "{value}");
+    }
+}
+
+#[test]
 fn uint_rejects_everything_else() {
     let rejected = [
         parse("1.0"),

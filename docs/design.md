@@ -121,7 +121,7 @@ A list is one of two types. `Page<T>` is one page of a list the service pages: i
 
 Five things have one type each wherever a reply names them: `Artist`, `Album`, `Track`, `Tag` and `User`. Each carries what identifies it: a `name` always, and an `mbid`, a `url` and `images` where the service has such a thing for it (a tag has no id and no image, a user no id). An artist, an album, a track and a tag also carry what is true of them everywhere (a track's `artist`, `album` and `duration`) and the service's counts for everyone (`listeners`, `playcount`, a tag's `taggings` and `reach`) where a reply has them. A `User`'s counts are that user's own. A count a reply does not send is `None`.
 
-A number that is true only inside one list is on a row of that list, which wraps the thing: `UserArtist`, `UserAlbum`, `UserTrack` and `UserTag` hold a user's own play or use count, `CountryArtist` and `CountryTrack` the listeners in one country, `LovedTrack` when a track was loved. So the chart of the service is a `Page<Artist>`, and a user's top artists a `Page<UserArtist>`: the two play counts mean different things and cannot be mistaken for each other. A span of time is a `Window` wherever one appears: the weeks the service keeps charts for are a `List<Window>`, and what a user played in a window is a `List` of the same rows as their other top lists. The rank the service sends with a row is not read. On some methods it starts again on every page, and `ranked()` is right on all of them.
+A number that is true only inside one list is on a row of that list, which wraps the thing: `UserArtist`, `UserAlbum`, `UserTrack` and `UserTag` hold a user's own play or use count, `CountryArtist` and `CountryTrack` the listeners in one country, `LovedTrack` when a track was loved, `SimilarArtist` how alike the service finds two artists, and `TopTag` how much a tag is given to one thing compared with its others. So the chart of the service is a `Page<Artist>`, and a user's top artists a `Page<UserArtist>`: the two play counts mean different things and cannot be mistaken for each other. A span of time is a `Window` wherever one appears: the weeks the service keeps charts for are a `List<Window>`, and what a user played in a window is a `List` of the same rows as their other top lists. The rank the service sends with a row is not read. On some methods it starts again on every page, and `ranked()` is right on all of them.
 
 ```rust
 let page = decode::user_get_recent_tracks(&raw)?;   // a HistoryPage
@@ -279,7 +279,7 @@ let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).s
 | `.all()` | `Rows<T>`: every row, page after page | every call that gives a `Page` |
 | `.scan()?` | `Scan`: every scrobble of a window, checked | `user.recent_tracks()` only |
 
-The calls so far. There are 28 for the twenty-six typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
+The calls so far. There are 33 for the thirty-one typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
 
 | Handle | Calls |
 |---|---|
@@ -287,13 +287,15 @@ The calls so far. There are 28 for the twenty-six typed methods, because `user.g
 | `client.tag(name)` | `info`, `similar`, `top_artists`, `top_albums`, `top_tracks`, `weeks` |
 | `client.country(name)` | `top_artists`, `top_tracks` |
 | `client.charts()` | `top_artists`, `top_tracks`, `top_tags`, `tags` |
+| `client.artist(name)`, `client.artist_mbid(id)` | `correction`, `similar`, `top_albums`, `top_tracks`, `top_tags` |
 
-Still to come: `client.artist(..)`, `client.album(..)`, `client.track(..)`, `client.search()` and `client.auth()`, and the writes on a `Writer`.
+Still to come: the rest of an artist (`info`, `tags_of(user)`), `client.album(..)`, `client.track(..)`, `client.search()` and `client.auth()`, and the writes on a `Writer`.
 
 Rules:
 
 - **A call is named for what it asks, not for the Last.fm method.** `user.getWeeklyChartList` is `weeks()`, `user.getWeeklyArtistChart` is `top_artists_in(window)`, the `geo` package is `country`, and `tag.getTopTags`, which is about no one tag, is `charts().tags()`. Every call carries its Last.fm method as a rustdoc alias, so searching the documentation for `user.getWeeklyChartList` finds `weeks()`.
 - **A handle is named `UserHandle`, not `User`,** because the model has a `User`. A query is named after its handle and its call: `UserTopArtistsQuery`, `TagInfoQuery`. All but two are written by one macro around one request builder, so a new method is a few lines.
+- **An artist is named once, on the handle.** `client.artist(name)` or `client.artist_mbid(id)`, and `.autocorrect()` on the handle lets the service correct a misspelt name on every call made through it. A list then says what name it was read as, in `subject()`.
 - **`limit` means rows in one request.** On a `Page` that is the page size. On a `List`, where one request is the whole list, it is how long the list is.
 - **What the client refuses itself.** A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) check an upper bound on `limit`. For the others the service refuses a `limit` over its own maximum, which differs by method ([Coverage](#coverage) has what was seen).
 - **A window for `top_*_in` needs both its ends.** With one end or none the service charts a span of its own choosing, so the client refuses to send. It takes any window, not only one of the listed weeks.
@@ -571,7 +573,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Twenty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country and the seven reads of the `tag` package. All twenty-six have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Thirty-one have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven reads of the `tag` package and five of the `artist` package. All thirty-one have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -587,7 +589,7 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the twenty-six is tested against a response the owner recorded, from their own account or from the service's public charts, with five exceptions:
+Each of the thirty-one is tested against a response the owner recorded, from their own account or from what the service shows anyone, with five exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
@@ -656,6 +658,18 @@ Tags, the same day:
 - `tag.getSimilar` answered `indie`, `rock` and a tag nobody has used with the same 48 bytes: no rows, and `n/a` where the tag's name belongs.
 - `tag.getTopTags` is the 50 most used tags of the service. It ignores a `limit`. Two parameters its page does not list move through the list, `num_res` and `offset`, and its `@attr` echoes them beside the `total`, all three as numbers. Its rows have a `count`, which is the `taggings` of `chart.getTopTags`, and no `url`.
 - `tag.getWeeklyChartList` is the list of 1134 weeks a user gets, for every tag and for one nobody has used.
+
+An artist's lists, read on 2026-11-11 and through the client on 2026-11-12:
+
+- A list's `@attr.artist` is the name in the service's spelling: `radiohead` comes back as `Radiohead`, and with `autocorrect=1` `Guns and Roses` as `Guns N' Roses`. Without it the misspelling is an artist of its own.
+- An artist the service does not know is error 6 on all five methods, with HTTP 200. `artist.getCorrection` with no artist at all is HTTP 400 and the body `{}`.
+- `artist.getCorrection` answers a name that is already right with that same artist. Its `correction` is one object, not a list.
+- `artist.getSimilar` sends each row's likeness as a decimal in a string, from `"1"` down to `"0.000243"`, 100 rows when no `limit` is set and never more than 250.
+- `artist.getTopTracks` is in order of `listeners`, not of `playcount`: in 1000 rows no track had more listeners than the one before, and 491 had more plays. `artist.getTopAlbums` is not in order of `playcount` either, and its rows have no `listeners` to tell by.
+- An album's `playcount` is a JSON number, where a track's is a string. 843 of the 1000 albums and 550 of the 1000 tracks have no `mbid` member.
+- Both paged lists answer a page beyond the last with the first page, where the charts send an empty one. `Rows` counts pages for itself, so `all()` still ends.
+- A top tag's `count` is 100 for the tag given most and less for the others in proportion. It is not a number of uses, so it is on the row and not the tag's `taggings`.
+- The rank of a row starts again on each page of the albums and counts through the list of the tracks. No model reads it.
 
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 

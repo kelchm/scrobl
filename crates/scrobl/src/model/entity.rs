@@ -482,6 +482,8 @@ pub(super) enum Counts {
     Neither,
     /// `listeners` and `playcount`, as the charts of the service send them.
     Both,
+    /// `playcount` alone, as an artist's albums have it.
+    Playcount,
 }
 
 impl Counts {
@@ -492,6 +494,7 @@ impl Counts {
                 Some(required_uint(row, at, "listeners")?),
                 Some(required_uint(row, at, "playcount")?),
             )),
+            Self::Playcount => Ok((None, Some(required_uint(row, at, "playcount")?))),
         }
     }
 }
