@@ -3,7 +3,7 @@
 use super::Client;
 use super::query::{Ask, query};
 use crate::history::Window;
-use crate::model::{Album, Artist, List, Page, Tag, TagInfo, Track, decode};
+use crate::model::{Album, Artist, List, Tag, TagInfo, Track, decode};
 use crate::protocol::{MethodSpec, methods};
 
 /// One tag, to ask about. Made by [`Client::tag`].

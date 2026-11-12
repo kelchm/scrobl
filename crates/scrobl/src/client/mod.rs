@@ -272,6 +272,7 @@ mod charts;
 mod country;
 mod pacing;
 mod query;
+mod rows;
 mod scan;
 mod tag;
 mod user;
@@ -288,6 +289,7 @@ pub use charts::{
     ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
 };
 pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
+pub use rows::Rows;
 pub use scan::Scan;
 pub use tag::{
     TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,

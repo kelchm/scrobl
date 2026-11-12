@@ -32,7 +32,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use scrobl::client::{Period, Scan, UserHandle, UserRecentTracksQuery, UserTopArtistsQuery};
+use scrobl::client::{Period, Rows, Scan, UserHandle, UserRecentTracksQuery, UserTopArtistsQuery};
 use scrobl::history::{ScanSummary, Window};
 use scrobl::model::HistoryPage;
 use scrobl::protocol::{Request, Requirement, methods};
@@ -2049,6 +2049,7 @@ fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<UserTopArtistsQuery>();
     assert_shareable::<ClientBuilder>();
     assert_owned::<Scan>();
+    assert_owned::<Rows<scrobl::model::UserArtist>>();
     assert_shareable::<Response<HistoryPage>>();
     assert_owned::<Error>();
     assert_sync::<Error>();
@@ -3242,6 +3243,186 @@ async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
             assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidRequest);
         }
         assert_eq!(server.request_count(), 9);
+    })
+    .await;
+}
+
+/// Page `number` of a user's top artists, `per_page` to a page, of `total`
+/// in all, each named after its place in the list.
+fn artists_page(number: u64, per_page: u64, total: u64) -> String {
+    let first = (number - 1) * per_page + 1;
+    let rows: Vec<_> = (first..=total.min(first + per_page - 1))
+        .map(|place| {
+            serde_json::json!({"name": format!("Artist {place}"), "playcount": "1",
+                               "mbid": "", "url": "https://example.invalid/a",
+                               "@attr": {"rank": place.to_string()}})
+        })
+        .collect();
+    serde_json::json!({"topartists": {"artist": rows, "@attr": {
+        "user": USER, "page": number.to_string(), "perPage": per_page.to_string(),
+        "totalPages": total.div_ceil(per_page).to_string(), "total": total.to_string()}}})
+    .to_string()
+}
+
+#[tokio::test]
+async fn all_reads_every_row_page_after_page() {
+    bounded(async {
+        let pages = [1, 2, 3].map(|number| Behaviour::status(200, artists_page(number, 2, 5)));
+        let server = serve(Dataset::distinct(1), pages).await;
+        let mut rows = client(&server)
+            .user(USER)
+            .top_artists()
+            .period(Period::SevenDays)
+            .limit(2)
+            .all();
+
+        // Nothing is sent until a row is asked for.
+        assert_eq!(rows.total(), None);
+        assert!(server.requests().is_empty());
+
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            // A page is asked for only when the last has run out.
+            assert_eq!(server.requests().len(), names.len() / 2 + 1);
+            names.push(row.into_artist().name().to_owned());
+        }
+        assert_eq!(
+            names,
+            ["Artist 1", "Artist 2", "Artist 3", "Artist 4", "Artist 5"]
+        );
+        assert_eq!(rows.total(), Some(5));
+        // The end stays the end, and sends nothing more.
+        assert!(rows.next().await.unwrap().is_none());
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        let page = |number: &'static str| {
+            pairs(&[
+                ("method", "user.getTopArtists"),
+                ("user", USER),
+                ("period", "7day"),
+                ("limit", "2"),
+                ("page", number),
+            ])
+        };
+        assert_eq!(sent, [page("1"), page("2"), page("3")]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_starts_at_the_page_that_was_set_and_an_empty_list_is_one_request() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(3, 2, 5)),
+                Behaviour::status(200, artists_page(1, 2, 0)),
+            ],
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let mut rows = user.top_artists().limit(2).page(3).all();
+        let last = rows.next().await.unwrap().unwrap();
+        assert_eq!(last.artist().name(), "Artist 5");
+        assert!(rows.next().await.unwrap().is_none());
+
+        let mut none = user.top_artists().all();
+        assert!(none.next().await.unwrap().is_none());
+        assert_eq!(none.total(), Some(0));
+
+        let pages: Vec<_> = server
+            .requests()
+            .iter()
+            .map(|request| request.param("page"))
+            .collect();
+        assert_eq!(pages, [Some("3".to_owned()), Some("1".to_owned())]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_asks_for_the_same_page_again_after_an_error() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(1, 1, 2)),
+                Behaviour::api_error(6),
+                Behaviour::status(200, artists_page(2, 1, 2)),
+            ],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(1).all();
+
+        let first = rows.next().await.unwrap().unwrap();
+        assert_eq!(first.artist().name(), "Artist 1");
+        let error = rows.next().await.unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+        // The error moved nothing: the same page is asked for again.
+        let second = rows.next().await.unwrap().unwrap();
+        assert_eq!(second.artist().name(), "Artist 2");
+        assert!(rows.next().await.unwrap().is_none());
+
+        let pages: Vec<_> = server
+            .requests()
+            .iter()
+            .map(|request| request.param("page"))
+            .collect();
+        assert_eq!(pages, ["1", "2", "2"].map(|page| Some(page.to_owned())));
+
+        // An option out of range is refused each time, and nothing is sent.
+        let mut refused = client(&server).user(USER).top_artists().limit(0).all();
+        for _ in 0..2 {
+            let error = refused.next().await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        }
+        assert_eq!(server.requests().len(), 3);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_does_not_follow_a_reply_that_names_another_page() {
+    bounded(async {
+        // The list shrank to one page after the first was read, and the
+        // service answers the page now past the end with the first again.
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(1, 2, 4)),
+                Behaviour::status(200, artists_page(1, 2, 2)),
+            ],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(2).all();
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            names.push(row.into_artist().name().to_owned());
+        }
+        // Rows can come twice when a list changes, but the read ends.
+        assert_eq!(names, ["Artist 1", "Artist 2", "Artist 1", "Artist 2"]);
+        assert_eq!(server.requests().len(), 2);
+        assert_eq!(rows.total(), Some(2));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_debug_of_rows_shows_where_the_read_stands_and_no_row() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, artists_page(1, 2, 5))],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(2).all();
+        rows.next().await.unwrap();
+        let shown = format!("{rows:?}");
+        assert_eq!(
+            shown,
+            "Rows { next_page: Some(2), ready: 1, total: Some(5), .. }"
+        );
     })
     .await;
 }
