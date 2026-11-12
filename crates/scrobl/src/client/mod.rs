@@ -18,7 +18,8 @@
 //!
 //! 1. A handle says who or what: [`Client::user`], [`Client::artist`],
 //!    [`Client::album`], [`Client::tag`], [`Client::country`],
-//!    [`Client::charts`]. It is a cheap value and sends nothing.
+//!    [`Client::charts`], [`Client::search`]. It is a cheap value and
+//!    sends nothing.
 //! 2. A method of the handle asks the question, such as
 //!    [`UserHandle::top_artists`], and returns a query with a setter for
 //!    each option the method takes.
@@ -298,6 +299,7 @@ mod pacing;
 mod query;
 mod rows;
 mod scan;
+mod search;
 mod tag;
 mod user;
 
@@ -320,6 +322,7 @@ pub use charts::{
 pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
 pub use rows::Rows;
 pub use scan::Scan;
+pub use search::{SearchAlbumsQuery, SearchArtistsQuery, SearchHandle};
 pub use tag::{
     TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
     TagTopTracksQuery, TagWeeksQuery,
@@ -526,6 +529,11 @@ impl Client {
     /// and used most.
     pub fn charts(&self) -> ChartsHandle {
         ChartsHandle::new(self.clone())
+    }
+
+    /// The service's search, for artists and albums by name.
+    pub fn search(&self) -> SearchHandle {
+        SearchHandle::new(self.clone())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the

@@ -20,7 +20,7 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `album.getTags` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _user_ | `model::List<Tag>` | live-verified |
 | `album.getTopTags` | GET | API key | — | — | artist\*, album\*, _autocorrect_, _mbid_ | `model::List<TopTag>` | live-verified |
 | `album.removeTag` | POST | API key, signature, session | yes | — | artist, album, tag | — | inventoried |
-| `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | — | inventoried |
+| `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | `model::Page<Album>` | live-verified |
 | **artist** | | | | | | | |
 | `artist.addTags` | POST | API key, signature, session | yes | — | artist, tags | — | inventoried |
 | `artist.getCorrection` | GET | API key | — | — | artist | `model::Artist` | live-verified |
@@ -31,7 +31,7 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
 | `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Track>` | live-verified |
 | `artist.removeTag` | POST | API key, signature, session | yes | — | artist, tag | — | inventoried |
-| `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | — | inventoried |
+| `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | `model::Page<Artist>` | live-verified |
 | **auth** | | | | | | | |
 | `auth.getMobileSession` | POST | API key, signature | — | — | password, username | — | inventoried |
 | `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |

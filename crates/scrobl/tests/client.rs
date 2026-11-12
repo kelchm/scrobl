@@ -3636,3 +3636,64 @@ async fn what_the_service_says_of_an_artist_and_an_album_is_read_with_what_was_s
     })
     .await;
 }
+
+const ARTIST_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/artist-search.json");
+const ALBUM_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/album-search.json");
+
+#[tokio::test]
+async fn a_search_is_read_with_what_was_set_and_an_empty_one_is_refused() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [ARTIST_SEARCH, ALBUM_SEARCH].map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let search = client(&server).search();
+
+        let artists = search.artists("radiohead").limit(3).send().await.unwrap();
+        assert_eq!(artists.raw().body(), ARTIST_SEARCH);
+        assert_eq!(artists.subject(), Some("radiohead"));
+        assert_eq!(artists[0].name(), "Radiohead");
+        assert_eq!(artists.total(), 9275);
+
+        let albums = search
+            .albums("ok computer")
+            .limit(3)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(albums.raw().body(), ALBUM_SEARCH);
+        assert_eq!(albums[2].artist().unwrap().name(), "Lemaitre");
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "artist.search"),
+                    ("artist", "radiohead"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "album.search"),
+                    ("album", "ok computer"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+            ]
+        );
+
+        // The service answers an empty query with `{}`, so none is sent.
+        for error in [
+            search.artists("").send().await.map(drop).unwrap_err(),
+            search.albums("").send().await.map(drop).unwrap_err(),
+            search.artists("").all().next().await.map(drop).unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert!(error.to_string().contains("query is empty"), "{error}");
+        }
+        assert_eq!(server.requests().len(), 2);
+    })
+    .await;
+}

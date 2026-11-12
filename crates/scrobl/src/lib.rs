@@ -7,8 +7,9 @@
 //! that change an account only through a `Writer`, a typed, checked read of
 //! a user's scrobble history, and typed reads of everything else about a
 //! user, of a tag, of a country's charts, of the charts of the whole
-//! service, of an artist and of an album. Not built yet: typed models for the other methods, the
-//! authentication flows and typed scrobbling.
+//! service, of an artist and of an album, and searches for both. Not
+//! built yet: typed models for the other methods, the authentication
+//! flows and typed scrobbling.
 //!
 //! A typed call is who or what, which question, then how to run it:
 //!

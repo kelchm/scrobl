@@ -15,6 +15,7 @@ mod entity;
 mod geo;
 mod library;
 mod page;
+mod search;
 mod shared;
 mod tag;
 mod user;
@@ -64,6 +65,7 @@ pub mod decode {
     pub use super::chart::{chart_get_top_artists, chart_get_top_tags, chart_get_top_tracks};
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;
+    pub use super::search::{album_search, artist_search};
     pub use super::tag::{
         tag_get_info, tag_get_similar, tag_get_top_albums, tag_get_top_artists, tag_get_top_tags,
         tag_get_top_tracks, tag_get_weekly_chart_list,

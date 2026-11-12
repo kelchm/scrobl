@@ -279,7 +279,7 @@ let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).s
 | `.all()` | `Rows<T>`: every row, page after page | every call that gives a `Page` |
 | `.scan()?` | `Scan`: every scrobble of a window, checked | `user.recent_tracks()` only |
 
-The calls so far. There are 38 for the thirty-six typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
+The calls so far. There are 40 for the thirty-eight typed methods, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
 
 | Handle | Calls |
 |---|---|
@@ -289,8 +289,9 @@ The calls so far. There are 38 for the thirty-six typed methods, because `user.g
 | `client.charts()` | `top_artists`, `top_tracks`, `top_tags`, `tags` |
 | `client.artist(name)`, `client.artist_mbid(id)` | `info`, `correction`, `similar`, `top_albums`, `top_tracks`, `top_tags`, `tags_of(user)` |
 | `client.album(artist, title)`, `client.album_mbid(id)` | `info`, `top_tags`, `tags_of(user)` |
+| `client.search()` | `artists(query)`, `albums(query)` |
 
-Still to come: `client.track(..)`, `client.search()` and `client.auth()`, and the writes on a `Writer`.
+Still to come: `client.track(..)`, `search().tracks(query)` and `client.auth()`, and the writes on a `Writer`.
 
 Rules:
 
@@ -574,7 +575,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Thirty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven reads of the `tag` package, seven of the `artist` package and three of the `album` package. All thirty-six have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Thirty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven reads of the `tag` package, the eight of the `artist` package and the four of the `album` package. All thirty-eight have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -590,7 +591,7 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the thirty-six is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
+Each of the thirty-eight is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
@@ -683,6 +684,13 @@ What the service says of an artist and an album, read on 2026-11-11 and through 
 - `artist.getTags` and `album.getTags` need a `user`. Without one the answer is error 6, as it is for a user the service does not know. A user who has given no tag gets `#text` holding a space and no `tag` member.
 - An album the service does not know is error 6 on all three calls, with HTTP 404 from `album.getInfo` and HTTP 200 from the two lists.
 - `album.getTopTags` for an album named by `mbid` was HTTP 400 with the body `{}`, where `album.getInfo` by the same id answered.
+
+The searches, read on 2026-11-11 and through the client on 2026-11-12:
+
+- A search answers in a shape of its own: `results`, with the page at `opensearch:Query.startPage`, its size at `opensearch:itemsPerPage`, the number of matches at `opensearch:totalResults`, the query at `@attr.for`, and the rows a level down, at `artistmatches.artist` or `albummatches.album`. It sends no number of pages, so `Page::total_pages()` is worked out from the other two.
+- An artist that was found has `listeners` and no `playcount`. An album that was found names its artist with a string and has no counts.
+- The page size is 30 when no `limit` is sent. A `limit` or a `page` of 0 or above 10000 is error 6, however many matches there are.
+- A search that finds nothing is an empty array with a total of 0. An empty query is the body `{}`, which the client does not send for.
 
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
