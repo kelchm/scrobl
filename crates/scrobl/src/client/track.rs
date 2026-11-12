@@ -160,7 +160,7 @@ query! {
     /// The tags a track is given most. Made by [`TrackHandle::top_tags`].
     ///
     /// On 2026-11-12 the service answered this call for a track named by
-    /// id with HTTP 400 and an empty body, where `info` by the same id
+    /// id with HTTP 400 and the body `{}`, where `info` by the same id
     /// worked. That arrives as [`ErrorKind::Http`](crate::ErrorKind).
     TrackTopTagsQuery => List<TopTag> = decode::track_get_top_tags;
 }
