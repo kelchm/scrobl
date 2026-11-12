@@ -21,6 +21,10 @@ impl Chart {
         Self { client }
     }
 
+    pub(super) fn client(&self) -> &Client {
+        &self.client
+    }
+
     /// Starts a `chart.getTopArtists` query.
     pub fn top_artists(&self) -> ChartArtistsQuery {
         ChartArtistsQuery {
@@ -119,6 +123,8 @@ macro_rules! page_query {
         }
     };
 }
+
+pub(super) use page_query;
 
 page_query! {
     /// A `chart.getTopArtists` query: the artists played most on the whole

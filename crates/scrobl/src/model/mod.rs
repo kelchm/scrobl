@@ -12,6 +12,7 @@ mod chart;
 mod geo;
 mod library;
 mod shared;
+mod tag;
 mod user;
 
 pub use chart::{
@@ -20,6 +21,10 @@ pub use chart::{
 pub use geo::{GeoArtist, GeoArtistsPage, GeoTrack, GeoTracksPage};
 pub use library::{LibraryArtist, LibraryArtistsPage};
 pub use shared::{Album, Artist, Image, PageAttr, Track};
+pub use tag::{
+    AllTag, AllTags, SimilarTag, SimilarTags, TagInfo, TagTopAlbum, TagTopAlbumsPage, TagTopArtist,
+    TagTopArtistsPage, TagTopTrack, TagTopTracksPage, TagWeeklyChartList,
+};
 pub use user::{
     FriendsPage, LovedTrack, LovedTracksPage, NowPlaying, RecentTracksPage, Scrobble, TaggedAlbum,
     TaggedAlbumsPage, TaggedArtist, TaggedArtistsPage, TaggedTrack, TaggedTracksPage, TopAlbum,

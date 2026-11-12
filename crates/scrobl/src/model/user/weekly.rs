@@ -57,20 +57,9 @@ impl WeeklyChartList {
             &methods::USER_GET_WEEKLY_CHART_LIST,
             ROOT,
             |mut list| {
-                let user = match list.get("@attr") {
-                    Some(Value::Object(attr)) => {
-                        shared::required_str(attr, "weeklychartlist.@attr", "user")?.to_owned()
-                    }
-                    _ => return Err(missing_or("weeklychartlist.@attr", "an object")),
-                };
+                let user = shared::owner(&list, ROOT, "user")?;
                 let rows = shared::rows(&mut list, "weeklychartlist.chart", "chart")?;
-                let ranges = shared::each(rows, "weeklychartlist.chart", |row, at| {
-                    Ok(WeeklyChartRange {
-                        from: shared::required_uint(&row, at, "from")?,
-                        to: shared::required_uint(&row, at, "to")?,
-                        json: Value::Object(row),
-                    })
-                })?;
+                let ranges = shared::each(rows, "weeklychartlist.chart", chart_range)?;
                 Ok(Self { user, ranges })
             },
         )
@@ -119,6 +108,18 @@ impl WeeklyChartRange {
     pub fn json(&self) -> &Value {
         &self.json
     }
+}
+
+/// One row of a list of weeks, a user's or a tag's.
+pub(in crate::model) fn chart_range(
+    row: Map<String, Value>,
+    at: &str,
+) -> Result<WeeklyChartRange, Error> {
+    Ok(WeeklyChartRange {
+        from: shared::required_uint(&row, at, "from")?,
+        to: shared::required_uint(&row, at, "to")?,
+        json: Value::Object(row),
+    })
 }
 
 impl fmt::Debug for WeeklyChartRange {

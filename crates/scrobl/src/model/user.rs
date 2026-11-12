@@ -16,6 +16,7 @@ pub use tagged::{
 pub use top::{
     TopAlbum, TopAlbumsPage, TopArtist, TopArtistsPage, TopTag, TopTags, TopTrack, TopTracksPage,
 };
+pub(super) use weekly::chart_range;
 pub use weekly::{
     WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartList, WeeklyChartRange, WeeklyTrackChart,
 };

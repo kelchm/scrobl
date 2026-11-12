@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The five tests send about eighty key-only requests between them, a
+//! The six tests send about a hundred key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -691,4 +691,137 @@ async fn the_charts_of_the_service_and_of_a_country_against_the_live_service() {
         );
         assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
     }
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY"]
+async fn tags_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let client = client(&key);
+    let tag = client.tag("indie");
+
+    // What the service says about a tag, in two languages, and about one
+    // nobody has used, which is not an error.
+    let info = tag.info().send().await.unwrap();
+    capture("tag-info", info.raw());
+    assert_eq!(info.name(), "indie");
+    assert!(info.total() >= info.reach());
+    assert!(info.summary().is_some());
+    let german = tag.info().lang("de").send().await.unwrap();
+    capture("tag-info-de", german.raw());
+    assert_eq!(german.total(), info.total());
+    println!(
+        "indie: used {} times by {}; the German description {} the English one",
+        info.total(),
+        info.reach(),
+        if german.content() == info.content() {
+            "is"
+        } else {
+            "is not"
+        }
+    );
+    let unused = client.tag("zzqqxx-no-such-tag-scrobl");
+    let nothing = unused.info().send().await.unwrap();
+    capture("tag-info-unused", nothing.raw());
+    assert_eq!((nothing.total(), nothing.reach()), (0, 0));
+
+    // Similar tags. What comes back is printed and not asserted: on
+    // 2026-11-11 the service sent no rows for any tag.
+    let similar = tag.similar().send().await.unwrap();
+    capture("tag-similar", similar.raw());
+    println!(
+        "similar to indie: {} tags, for `{}`",
+        similar.tags().len(),
+        similar.tag()
+    );
+
+    // The three lists: the service spells the tag back, a page of 1000
+    // decodes, a page beyond the last is empty, and so is every page of a
+    // tag nobody has used.
+    let albums = tag.top_albums().limit(5).send().await.unwrap();
+    capture("tag-albums", albums.raw());
+    assert_eq!(albums.tag(), "indie");
+    assert_eq!(
+        (
+            albums.attr().page(),
+            albums.attr().per_page(),
+            albums.albums().len()
+        ),
+        (1, 5, 5)
+    );
+    let full = tag.top_albums().limit(1000).send().await.unwrap();
+    capture("tag-albums-1000", full.raw());
+    assert_eq!(full.albums().len(), 1000);
+    let beyond = tag
+        .top_albums()
+        .limit(50)
+        .page(999_999)
+        .send()
+        .await
+        .unwrap();
+    capture("tag-albums-beyond", beyond.raw());
+    assert!(beyond.albums().is_empty());
+    let none = unused.top_albums().limit(5).send().await.unwrap();
+    capture("tag-albums-unused", none.raw());
+    assert!(none.albums().is_empty());
+    assert_eq!(none.attr().total(), 0);
+
+    let artists = tag.top_artists().limit(5).send().await.unwrap();
+    capture("tag-artists", artists.raw());
+    assert_eq!(artists.artists().len(), 5);
+    let full = tag.top_artists().limit(1000).send().await.unwrap();
+    capture("tag-artists-1000", full.raw());
+    assert_eq!(full.artists().len(), 1000);
+
+    let tracks = tag.top_tracks().limit(5).send().await.unwrap();
+    capture("tag-tracks", tracks.raw());
+    assert_eq!(tracks.tracks().len(), 5);
+    let full = tag.top_tracks().limit(1000).send().await.unwrap();
+    capture("tag-tracks-1000", full.raw());
+    assert_eq!(full.tracks().len(), 1000);
+    println!(
+        "indie: {} albums, {} artists, {} tracks",
+        albums.attr().total(),
+        artists.attr().total(),
+        tracks.attr().total()
+    );
+
+    // The weeks: each ends where the next begins.
+    let weeks = tag.weekly_chart_list().send().await.unwrap();
+    capture("tag-weeks", weeks.raw());
+    assert_eq!(weeks.tag(), "indie");
+    assert!(
+        weeks
+            .ranges()
+            .windows(2)
+            .all(|pair| pair[0].to() == pair[1].from())
+    );
+    println!("indie: {} weeks", weeks.ranges().len());
+
+    // Every tag: 50 when nothing is asked, and the two parameters the
+    // method's page does not list move through the list.
+    let all = client.chart().all_tags().send().await.unwrap();
+    capture("all-tags", all.raw());
+    assert_eq!((all.offset(), all.tags().len()), (0, 50));
+    let next = client
+        .chart()
+        .all_tags()
+        .limit(3)
+        .offset(2)
+        .send()
+        .await
+        .unwrap();
+    capture("all-tags-offset", next.raw());
+    assert_eq!((next.offset(), next.tags().len()), (2, 3));
+    assert_eq!(next.tags()[0].name(), all.tags()[2].name());
+    assert!(
+        all.tags()
+            .windows(2)
+            .all(|pair| pair[0].count() >= pair[1].count())
+    );
+    println!(
+        "{} tags in all, `{}` first",
+        all.total(),
+        all.tags()[0].name()
+    );
 }
