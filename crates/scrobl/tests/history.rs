@@ -23,10 +23,10 @@ mod support;
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;
-use scrobl::history::{RecentTracks, ScanPage, ScanSummary, Window, WindowScan};
+use scrobl::history::{RecentTracks, ScanSummary, Window, WindowScan};
 use scrobl::model::{HistoryPage, decode};
 use scrobl::protocol::{self, Credentials, HttpRequest, HttpResponse, Raw, Request};
-use scrobl::{ApiErrorCode, ApiKey, Error, ErrorKind};
+use scrobl::{ApiErrorCode, ApiKey, Error, ErrorKind, Response};
 use serde_json::{Value, json};
 use support::*;
 
@@ -50,7 +50,7 @@ fn fetch(dataset: &Dataset, request: &Request) -> (HttpRequest, Result<Raw, Erro
 
 struct Driven {
     requests: Vec<HttpRequest>,
-    pages: Vec<ScanPage>,
+    pages: Vec<Response<HistoryPage>>,
     /// The first error, from the transport layer or from the scan.
     error: Option<Error>,
     scan: WindowScan,
@@ -114,7 +114,7 @@ fn scan_of(window: Window, page_size: u32, extended: bool) -> WindowScan {
 
 struct Completed {
     requests: Vec<HttpRequest>,
-    pages: Vec<ScanPage>,
+    pages: Vec<Response<HistoryPage>>,
     summary: ScanSummary,
 }
 
@@ -1211,7 +1211,7 @@ fn hand_page(
 }
 
 #[track_caller]
-fn assert_rule(result: Result<ScanPage, Error>, rule: &str) {
+fn assert_rule(result: Result<Response<HistoryPage>, Error>, rule: &str) {
     let error = result.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Inconsistent, "{error:?}");
     assert!(
@@ -1568,7 +1568,7 @@ fn gate10_a_failed_attempt_can_be_retried_without_losing_the_scan() {
 fn gate11_scan_types_are_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<WindowScan>();
-    assert_send_sync::<ScanPage>();
+    assert_send_sync::<Response<HistoryPage>>();
     assert_send_sync::<ScanSummary>();
     assert_send_sync::<HistoryPage>();
     assert_send_sync::<RecentTracks>();
@@ -1586,8 +1586,6 @@ fn the_exact_response_is_kept_with_each_page() {
     for (page, request) in done.pages.iter().zip(&done.requests) {
         assert_eq!(page.raw().body(), &respond(&dataset, request).1[..]);
         assert_eq!(page.raw().method(), "user.getRecentTracks");
-        assert_eq!(page.page().number(), page.number());
-        assert_eq!(page.page().scrobbles().len(), page.scrobbles().len());
     }
 }
 

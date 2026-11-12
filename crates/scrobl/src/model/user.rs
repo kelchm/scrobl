@@ -18,10 +18,10 @@ pub use top::{
     UserAlbum, UserArtist, UserTag, UserTrack, user_get_top_albums, user_get_top_artists,
     user_get_top_tags, user_get_top_tracks,
 };
-pub(super) use weekly::chart_range;
+pub(super) use weekly::week;
 pub use weekly::{
-    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
-    user_get_weekly_chart_list,
+    user_get_weekly_album_chart, user_get_weekly_artist_chart, user_get_weekly_chart_list,
+    user_get_weekly_track_chart,
 };
 
 use std::fmt;

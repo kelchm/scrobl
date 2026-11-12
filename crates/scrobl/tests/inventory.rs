@@ -63,7 +63,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ("tag.getTopTracks", "`model::Page<Track>`", "live-verified"),
     (
         "tag.getWeeklyChartList",
-        "`model::List<WeeklyChartRange>`",
+        "`model::List<Window>`",
         "live-verified",
     ),
     ("user.getFriends", "`model::Page<User>`", "live-verified"),
@@ -101,22 +101,22 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ),
     (
         "user.getWeeklyAlbumChart",
-        "`model::WeeklyAlbumChart`",
+        "`model::List<UserAlbum>`",
         "live-verified",
     ),
     (
         "user.getWeeklyArtistChart",
-        "`model::WeeklyArtistChart`",
+        "`model::List<UserArtist>`",
         "live-verified",
     ),
     (
         "user.getWeeklyChartList",
-        "`model::List<WeeklyChartRange>`",
+        "`model::List<Window>`",
         "live-verified",
     ),
     (
         "user.getWeeklyTrackChart",
-        "`model::WeeklyTrackChart`",
+        "`model::List<UserTrack>`",
         "live-verified",
     ),
 ];

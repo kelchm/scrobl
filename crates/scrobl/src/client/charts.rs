@@ -1,213 +1,148 @@
-//! Typed reads of what is played most: on the whole service, and in one
-//! country.
+//! Typed reads of what the whole service plays and tags most.
 
 use super::Client;
-use super::lists::Listing;
+use super::query::{Ask, query};
 use crate::error::Error;
-use crate::model::{Artist, CountryArtist, CountryTrack, List, Page, Tag, Track, decode};
-use crate::protocol::methods;
+use crate::model::{Artist, List, Page, Tag, Track, decode};
+use crate::protocol::{Request, methods};
 use crate::response::Response;
 
-/// The charts of the whole service. Made by [`Client::chart`].
+/// The charts of the whole service. Made by [`Client::charts`].
 #[derive(Debug, Clone)]
-pub struct Chart {
+pub struct ChartsHandle {
     client: Client,
 }
 
-impl Chart {
+impl ChartsHandle {
     pub(super) fn new(client: Client) -> Self {
         Self { client }
     }
 
-    pub(super) fn client(&self) -> &Client {
-        &self.client
+    /// The artists played most.
+    #[doc(alias = "chart.getTopArtists")]
+    pub fn top_artists(&self) -> ChartsTopArtistsQuery {
+        ChartsTopArtistsQuery::new(Ask::new(&self.client, &methods::CHART_GET_TOP_ARTISTS))
     }
 
-    /// Starts a `chart.getTopArtists` query.
-    pub fn top_artists(&self) -> ChartArtistsQuery {
-        ChartArtistsQuery {
-            list: Listing::new(self.client.clone(), None),
-        }
+    /// The tracks played most.
+    #[doc(alias = "chart.getTopTracks")]
+    pub fn top_tracks(&self) -> ChartsTopTracksQuery {
+        ChartsTopTracksQuery::new(Ask::new(&self.client, &methods::CHART_GET_TOP_TRACKS))
     }
 
-    /// Starts a `chart.getTopTracks` query.
-    pub fn top_tracks(&self) -> ChartTracksQuery {
-        ChartTracksQuery {
-            list: Listing::new(self.client.clone(), None),
-        }
+    /// The tags used most, each with a link to its page.
+    #[doc(alias = "chart.getTopTags")]
+    pub fn top_tags(&self) -> ChartsTopTagsQuery {
+        ChartsTopTagsQuery::new(Ask::new(&self.client, &methods::CHART_GET_TOP_TAGS))
     }
 
-    /// Starts a `chart.getTopTags` query.
-    pub fn top_tags(&self) -> ChartTagsQuery {
-        ChartTagsQuery {
-            list: Listing::new(self.client.clone(), None),
+    /// The tags used most, by the service's other method for it: this one
+    /// can start part of the way down the list, and its tags have no link.
+    #[doc(alias = "tag.getTopTags")]
+    pub fn tags(&self) -> ChartsTagsQuery {
+        ChartsTagsQuery {
+            client: self.client.clone(),
+            limit: None,
+            offset: None,
         }
     }
 }
 
-/// The charts of one country. Made by [`Client::geo`].
-#[derive(Debug, Clone)]
-pub struct Geo {
-    client: Client,
-    country: String,
-}
-
-impl Geo {
-    pub(super) fn new(client: Client, country: String) -> Self {
-        Self { client, country }
-    }
-
-    /// The country as given.
-    pub fn country(&self) -> &str {
-        &self.country
-    }
-
-    /// Starts a `geo.getTopArtists` query for this country.
-    pub fn top_artists(&self) -> GeoArtistsQuery {
-        GeoArtistsQuery { list: self.list() }
-    }
-
-    /// Starts a `geo.getTopTracks` query for this country.
-    pub fn top_tracks(&self) -> GeoTracksQuery {
-        GeoTracksQuery { list: self.list() }
-    }
-
-    fn list(&self) -> Listing {
-        Listing::new(self.client.clone(), Some(("country", self.country.clone())))
-    }
-}
-
-/// Defines a query for one page of a list: `limit`, `page` and `send`.
-macro_rules! page_query {
-    (
-        $(#[$doc:meta])*
-        $name:ident, $spec:ident, $row:ty, $decode:path
-    ) => {
-        $(#[$doc])*
-        #[derive(Debug, Clone)]
-        #[must_use = "a query does nothing until it is sent"]
-        pub struct $name {
-            list: Listing,
-        }
-
-        impl $name {
-            /// Sets `limit`, the page size, from 1 to 1000. The service
-            /// answers a larger one with
-            /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
-            pub fn limit(mut self, limit: u32) -> Self {
-                self.list.limit = Some(limit);
-                self
-            }
-
-            /// Sets `page`, from 1.
-            pub fn page(mut self, page: u32) -> Self {
-                self.list.page = Some(page);
-                self
-            }
-
-            /// Reads one page. The exact response is on the result, next
-            /// to the typed page.
-            ///
-            /// # Errors
-            ///
-            /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a
-            /// `limit` or a `page` of 0, before anything is sent; any error
-            /// of [`Client::call`]; and
-            /// [`ErrorKind::Decode`](crate::ErrorKind) when the page is not
-            /// the expected shape.
-            pub async fn send(self) -> Result<Response<Page<$row>>, Error> {
-                self.list.send(&methods::$spec, $decode).await
-            }
-        }
-    };
-}
-
-pub(super) use page_query;
-
-page_query! {
-    /// A `chart.getTopArtists` query: the artists played most on the whole
-    /// service. Made by [`Chart::top_artists`].
+query! {
+    /// The artists played most on the whole service. Made by
+    /// [`ChartsHandle::top_artists`].
     ///
     /// ```no_run
     /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
-    /// let page = client.chart().top_artists().limit(10).send().await?;
-    /// for (place, row) in page.ranked() {
-    ///     println!("{place}. {} ({:?} plays)", row.name(), row.playcount());
+    /// let page = client.charts().top_artists().limit(10).send().await?;
+    /// for (place, artist) in page.ranked() {
+    ///     println!("{place}. {} ({:?} plays)", artist.name(), artist.playcount());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    ChartArtistsQuery, CHART_GET_TOP_ARTISTS, Artist, decode::chart_get_top_artists
+    ChartsTopArtistsQuery => Page<Artist> = decode::chart_get_top_artists;
+    limit = "Sets `limit`, the page size, from 1 to 1000. The service refuses a larger one.",
+    page
 }
 
-page_query! {
-    /// A `chart.getTopTracks` query: the tracks played most on the whole
-    /// service. Made by [`Chart::top_tracks`].
-    ChartTracksQuery, CHART_GET_TOP_TRACKS, Track, decode::chart_get_top_tracks
+query! {
+    /// The tracks played most on the whole service. Made by
+    /// [`ChartsHandle::top_tracks`].
+    ChartsTopTracksQuery => Page<Track> = decode::chart_get_top_tracks;
+    limit = "Sets `limit`, the page size, from 1 to 1000. The service refuses a larger one.",
+    page
 }
 
-/// A `chart.getTopTags` query: the tags used most on the whole service.
-/// Made by [`Chart::top_tags`].
+query! {
+    /// The tags used most on the whole service. Made by
+    /// [`ChartsHandle::top_tags`].
+    ///
+    /// It has no `page`: the service sends the same first rows whatever
+    /// page is asked for. A larger [`limit`](Self::limit) is the way to
+    /// read further.
+    ChartsTopTagsQuery => List<Tag> = decode::chart_get_top_tags;
+    limit = "Sets `limit`, how many tags to read, from 1 to 1000. The service refuses a \
+             larger one."
+}
+
+/// The tags used most on the whole service, by `tag.getTopTags`. Made by
+/// [`ChartsHandle::tags`].
 ///
-/// It has no `page`: the service sends the same first rows whatever page is
-/// asked for. A larger [`limit`](Self::limit) is the way to read further.
+/// The method's page documents no parameter, and the service sends the 50
+/// most used tags when none is sent. It ignores a `limit`. What it goes by
+/// are two parameters its page does not list, `num_res` and `offset`,
+/// which [`limit`](Self::limit) and [`offset`](Self::offset) send. They
+/// worked on 2026-11-11, and the service owes nobody that they go on
+/// working.
+///
+/// ```no_run
+/// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
+/// let list = client.charts().tags().limit(100).offset(100).send().await?;
+/// println!("tags 101 to {}", 100 + list.len());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
-pub struct ChartTagsQuery {
-    list: Listing,
+pub struct ChartsTagsQuery {
+    client: Client,
+    limit: Option<u32>,
+    offset: Option<u64>,
 }
 
-impl ChartTagsQuery {
-    /// Sets `limit`, how many tags to read, from 1 to 1000. The service
-    /// answers a larger one with
-    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
+impl ChartsTagsQuery {
+    /// Sets how many tags to read, sent as `num_res`.
     pub fn limit(mut self, limit: u32) -> Self {
-        self.list.limit = Some(limit);
+        self.limit = Some(limit);
         self
     }
 
-    /// Reads the list. The exact response is on the result, next to the
-    /// typed list.
+    /// Sets how many of the most used tags to pass over first, sent as
+    /// `offset`.
+    pub fn offset(mut self, offset: u64) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    /// Makes the call. The exact response is on the result, next to the
+    /// typed value.
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind) for a `limit` of 0,
-    /// before anything is sent; any error of [`Client::call`]; and
+    /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the reply is not the
     /// expected shape.
     pub async fn send(self) -> Result<Response<List<Tag>>, Error> {
-        self.list
-            .send(&methods::CHART_GET_TOP_TAGS, decode::chart_get_top_tags)
-            .await
+        let mut request = Request::new(&methods::TAG_GET_TOP_TAGS);
+        if let Some(limit) = self.limit {
+            request = request.param("num_res", limit);
+        }
+        if let Some(offset) = self.offset {
+            request = request.param("offset", offset);
+        }
+        let raw = self.client.call(&request).await?;
+        let value = decode::tag_get_top_tags(&raw)?;
+        Ok(Response::new(value, raw))
     }
-}
-
-page_query! {
-    /// A `geo.getTopArtists` query: the artists a country plays most. Made
-    /// by [`Geo::top_artists`].
-    ///
-    /// The country is a name as ISO 3166-1 spells it in English, such as
-    /// `Germany`, in any case. The service refuses a code such as `DE` and
-    /// a name it does not know with
-    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
-    ///
-    /// ```no_run
-    /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
-    /// let page = client.geo("Germany").top_artists().limit(10).send().await?;
-    /// println!("{}: {} artists", page.subject().unwrap_or("?"), page.total());
-    /// # Ok(())
-    /// # }
-    /// ```
-    GeoArtistsQuery, GEO_GET_TOP_ARTISTS, CountryArtist, decode::geo_get_top_artists
-}
-
-page_query! {
-    /// A `geo.getTopTracks` query: the tracks a country plays most. Made by
-    /// [`Geo::top_tracks`]. The country is given as for a
-    /// [`GeoArtistsQuery`].
-    ///
-    /// The method's `location` parameter, a city within the country, is not
-    /// offered: on 2026-11-11 the service sent the same rows with it and
-    /// without.
-    GeoTracksQuery, GEO_GET_TOP_TRACKS, CountryTrack, decode::geo_get_top_tracks
 }

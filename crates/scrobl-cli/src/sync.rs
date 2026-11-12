@@ -29,8 +29,9 @@
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
 
-use scrobl::history::{ScanPage, ScanSummary, Window};
-use scrobl::{Client, ErrorKind};
+use scrobl::history::{ScanSummary, Window};
+use scrobl::model::HistoryPage;
+use scrobl::{Client, ErrorKind, Response};
 
 use crate::Error;
 use crate::store::{Change, Store};
@@ -191,7 +192,7 @@ async fn read(
     from: u64,
     to: u64,
     page_size: u32,
-) -> Result<(ScanSummary, Vec<ScanPage>), Error> {
+) -> Result<(ScanSummary, Vec<Response<HistoryPage>>), Error> {
     let mut attempt = 1;
     loop {
         match scan(client, user, from, to, page_size).await {
@@ -215,7 +216,7 @@ async fn scan(
     from: u64,
     to: u64,
     page_size: u32,
-) -> Result<(ScanSummary, Vec<ScanPage>), scrobl::Error> {
+) -> Result<(ScanSummary, Vec<Response<HistoryPage>>), scrobl::Error> {
     let mut scan = client
         .user(user)
         .recent_tracks()

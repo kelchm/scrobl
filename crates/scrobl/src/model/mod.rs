@@ -23,7 +23,6 @@ pub use page::{List, Page};
 pub use tag::TagInfo;
 pub use user::{
     HistoryPage, LovedTrack, NowPlaying, Scrobble, User, UserAlbum, UserArtist, UserTag, UserTrack,
-    WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
 };
 
 pub mod decode {
@@ -64,6 +63,7 @@ pub mod decode {
         user_get_friends, user_get_info, user_get_loved_tracks, user_get_personal_tags_albums,
         user_get_personal_tags_artists, user_get_personal_tags_tracks, user_get_recent_tracks,
         user_get_top_albums, user_get_top_artists, user_get_top_tags, user_get_top_tracks,
-        user_get_weekly_chart_list,
+        user_get_weekly_album_chart, user_get_weekly_artist_chart, user_get_weekly_chart_list,
+        user_get_weekly_track_chart,
     };
 }

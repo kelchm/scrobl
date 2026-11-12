@@ -65,7 +65,7 @@ fn all(body: &Value) -> Result<List<Tag>, Error> {
     decode::tag_get_top_tags(&raw(&methods::TAG_GET_TOP_TAGS, body.to_string()))
 }
 
-fn weeks(body: &Value) -> Result<List<WeeklyChartRange>, Error> {
+fn weeks(body: &Value) -> Result<List<Window>, Error> {
     decode::tag_get_weekly_chart_list(&raw(&methods::TAG_GET_WEEKLY_CHART_LIST, body.to_string()))
 }
 
@@ -455,8 +455,8 @@ fn the_derived_list_of_weeks_decodes() {
             (1_792_929_600, 1_793_534_400),
             (1_793_534_400, 1_794_139_200)
         ]
+        .map(|(from, to)| (Some(from), Some(to)))
     );
-    assert_eq!(list.items()[0].json()["#text"], "");
 
     names(
         weeks(

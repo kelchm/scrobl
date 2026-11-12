@@ -21,8 +21,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use scrobl::Response;
-use scrobl::history::{ScanPage, ScanSummary};
-use scrobl::model::{LovedTrack, Page};
+use scrobl::history::ScanSummary;
+use scrobl::model::{HistoryPage, LovedTrack, Page};
 
 use crate::Error;
 
@@ -177,7 +177,7 @@ impl Store {
     pub fn replace(
         &mut self,
         summary: &ScanSummary,
-        pages: &[ScanPage],
+        pages: &[Response<HistoryPage>],
         now: u64,
     ) -> Result<Change, Error> {
         let span = summary.window();

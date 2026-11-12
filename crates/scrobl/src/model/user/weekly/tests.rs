@@ -40,12 +40,12 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn list(body: &Value) -> Result<List<WeeklyChartRange>, Error> {
+fn list(body: &Value) -> Result<List<Window>, Error> {
     decode::user_get_weekly_chart_list(&raw(&methods::USER_GET_WEEKLY_CHART_LIST, body.to_string()))
 }
 
-fn artists(body: &Value) -> Result<WeeklyArtistChart, Error> {
-    WeeklyArtistChart::decode(&raw(
+fn artists(body: &Value) -> Result<List<UserArtist>, Error> {
+    decode::user_get_weekly_artist_chart(&raw(
         &methods::USER_GET_WEEKLY_ARTIST_CHART,
         body.to_string(),
     ))
@@ -87,23 +87,22 @@ fn the_chart_list_decodes() {
             (1_792_929_600, 1_793_534_400),
             (1_793_534_400, 1_794_139_200)
         ]
+        .map(|(from, to)| (Some(from), Some(to)))
     );
-    assert_eq!(list.items()[0].json()["#text"], "");
+    // A week is a window like any other: its start is in it, its end is not.
+    assert!(list[0].contains(1_108_296_000));
+    assert!(!list[0].contains(1_108_900_800));
 }
 
 #[test]
 fn the_recorded_artist_chart_decodes() {
     let chart =
-        WeeklyArtistChart::decode(&raw(&methods::USER_GET_WEEKLY_ARTIST_CHART, ARTISTS)).unwrap();
-    assert_eq!(
-        (chart.user(), chart.from(), chart.to()),
-        ("kelchm", 1_793_534_400, 1_794_139_200)
-    );
+        decode::user_get_weekly_artist_chart(&raw(&methods::USER_GET_WEEKLY_ARTIST_CHART, ARTISTS))
+            .unwrap();
+    assert_eq!(chart.subject(), Some("kelchm"));
     let rows: Vec<_> = chart
-        .artists()
-        .iter()
-        .zip(1_u64..)
-        .map(|(a, place)| (place, a.playcount(), a.artist().name()))
+        .ranked()
+        .map(|(place, a)| (place, a.playcount(), a.artist().name()))
         .collect();
     assert_eq!(
         rows,
@@ -113,9 +112,9 @@ fn the_recorded_artist_chart_decodes() {
             (3, 4, "Medium Build")
         ]
     );
-    assert_eq!(chart.artists()[0].artist().mbid(), None);
+    assert_eq!(chart[0].artist().mbid(), None);
     assert_eq!(
-        chart.artists()[1].artist().url(),
+        chart[1].artist().url(),
         Some("https://www.last.fm/music/Noah+Kahan")
     );
 }
@@ -123,13 +122,11 @@ fn the_recorded_artist_chart_decodes() {
 #[test]
 fn the_recorded_album_chart_decodes() {
     let chart =
-        WeeklyAlbumChart::decode(&raw(&methods::USER_GET_WEEKLY_ALBUM_CHART, ALBUMS)).unwrap();
-    assert_eq!((chart.from(), chart.to()), (1_793_534_400, 1_794_139_200));
+        decode::user_get_weekly_album_chart(&raw(&methods::USER_GET_WEEKLY_ALBUM_CHART, ALBUMS))
+            .unwrap();
     let rows: Vec<_> = chart
-        .albums()
-        .iter()
-        .zip(1_u64..)
-        .map(|(a, place)| {
+        .ranked()
+        .map(|(place, a)| {
             (
                 place,
                 a.playcount(),
@@ -148,7 +145,7 @@ fn the_recorded_album_chart_decodes() {
     );
     // The artist is a name and an id here: no `url`, and an empty `mbid`
     // reads as none.
-    let first = &chart.albums()[0];
+    let first = &chart[0];
     assert_eq!(
         (
             first.album().artist().unwrap().mbid(),
@@ -157,7 +154,7 @@ fn the_recorded_album_chart_decodes() {
         (None, None)
     );
     assert_eq!(
-        chart.albums()[1].album().artist().unwrap().mbid(),
+        chart[1].album().artist().unwrap().mbid(),
         Some("966bd819-2ba1-4e1b-9d35-72385937e8ed")
     );
     assert_eq!(
@@ -169,13 +166,12 @@ fn the_recorded_album_chart_decodes() {
 #[test]
 fn the_recorded_track_chart_decodes() {
     let chart =
-        WeeklyTrackChart::decode(&raw(&methods::USER_GET_WEEKLY_TRACK_CHART, TRACKS)).unwrap();
-    assert_eq!(chart.user(), "kelchm");
+        decode::user_get_weekly_track_chart(&raw(&methods::USER_GET_WEEKLY_TRACK_CHART, TRACKS))
+            .unwrap();
+    assert_eq!(chart.subject(), Some("kelchm"));
     let rows: Vec<_> = chart
-        .tracks()
-        .iter()
-        .zip(1_u64..)
-        .map(|(t, place)| {
+        .ranked()
+        .map(|(place, t)| {
             (
                 place,
                 t.playcount(),
@@ -194,12 +190,12 @@ fn the_recorded_track_chart_decodes() {
         ]
     );
     assert_eq!(
-        chart.tracks()[0].track().mbid(),
+        chart[0].track().mbid(),
         Some("785e81ce-d95a-3499-979a-67272042e89b")
     );
-    assert_eq!(chart.tracks()[2].track().artist().mbid(), None);
+    assert_eq!(chart[2].track().artist().mbid(), None);
     // A chart's track has three sizes of image, where a list's has four.
-    let sizes: Vec<_> = chart.tracks()[0]
+    let sizes: Vec<_> = chart[0]
         .track()
         .images()
         .iter()
@@ -211,15 +207,16 @@ fn the_recorded_track_chart_decodes() {
 #[test]
 fn the_recorded_week_without_a_scrobble_is_empty() {
     let chart =
-        WeeklyArtistChart::decode(&raw(&methods::USER_GET_WEEKLY_ARTIST_CHART, EMPTY)).unwrap();
-    assert!(chart.artists().is_empty());
-    assert_eq!((chart.from(), chart.to()), (1_108_296_000, 1_108_900_800));
+        decode::user_get_weekly_artist_chart(&raw(&methods::USER_GET_WEEKLY_ARTIST_CHART, EMPTY))
+            .unwrap();
+    assert!(chart.is_empty());
+    assert_eq!(chart.subject(), Some("kelchm"));
 }
 
 #[test]
 fn rows_may_be_one_object_or_none_at_all() {
     let chart = artists(&artist_chart(artist_row("1", "Only"))).unwrap();
-    assert_eq!(chart.artists()[0].artist().name(), "Only");
+    assert_eq!(chart[0].artist().name(), "Only");
 
     for artist in [Some(json!([])), Some(json!("")), None] {
         let mut body = artist_chart(json!([]));
@@ -240,7 +237,7 @@ fn rows_may_be_one_object_or_none_at_all() {
                     .remove("chart");
             }
         }
-        assert!(artists(&body).unwrap().artists().is_empty());
+        assert!(artists(&body).unwrap().is_empty());
         assert!(list(&weeks).unwrap().items().is_empty());
     }
 }
@@ -252,15 +249,13 @@ fn a_malformed_chart_names_the_field() {
         artists(&json!({"weeklyartistchart": {"artist": []}})),
         "weeklyartistchart.@attr",
     );
-    for (member, field) in [
-        ("user", "weeklyartistchart.@attr.user"),
-        ("from", "weeklyartistchart.@attr.from"),
-        ("to", "weeklyartistchart.@attr.to"),
-    ] {
-        let mut body = artist_chart(json!([]));
-        body["weeklyartistchart"]["@attr"][member] = json!([SECRET]);
-        names(artists(&body), field);
-    }
+    let mut body = artist_chart(json!([]));
+    body["weeklyartistchart"]["@attr"]["user"] = json!([SECRET]);
+    names(artists(&body), "weeklyartistchart.@attr.user");
+    // The span is the caller's to know: what `@attr` says of it is not read.
+    let mut body = artist_chart(json!([]));
+    body["weeklyartistchart"]["@attr"]["from"] = json!([SECRET]);
+    assert!(artists(&body).unwrap().is_empty());
     names(
         artists(&artist_chart(json!(SECRET))),
         "weeklyartistchart.artist",
@@ -275,7 +270,7 @@ fn a_malformed_chart_names_the_field() {
         artist_row(SECRET, "B")
     ])))
     .unwrap();
-    assert_eq!(chart.artists().len(), 2);
+    assert_eq!(chart.len(), 2);
 }
 
 #[test]
@@ -300,6 +295,11 @@ fn a_malformed_chart_list_names_the_field() {
         "weeklychartlist.chart[1].from",
     );
     names(weeks(json!({"from": "2"})), "weeklychartlist.chart[1].to");
+    // A week that ends where it starts, or before, is no window.
+    names(
+        weeks(json!({"from": "2", "to": "2"})),
+        "weeklychartlist.chart[1].to",
+    );
 }
 
 #[test]
@@ -309,9 +309,15 @@ fn a_response_to_another_method_is_refused() {
         decode::user_get_weekly_chart_list(&other)
             .map(drop)
             .unwrap_err(),
-        WeeklyArtistChart::decode(&other).map(drop).unwrap_err(),
-        WeeklyAlbumChart::decode(&other).map(drop).unwrap_err(),
-        WeeklyTrackChart::decode(&other).map(drop).unwrap_err(),
+        decode::user_get_weekly_artist_chart(&other)
+            .map(drop)
+            .unwrap_err(),
+        decode::user_get_weekly_album_chart(&other)
+            .map(drop)
+            .unwrap_err(),
+        decode::user_get_weekly_track_chart(&other)
+            .map(drop)
+            .unwrap_err(),
     ] {
         assert_eq!(error.kind(), ErrorKind::Decode);
         assert!(error.to_string().contains("different method"));
@@ -327,14 +333,13 @@ fn debug_leaves_out_the_text_of_the_response() {
     .unwrap();
     let shown = format!(
         "{chart:?} {:?} {weeks:?} {:?}",
-        chart.artists(),
+        chart.items(),
         weeks.items()
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("rj"), "{shown}");
-    assert!(shown.contains("from: 100"), "{shown}");
     assert!(
-        shown.contains("WeeklyChartRange { from: 1, to: 2, .. }"),
+        shown.contains("Window { from: Some(1), to: Some(2) }"),
         "{shown}"
     );
 }
