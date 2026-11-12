@@ -3426,3 +3426,106 @@ async fn the_debug_of_rows_shows_where_the_read_stands_and_no_row() {
     })
     .await;
 }
+
+const ARTIST_SIMILAR: &[u8] = include_bytes!("../fixtures/recorded/artist-similar.json");
+const ARTIST_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-albums.json");
+const ARTIST_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-tracks.json");
+const ARTIST_TAGS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-tags.json");
+const ARTIST_CORRECTION: &[u8] = include_bytes!("../fixtures/recorded/artist-correction.json");
+
+#[tokio::test]
+async fn the_lists_of_an_artist_are_read_by_name_or_by_id_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            ARTIST_SIMILAR,
+            ARTIST_ALBUMS,
+            ARTIST_TRACKS,
+            ARTIST_TAGS,
+            ARTIST_CORRECTION,
+            ARTIST_TAGS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let artist = client.artist("radiohead");
+
+        let similar = artist.similar().limit(3).send().await.unwrap();
+        assert_eq!(similar.raw().body(), ARTIST_SIMILAR);
+        assert_eq!(similar.subject(), Some("Radiohead"));
+        assert_eq!(similar[1].artist().name(), "Atoms for Peace");
+
+        let albums = artist.top_albums().limit(3).page(2).send().await.unwrap();
+        assert_eq!(albums.raw().body(), ARTIST_ALBUMS);
+        assert_eq!(albums[0].name(), "OK Computer");
+
+        // Every call through a handle that corrects names says so.
+        let corrected = artist.clone().autocorrect();
+        let tracks = corrected.top_tracks().send().await.unwrap();
+        assert_eq!(tracks.raw().body(), ARTIST_TRACKS);
+        assert_eq!(tracks[0].name(), "Creep");
+        let tags = corrected.top_tags().send().await.unwrap();
+        assert_eq!(tags[0].tag().name(), "rock");
+
+        // A correction is asked for by name, and never with `autocorrect`.
+        let filed = client
+            .artist("Guns and Roses")
+            .autocorrect()
+            .correction()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(filed.raw().body(), ARTIST_CORRECTION);
+        assert_eq!(filed.name(), "Guns N' Roses");
+
+        let by_id = client.artist_mbid("a74b1b7f-71a5-4011-9441-d0b5e4122711");
+        by_id.top_tags().send().await.unwrap();
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "artist.getSimilar"),
+                    ("artist", "radiohead"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopAlbums"),
+                    ("artist", "radiohead"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTracks"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTags"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "artist.getCorrection"),
+                    ("artist", "Guns and Roses")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTags"),
+                    ("mbid", "a74b1b7f-71a5-4011-9441-d0b5e4122711")
+                ]),
+            ]
+        );
+
+        // An id has no name to correct: refused before anything is sent.
+        let error = by_id.correction().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("by name"), "{error}");
+        let error = artist.similar().limit(0).send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert_eq!(server.requests().len(), 6);
+    })
+    .await;
+}

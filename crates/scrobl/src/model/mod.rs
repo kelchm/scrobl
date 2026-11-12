@@ -8,6 +8,7 @@
 //!
 //! The `Debug` output of a model leaves out the text of the response.
 
+mod artist;
 mod chart;
 mod entity;
 mod geo;
@@ -17,6 +18,7 @@ mod shared;
 mod tag;
 mod user;
 
+pub use artist::{SimilarArtist, TopTag};
 pub use entity::{Album, Artist, Image, Images, Tag, Track};
 pub use geo::{CountryArtist, CountryTrack};
 pub use page::{List, Page};
@@ -52,6 +54,10 @@ pub mod decode {
     //! The message names the field, such as `topartists.artist[3].playcount`,
     //! and never repeats response text.
 
+    pub use super::artist::{
+        artist_get_correction, artist_get_similar, artist_get_top_albums, artist_get_top_tags,
+        artist_get_top_tracks,
+    };
     pub use super::chart::{chart_get_top_artists, chart_get_top_tags, chart_get_top_tracks};
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;

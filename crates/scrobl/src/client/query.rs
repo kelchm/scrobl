@@ -20,6 +20,8 @@ pub(super) struct Ask {
     most: Option<(u32, &'static str)>,
     /// The span of time a chart is asked for.
     window: Option<Window>,
+    /// Why the call cannot be made as it was put together, if it cannot.
+    refused: Option<&'static str>,
     pub(super) lang: Option<String>,
     pub(super) period: Option<Period>,
     pub(super) limit: Option<u32>,
@@ -34,6 +36,7 @@ impl Ask {
             about: Vec::new(),
             most: None,
             window: None,
+            refused: None,
             lang: None,
             period: None,
             limit: None,
@@ -54,6 +57,13 @@ impl Ask {
         self
     }
 
+    /// Makes `send` fail with `problem` before anything is sent: the handle
+    /// cannot ask this of what it holds.
+    pub(super) fn refusing(mut self, problem: &'static str) -> Self {
+        self.refused = Some(problem);
+        self
+    }
+
     /// Asks for `window`, which must have both its ends.
     pub(super) fn within(mut self, window: Window) -> Self {
         self.window = Some(window);
@@ -62,6 +72,9 @@ impl Ask {
 
     fn request(&self) -> Result<Request, Error> {
         let refuse = |problem| Err(Error::invalid_request(self.spec, problem));
+        if let Some(problem) = self.refused {
+            return refuse(problem);
+        }
         // The service refuses a 0 too, but its answer is error 6 with the
         // reason in a message this library never prints.
         match (self.limit, self.most) {
