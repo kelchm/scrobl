@@ -45,11 +45,15 @@ fn paging(results: &Map<String, Value>) -> Result<Paging, Error> {
         _ => return Err(missing_or(query, "an object")),
     };
     let per_page = shared::required_u32(results, ROOT, "opensearch:itemsPerPage")?;
+    if per_page == 0 {
+        // No number of pages can be worked out from a page of nothing.
+        return Err(Error::decode_field(
+            "results.opensearch:itemsPerPage",
+            "a page size of 0",
+        ));
+    }
     let total = shared::required_uint(results, ROOT, "opensearch:totalResults")?;
-    let total_pages = match u64::from(per_page) {
-        0 => 0,
-        size => u32::try_from(total.div_ceil(size)).unwrap_or(u32::MAX),
-    };
+    let total_pages = u32::try_from(total.div_ceil(u64::from(per_page))).unwrap_or(u32::MAX);
     Ok(Paging {
         number,
         per_page,
@@ -95,7 +99,8 @@ fn paging(results: &Map<String, Value>) -> Result<Paging, Error> {
 /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for another
 /// method, when `results`, its `opensearch:Query.startPage`, its
 /// `opensearch:itemsPerPage`, its `opensearch:totalResults`, its
-/// `@attr.for` or its `artistmatches` is missing or malformed, when a row
+/// `@attr.for` or its `artistmatches` is missing or malformed, when the
+/// page size is 0, when a row
 /// is not an object or lacks a `name` or `listeners`, when there are no
 /// rows on a page that the numbers say holds some, or when an object
 /// repeats a member name. The message names the field and never repeats

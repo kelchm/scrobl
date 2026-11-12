@@ -157,9 +157,10 @@ fn the_paging_is_read_from_the_three_numbers() {
     ))
     .unwrap();
     assert_eq!(vast.total_pages(), u32::MAX);
-    let mut none_to_a_page = results("artistmatches", "artist", json!([]), 1, 1, 0);
+    // A page size of 0 leaves no way to say how many pages there are.
+    let mut none_to_a_page = results("artistmatches", "artist", json!([]), 1, 1, 9);
     none_to_a_page["results"]["opensearch:itemsPerPage"] = json!("0");
-    assert_eq!(artists(&none_to_a_page).unwrap().total_pages(), 0);
+    names(artists(&none_to_a_page), "results.opensearch:itemsPerPage");
 }
 
 #[test]
