@@ -1310,9 +1310,11 @@ async fn a_track_against_the_live_service() {
         beyond.is_ok(),
         large.is_ok()
     );
+    assert_eq!(unset.per_page(), 30);
     assert!(last.is_ok());
     assert_eq!(
         beyond.unwrap_err().api_code(),
         Some(ApiErrorCode::INVALID_PARAMETERS)
     );
+    assert!(large.is_err());
 }

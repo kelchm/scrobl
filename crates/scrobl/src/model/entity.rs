@@ -196,8 +196,8 @@ impl fmt::Debug for Artist {
 
 /// An album. [`json`](Self::json) is the object exactly as decoded.
 ///
-/// `artist` is `None` where an album is only named inside a track's row:
-/// the artist is the track's.
+/// `artist` is `None` where an album is named inside a track's row and the
+/// row does not say whose it is. A `track.getInfo` reply does say.
 #[derive(Clone)]
 pub struct Album {
     name: String,
@@ -232,7 +232,8 @@ impl Album {
         &self.images
     }
 
-    /// The album's artist, where the album is a row of its own.
+    /// The album's artist, where the reply names one: an album that is a
+    /// row of its own, or the album of a `track.getInfo` reply.
     pub fn artist(&self) -> Option<&Artist> {
         self.artist.as_ref()
     }
