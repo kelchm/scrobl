@@ -63,7 +63,7 @@
 //!     .limit(1)
 //!     .send()
 //!     .await?;
-//! println!("{} scrobbles", page.attr().total());
+//! println!("{} scrobbles", page.total());
 //! # Ok(())
 //! # }
 //! ```

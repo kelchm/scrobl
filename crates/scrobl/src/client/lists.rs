@@ -5,9 +5,9 @@
 use super::{Client, User};
 use crate::error::Error;
 use crate::model::{
-    FriendsPage, LibraryArtistsPage, TaggedAlbumsPage, TaggedArtistsPage, TaggedTracksPage,
-    TopAlbumsPage, TopArtistsPage, TopTags, TopTracksPage, UserInfo, WeeklyAlbumChart,
-    WeeklyArtistChart, WeeklyChartList, WeeklyTrackChart,
+    LibraryArtist, List, Page, TaggedAlbum, TaggedArtist, TaggedTrack, TopAlbum, TopArtist, TopTag,
+    TopTrack, UserInfo, WeeklyAlbumChart, WeeklyArtistChart, WeeklyChartRange, WeeklyTrackChart,
+    decode,
 };
 use crate::protocol::{MethodSpec, Raw, Request, methods};
 use crate::response::Response;
@@ -51,14 +51,14 @@ impl User {
     /// Starts a `user.getInfo` query for this user.
     pub fn info(&self) -> UserInfoQuery {
         UserInfoQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getFriends` query for this user.
     pub fn friends(&self) -> FriendsQuery {
         FriendsQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
@@ -66,7 +66,7 @@ impl User {
     /// given `tag`.
     pub fn tagged_artists(&self, tag: impl Into<String>) -> TaggedArtistsQuery {
         TaggedArtistsQuery {
-            list: List::tagged(self, tag.into(), "artist"),
+            list: Listing::tagged(self, tag.into(), "artist"),
         }
     }
 
@@ -74,7 +74,7 @@ impl User {
     /// given `tag`.
     pub fn tagged_albums(&self, tag: impl Into<String>) -> TaggedAlbumsQuery {
         TaggedAlbumsQuery {
-            list: List::tagged(self, tag.into(), "album"),
+            list: Listing::tagged(self, tag.into(), "album"),
         }
     }
 
@@ -82,77 +82,77 @@ impl User {
     /// given `tag`.
     pub fn tagged_tracks(&self, tag: impl Into<String>) -> TaggedTracksQuery {
         TaggedTracksQuery {
-            list: List::tagged(self, tag.into(), "track"),
+            list: Listing::tagged(self, tag.into(), "track"),
         }
     }
 
     /// Starts a `user.getTopArtists` query for this user.
     pub fn top_artists(&self) -> TopArtistsQuery {
         TopArtistsQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getTopAlbums` query for this user.
     pub fn top_albums(&self) -> TopAlbumsQuery {
         TopAlbumsQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getTopTracks` query for this user.
     pub fn top_tracks(&self) -> TopTracksQuery {
         TopTracksQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getTopTags` query for this user.
     pub fn top_tags(&self) -> TopTagsQuery {
         TopTagsQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getWeeklyChartList` query for this user.
     pub fn weekly_chart_list(&self) -> WeeklyChartListQuery {
         WeeklyChartListQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getWeeklyArtistChart` query for this user.
     pub fn weekly_artist_chart(&self) -> WeeklyArtistChartQuery {
         WeeklyArtistChartQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getWeeklyAlbumChart` query for this user.
     pub fn weekly_album_chart(&self) -> WeeklyAlbumChartQuery {
         WeeklyAlbumChartQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `user.getWeeklyTrackChart` query for this user.
     pub fn weekly_track_chart(&self) -> WeeklyTrackChartQuery {
         WeeklyTrackChartQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 
     /// Starts a `library.getArtists` query for this user.
     pub fn library_artists(&self) -> LibraryArtistsQuery {
         LibraryArtistsQuery {
-            list: List::of(self),
+            list: Listing::of(self),
         }
     }
 }
 
 /// What every list query holds: whose list, and which part of it.
 #[derive(Debug, Clone)]
-pub(super) struct List {
+pub(super) struct Listing {
     client: Client,
     /// The parameter that says whose list it is, such as `user` or `tag`,
     /// with its value. A chart of the whole service has none.
@@ -165,7 +165,7 @@ pub(super) struct List {
     tagged: Option<(String, &'static str)>,
 }
 
-impl List {
+impl Listing {
     fn of(user: &User) -> Self {
         Self::new(user.client.clone(), Some(("user", user.name.clone())))
     }
@@ -242,7 +242,7 @@ impl List {
 ///     .limit(10)
 ///     .send()
 ///     .await?;
-/// for top in page.artists() {
+/// for (place, top) in page.ranked() {
 ///     println!("{}. {} ({})", top.rank(), top.artist().name(), top.playcount());
 /// }
 /// # Ok(())
@@ -251,7 +251,7 @@ impl List {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TopArtistsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TopArtistsQuery {
@@ -287,9 +287,9 @@ impl TopArtistsQuery {
     /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS); and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the page is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<TopArtistsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TopArtist>>, Error> {
         self.list
-            .send(&methods::USER_GET_TOP_ARTISTS, TopArtistsPage::decode)
+            .send(&methods::USER_GET_TOP_ARTISTS, decode::user_get_top_artists)
             .await
     }
 }
@@ -299,7 +299,7 @@ impl TopArtistsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TopAlbumsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TopAlbumsQuery {
@@ -312,7 +312,7 @@ impl TopAlbumsQuery {
 
     /// Sets `limit`, the page size, from 1. The service has applied 1000
     /// when asked; the page says what size it applied, in
-    /// [`per_page`](crate::model::PageAttr::per_page).
+    /// [`per_page`](crate::model::Page::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -330,9 +330,9 @@ impl TopAlbumsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<TopAlbumsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TopAlbum>>, Error> {
         self.list
-            .send(&methods::USER_GET_TOP_ALBUMS, TopAlbumsPage::decode)
+            .send(&methods::USER_GET_TOP_ALBUMS, decode::user_get_top_albums)
             .await
     }
 }
@@ -342,7 +342,7 @@ impl TopAlbumsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TopTracksQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TopTracksQuery {
@@ -355,7 +355,7 @@ impl TopTracksQuery {
 
     /// Sets `limit`, the page size, from 1. The service has applied 1000
     /// when asked; the page says what size it applied, in
-    /// [`per_page`](crate::model::PageAttr::per_page).
+    /// [`per_page`](crate::model::Page::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -373,9 +373,9 @@ impl TopTracksQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<TopTracksPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TopTrack>>, Error> {
         self.list
-            .send(&methods::USER_GET_TOP_TRACKS, TopTracksPage::decode)
+            .send(&methods::USER_GET_TOP_TRACKS, decode::user_get_top_tracks)
             .await
     }
 }
@@ -386,7 +386,7 @@ impl TopTracksQuery {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let top = client.user("rj").top_tags().limit(10).send().await?;
-/// for tag in top.tags() {
+/// for tag in top.items() {
 ///     println!("{} ({})", tag.name(), tag.count());
 /// }
 /// # Ok(())
@@ -395,7 +395,7 @@ impl TopTracksQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TopTagsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TopTagsQuery {
@@ -414,9 +414,9 @@ impl TopTagsQuery {
     /// before anything is sent; any error of [`Client::call`]; and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<TopTags>, Error> {
+    pub async fn send(self) -> Result<Response<List<TopTag>>, Error> {
         self.list
-            .send(&methods::USER_GET_TOP_TAGS, TopTags::decode)
+            .send(&methods::USER_GET_TOP_TAGS, decode::user_get_top_tags)
             .await
     }
 }
@@ -427,20 +427,20 @@ impl TopTagsQuery {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let page = client.user("rj").library_artists().limit(200).send().await?;
-/// println!("{} artists", page.attr().total());
+/// println!("{} artists", page.total());
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct LibraryArtistsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl LibraryArtistsQuery {
     /// Sets `limit`, the page size, from 1. The service has applied 2000
     /// when asked; the page says what size it applied, in
-    /// [`per_page`](crate::model::PageAttr::per_page).
+    /// [`per_page`](crate::model::Page::per_page).
     pub fn limit(mut self, limit: u32) -> Self {
         self.list.limit = Some(limit);
         self
@@ -458,9 +458,9 @@ impl LibraryArtistsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<LibraryArtistsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<LibraryArtist>>, Error> {
         self.list
-            .send(&methods::LIBRARY_GET_ARTISTS, LibraryArtistsPage::decode)
+            .send(&methods::LIBRARY_GET_ARTISTS, decode::library_get_artists)
             .await
     }
 }
@@ -470,7 +470,7 @@ impl LibraryArtistsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct WeeklyChartListQuery {
-    list: List,
+    list: Listing,
 }
 
 impl WeeklyChartListQuery {
@@ -482,11 +482,11 @@ impl WeeklyChartListQuery {
     /// Any error of [`Client::call`], and
     /// [`ErrorKind::Decode`](crate::ErrorKind) when the answer is not the
     /// expected shape.
-    pub async fn send(self) -> Result<Response<WeeklyChartList>, Error> {
+    pub async fn send(self) -> Result<Response<List<WeeklyChartRange>>, Error> {
         self.list
             .send(
                 &methods::USER_GET_WEEKLY_CHART_LIST,
-                WeeklyChartList::decode,
+                decode::user_get_weekly_chart_list,
             )
             .await
     }
@@ -499,7 +499,7 @@ impl WeeklyChartListQuery {
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let user = client.user("rj");
 /// let weeks = user.weekly_chart_list().send().await?;
-/// if let Some(week) = weeks.ranges().last() {
+/// if let Some(week) = weeks.last() {
 ///     let chart = user
 ///         .weekly_artist_chart()
 ///         .range(week.from(), week.to())
@@ -515,12 +515,12 @@ impl WeeklyChartListQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct WeeklyArtistChartQuery {
-    list: List,
+    list: Listing,
 }
 
 impl WeeklyArtistChartQuery {
     /// Sets `from` and `to`, the span to chart, in seconds since the Unix
-    /// epoch, such as a week of [`WeeklyChartList`]. Without them the
+    /// epoch, such as a week from [`User::weekly_chart_list`]. Without them the
     /// service chooses a recent span of seven days, which need not be one
     /// of the listed weeks.
     pub fn range(mut self, from: u64, to: u64) -> Self {
@@ -552,7 +552,7 @@ impl WeeklyArtistChartQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct WeeklyAlbumChartQuery {
-    list: List,
+    list: Listing,
 }
 
 impl WeeklyAlbumChartQuery {
@@ -585,7 +585,7 @@ impl WeeklyAlbumChartQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct WeeklyTrackChartQuery {
-    list: List,
+    list: Listing,
 }
 
 impl WeeklyTrackChartQuery {
@@ -624,7 +624,7 @@ impl WeeklyTrackChartQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct UserInfoQuery {
-    list: List,
+    list: Listing,
 }
 
 impl UserInfoQuery {
@@ -651,7 +651,7 @@ impl UserInfoQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct FriendsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl FriendsQuery {
@@ -677,9 +677,9 @@ impl FriendsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<FriendsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<UserInfo>>, Error> {
         self.list
-            .send(&methods::USER_GET_FRIENDS, FriendsPage::decode)
+            .send(&methods::USER_GET_FRIENDS, decode::user_get_friends)
             .await
     }
 }
@@ -690,7 +690,7 @@ impl FriendsQuery {
 /// ```no_run
 /// # async fn demo(client: scrobl::Client) -> Result<(), scrobl::Error> {
 /// let page = client.user("rj").tagged_artists("rock").send().await?;
-/// for tagged in page.artists() {
+/// for tagged in page.items() {
 ///     println!("{}", tagged.artist().name());
 /// }
 /// # Ok(())
@@ -699,7 +699,7 @@ impl FriendsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TaggedArtistsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TaggedArtistsQuery {
@@ -723,9 +723,12 @@ impl TaggedArtistsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<TaggedArtistsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TaggedArtist>>, Error> {
         self.list
-            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedArtistsPage::decode)
+            .send(
+                &methods::USER_GET_PERSONAL_TAGS,
+                decode::user_get_personal_tags_artists,
+            )
             .await
     }
 }
@@ -736,7 +739,7 @@ impl TaggedArtistsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TaggedAlbumsQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TaggedAlbumsQuery {
@@ -758,9 +761,12 @@ impl TaggedAlbumsQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<TaggedAlbumsPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TaggedAlbum>>, Error> {
         self.list
-            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedAlbumsPage::decode)
+            .send(
+                &methods::USER_GET_PERSONAL_TAGS,
+                decode::user_get_personal_tags_albums,
+            )
             .await
     }
 }
@@ -771,7 +777,7 @@ impl TaggedAlbumsQuery {
 #[derive(Debug, Clone)]
 #[must_use = "a query does nothing until it is sent"]
 pub struct TaggedTracksQuery {
-    list: List,
+    list: Listing,
 }
 
 impl TaggedTracksQuery {
@@ -793,9 +799,12 @@ impl TaggedTracksQuery {
     /// # Errors
     ///
     /// As [`TopArtistsQuery::send`].
-    pub async fn send(self) -> Result<Response<TaggedTracksPage>, Error> {
+    pub async fn send(self) -> Result<Response<Page<TaggedTrack>>, Error> {
         self.list
-            .send(&methods::USER_GET_PERSONAL_TAGS, TaggedTracksPage::decode)
+            .send(
+                &methods::USER_GET_PERSONAL_TAGS,
+                decode::user_get_personal_tags_tracks,
+            )
             .await
     }
 }

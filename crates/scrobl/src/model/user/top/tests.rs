@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::ErrorKind;
 use crate::model::Image;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Request};
 
 // Fixtures. Provenance for each:
@@ -33,20 +34,20 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<TopArtistsPage, Error> {
-    TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, body.to_string()))
+fn artists(body: &Value) -> Result<Page<TopArtist>, Error> {
+    decode::user_get_top_artists(&raw(&methods::USER_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn albums(body: &Value) -> Result<TopAlbumsPage, Error> {
-    TopAlbumsPage::decode(&raw(&methods::USER_GET_TOP_ALBUMS, body.to_string()))
+fn albums(body: &Value) -> Result<Page<TopAlbum>, Error> {
+    decode::user_get_top_albums(&raw(&methods::USER_GET_TOP_ALBUMS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<TopTracksPage, Error> {
-    TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, body.to_string()))
+fn tracks(body: &Value) -> Result<Page<TopTrack>, Error> {
+    decode::user_get_top_tracks(&raw(&methods::USER_GET_TOP_TRACKS, body.to_string()))
 }
 
-fn tags(body: &Value) -> Result<TopTags, Error> {
-    TopTags::decode(&raw(&methods::USER_GET_TOP_TAGS, body.to_string()))
+fn tags(body: &Value) -> Result<List<TopTag>, Error> {
+    decode::user_get_top_tags(&raw(&methods::USER_GET_TOP_TAGS, body.to_string()))
 }
 
 /// A page of `total` rows in all, of which `rows` are on this one.
@@ -96,22 +97,21 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_recorded_top_artists_decode() {
-    let page = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let page = decode::user_get_top_artists(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
 
-    let attr = page.attr();
-    assert_eq!(page.user(), "kelchm");
+    assert_eq!(page.subject(), Some("kelchm"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 3369, 10_105)
     );
 
     let rows: Vec<_> = page
-        .artists()
+        .items()
         .iter()
         .map(|a| (a.rank(), a.playcount(), a.artist().name()))
         .collect();
@@ -123,7 +123,7 @@ fn the_recorded_top_artists_decode() {
             (3, 3726, "Elliott Smith")
         ]
     );
-    let first = &page.artists()[0];
+    let first = &page.items()[0];
     assert_eq!(
         first.artist().mbid(),
         Some("3599a39e-4e10-4cb5-90d4-c8a015ebc73b")
@@ -139,26 +139,23 @@ fn the_recorded_top_artists_decode() {
 
 #[test]
 fn the_recorded_page_beyond_the_last_is_empty() {
-    let page = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, BEYOND)).unwrap();
-    assert!(page.artists().is_empty());
+    let page = decode::user_get_top_artists(&raw(&methods::USER_GET_TOP_ARTISTS, BEYOND)).unwrap();
+    assert!(page.items().is_empty());
     assert_eq!(
-        (page.attr().page(), page.attr().total_pages()),
+        (page.number(), page.total_pages()),
         (9999, 11),
         "the list is `[]` on a page past the last"
     );
-    assert_eq!(page.attr().total(), 10_105);
+    assert_eq!(page.total(), 10_105);
 }
 
 #[test]
 fn the_recorded_top_albums_decode() {
-    let page = TopAlbumsPage::decode(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
-    assert_eq!(
-        (page.attr().total_pages(), page.attr().total()),
-        (7258, 21_774)
-    );
+    let page = decode::user_get_top_albums(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
+    assert_eq!((page.total_pages(), page.total()), (7258, 21_774));
 
     let rows: Vec<_> = page
-        .albums()
+        .items()
         .iter()
         .map(|a| {
             (
@@ -182,7 +179,7 @@ fn the_recorded_top_albums_decode() {
             (3, 770, Some("The Glass Passenger"), "Jack's Mannequin")
         ]
     );
-    let first = &page.albums()[0];
+    let first = &page.items()[0];
     assert_eq!(
         first.album().mbid(),
         Some("121682be-5d99-40b9-8ea0-4b20a7fe4a38")
@@ -195,21 +192,18 @@ fn the_recorded_top_albums_decode() {
     assert_eq!(first.artist().mbid(), None);
     assert_eq!(first.json()["artist"]["mbid"], "");
     assert_eq!(
-        page.albums()[1].artist().mbid(),
+        page.items()[1].artist().mbid(),
         Some("3599a39e-4e10-4cb5-90d4-c8a015ebc73b")
     );
 }
 
 #[test]
 fn the_recorded_top_tracks_decode() {
-    let page = TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
-    assert_eq!(
-        (page.attr().total_pages(), page.attr().total()),
-        (15_687, 47_059)
-    );
+    let page = decode::user_get_top_tracks(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!((page.total_pages(), page.total()), (15_687, 47_059));
 
     let rows: Vec<_> = page
-        .tracks()
+        .items()
         .iter()
         .map(|t| {
             (
@@ -229,7 +223,7 @@ fn the_recorded_top_tracks_decode() {
             (3, 157, Some(209), "Greek Tragedy", "The Wombats")
         ]
     );
-    let first = &page.tracks()[0];
+    let first = &page.items()[0];
     assert_eq!(
         first.track().mbid(),
         Some("0b34b2a4-d282-4fba-a1d8-f9970a0852c3")
@@ -247,10 +241,10 @@ fn the_recorded_top_tracks_decode() {
 
 #[test]
 fn the_recorded_top_tags_decode() {
-    let top = TopTags::decode(&raw(&methods::USER_GET_TOP_TAGS, TAGS)).unwrap();
-    assert_eq!(top.user(), "kelchm");
+    let top = decode::user_get_top_tags(&raw(&methods::USER_GET_TOP_TAGS, TAGS)).unwrap();
+    assert_eq!(top.subject(), Some("kelchm"));
     let rows: Vec<_> = top
-        .tags()
+        .items()
         .iter()
         .map(|t| (t.name(), t.count(), t.url()))
         .collect();
@@ -266,22 +260,22 @@ fn the_recorded_top_tags_decode() {
             ("to buy", 1, Some("https://www.last.fm/tag/to+buy"))
         ]
     );
-    assert_eq!(top.tags()[2].json()["name"], "to buy");
+    assert_eq!(top.items()[2].json()["name"], "to buy");
 }
 
 #[test]
 fn a_single_row_may_come_as_an_object() {
     let page = artists(&paged("topartists", "artist", artist_row("1", "Only"), 1)).unwrap();
-    assert_eq!(page.artists()[0].artist().name(), "Only");
+    assert_eq!(page.items()[0].artist().name(), "Only");
 
     let page = albums(&paged("topalbums", "album", album_row("1", "Only"), 1)).unwrap();
-    assert_eq!(page.albums()[0].album().title(), Some("Only"));
+    assert_eq!(page.items()[0].album().title(), Some("Only"));
 
     let page = tracks(&paged("toptracks", "track", track_row("1", "Only"), 1)).unwrap();
-    assert_eq!(page.tracks()[0].track().name(), "Only");
+    assert_eq!(page.items()[0].track().name(), "Only");
 
     let top = tags(&tag_list(tag_row("only"))).unwrap();
-    assert_eq!(top.tags()[0].name(), "only");
+    assert_eq!(top.items()[0].name(), "only");
 }
 
 #[test]
@@ -299,8 +293,8 @@ fn an_empty_list_decodes_in_each_of_its_forms() {
                 list["toptags"].as_object_mut().unwrap().remove("tag");
             }
         }
-        assert!(tracks(&body).unwrap().tracks().is_empty());
-        assert!(tags(&list).unwrap().tags().is_empty());
+        assert!(tracks(&body).unwrap().items().is_empty());
+        assert!(tags(&list).unwrap().items().is_empty());
     }
 }
 
@@ -448,27 +442,27 @@ fn what_a_row_may_leave_out_reads_as_none() {
     let mut row = track_row("1", "A");
     row.as_object_mut().unwrap().remove("duration");
     let page = tracks(&paged("toptracks", "track", json!([row]), 1)).unwrap();
-    assert_eq!(page.tracks()[0].duration(), None);
-    assert_eq!(page.tracks()[0].track().mbid(), None);
+    assert_eq!(page.items()[0].duration(), None);
+    assert_eq!(page.items()[0].track().mbid(), None);
 
     // A length the service does not know comes as 0.
     let mut unknown = track_row("1", "A");
     unknown["duration"] = json!("0");
     let page = tracks(&paged("toptracks", "track", json!([unknown]), 1)).unwrap();
-    assert_eq!(page.tracks()[0].duration(), None);
-    assert_eq!(page.tracks()[0].json()["duration"], "0");
+    assert_eq!(page.items()[0].duration(), None);
+    assert_eq!(page.items()[0].json()["duration"], "0");
 
     let page = albums(&paged("topalbums", "album", json!([album_row("1", "")]), 1)).unwrap();
-    assert_eq!(page.albums()[0].album().title(), None);
+    assert_eq!(page.items()[0].album().title(), None);
 
     let top = tags(&tag_list(json!([{"name": "a", "count": 3}]))).unwrap();
-    assert_eq!((top.tags()[0].count(), top.tags()[0].url()), (3, None));
+    assert_eq!((top.items()[0].count(), top.items()[0].url()), (3, None));
 }
 
 #[test]
 fn a_repeated_member_is_an_error() {
     let body = r#"{"toptags": {"tag": [], "tag": [], "@attr": {"user": "rj"}}}"#;
-    let error = TopTags::decode(&raw(&methods::USER_GET_TOP_TAGS, body)).unwrap_err();
+    let error = decode::user_get_top_tags(&raw(&methods::USER_GET_TOP_TAGS, body)).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
 }
 
@@ -476,10 +470,10 @@ fn a_repeated_member_is_an_error() {
 fn a_response_to_another_method_is_refused() {
     let other = raw(&methods::USER_GET_RECENT_TRACKS, ARTISTS);
     for error in [
-        TopArtistsPage::decode(&other).map(drop).unwrap_err(),
-        TopAlbumsPage::decode(&other).map(drop).unwrap_err(),
-        TopTracksPage::decode(&other).map(drop).unwrap_err(),
-        TopTags::decode(&other).map(drop).unwrap_err(),
+        decode::user_get_top_artists(&other).map(drop).unwrap_err(),
+        decode::user_get_top_albums(&other).map(drop).unwrap_err(),
+        decode::user_get_top_tracks(&other).map(drop).unwrap_err(),
+        decode::user_get_top_tags(&other).map(drop).unwrap_err(),
     ] {
         assert_eq!(error.kind(), ErrorKind::Decode);
         assert!(error.to_string().contains("different method"));
@@ -513,10 +507,10 @@ fn debug_leaves_out_the_text_of_the_response() {
 
     let shown = format!(
         "{artists:?} {:?} {albums:?} {:?} {tracks:?} {:?} {tags:?} {:?}",
-        artists.artists(),
-        albums.albums(),
-        tracks.tracks(),
-        tags.tags()
+        artists.items(),
+        albums.items(),
+        tracks.items(),
+        tags.items()
     );
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("rj"), "{shown}");
@@ -530,7 +524,7 @@ fn sizes(images: &[Image]) -> Vec<Option<&str>> {
 }
 
 /// A page whose one artist has `image` under that name, or no such member.
-fn artist_with(image: Option<Value>) -> Result<TopArtistsPage, Error> {
+fn artist_with(image: Option<Value>) -> Result<Page<TopArtist>, Error> {
     let mut row = artist_row("1", "A");
     if let Some(image) = image {
         row["image"] = image;
@@ -540,8 +534,9 @@ fn artist_with(image: Option<Value>) -> Result<TopArtistsPage, Error> {
 
 #[test]
 fn the_recorded_rows_carry_their_images() {
-    let artists = TopArtistsPage::decode(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
-    let images = artists.artists()[0].artist().images();
+    let artists =
+        decode::user_get_top_artists(&raw(&methods::USER_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let images = artists.items()[0].artist().images();
     assert_eq!(
         sizes(images),
         ["small", "medium", "large", "extralarge", "mega"].map(Some)
@@ -551,9 +546,9 @@ fn the_recorded_rows_carry_their_images() {
         "https://lastfm-img.freetls.fastly.net/i/u/34s/2a96cbd8b46e442fc41c2b86b821562f.png"
     );
 
-    let albums = TopAlbumsPage::decode(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
-    assert_eq!(albums.user(), "kelchm");
-    let images = albums.albums()[0].album().images();
+    let albums = decode::user_get_top_albums(&raw(&methods::USER_GET_TOP_ALBUMS, ALBUMS)).unwrap();
+    assert_eq!(albums.subject(), Some("kelchm"));
+    let images = albums.items()[0].album().images();
     assert_eq!(
         sizes(images),
         ["small", "medium", "large", "extralarge"].map(Some)
@@ -563,25 +558,25 @@ fn the_recorded_rows_carry_their_images() {
         "https://lastfm-img.freetls.fastly.net/i/u/300x300/26b6daf514da76b731dbfb02ffe23325.jpg"
     );
     // The artist of an album is a name, an id and a page: no image.
-    assert!(albums.albums()[0].artist().images().is_empty());
+    assert!(albums.items()[0].artist().images().is_empty());
 
-    let tracks = TopTracksPage::decode(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
-    assert_eq!(tracks.user(), "kelchm");
-    assert_eq!(tracks.tracks()[0].track().images().len(), 4);
-    assert!(tracks.tracks()[0].artist().images().is_empty());
+    let tracks = decode::user_get_top_tracks(&raw(&methods::USER_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!(tracks.subject(), Some("kelchm"));
+    assert_eq!(tracks.items()[0].track().images().len(), 4);
+    assert!(tracks.items()[0].artist().images().is_empty());
 }
 
 #[test]
 fn images_may_be_a_list_one_object_or_none() {
     for none in [None, Some(json!("")), Some(json!([]))] {
         let page = artist_with(none).unwrap();
-        assert!(page.artists()[0].artist().images().is_empty());
+        assert!(page.items()[0].artist().images().is_empty());
     }
 
     let one = json!({"size": "large", "#text": "https://example.invalid/l.png"});
     for image in [json!([one.clone()]), one] {
         let page = artist_with(Some(image)).unwrap();
-        let [only] = page.artists()[0].artist().images() else {
+        let [only] = page.items()[0].artist().images() else {
             panic!("one image expected");
         };
         assert_eq!(only.size(), Some("large"));
@@ -598,7 +593,7 @@ fn an_image_without_an_address_is_left_out() {
         {"#text": "https://example.invalid/y.png"}
     ])))
     .unwrap();
-    let row = &page.artists()[0];
+    let row = &page.items()[0];
     let images = row.artist().images();
     assert_eq!(sizes(images), [None, None]);
     assert_eq!(
@@ -654,7 +649,82 @@ fn a_malformed_image_names_the_field() {
 #[test]
 fn debug_of_an_image_leaves_out_its_text() {
     let page = artist_with(Some(json!([{"size": SECRET, "#text": SECRET}]))).unwrap();
-    let image = &page.artists()[0].artist().images()[0];
+    let image = &page.items()[0].artist().images()[0];
     assert_eq!(image.url(), SECRET);
     assert!(!format!("{image:?} {page:?}").contains(SECRET));
+}
+
+/// A page of artists `number` of `total_pages`, two to a page.
+fn numbered(number: u32, total_pages: u32, rows: &[&str]) -> Page<TopArtist> {
+    let rows: Vec<Value> = rows.iter().map(|name| artist_row("1", name)).collect();
+    artists(&json!({"topartists": {"artist": rows, "@attr": {
+        "user": "rj", "page": number.to_string(), "perPage": "2",
+        "totalPages": total_pages.to_string(), "total": (total_pages * 2).to_string()}}}))
+    .unwrap()
+}
+
+#[test]
+fn a_page_knows_its_place_and_the_place_of_each_row() {
+    let page = numbered(3, 5, &["E", "F"]);
+    assert_eq!(
+        (
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
+        ),
+        (3, 2, 5, 10)
+    );
+    assert_eq!(page.subject(), Some("rj"));
+    assert_eq!(page.next_page(), Some(4));
+    // The place is counted from the page's own, whatever rank a row carries.
+    let places: Vec<_> = page
+        .ranked()
+        .map(|(place, row)| (place, row.artist().name()))
+        .collect();
+    assert_eq!(places, [(5, "E"), (6, "F")]);
+
+    // The last page has no next, and neither has a page beyond it.
+    assert_eq!(numbered(5, 5, &["I", "J"]).next_page(), None);
+    assert_eq!(numbered(9, 5, &[]).next_page(), None);
+    assert_eq!(numbered(1, 1, &["A", "B"]).ranked().next().unwrap().0, 1);
+}
+
+#[test]
+fn a_page_is_read_as_a_slice_of_its_rows_or_taken_apart() {
+    let page = numbered(1, 1, &["A", "B"]);
+    assert_eq!((page.len(), page.items().len()), (2, 2));
+    assert_eq!(page[1].artist().name(), "B");
+    let borrowed: Vec<_> = (&page).into_iter().map(|row| row.artist().name()).collect();
+    assert_eq!(borrowed, ["A", "B"]);
+    let owned: Vec<TopArtist> = page.clone().into_iter().collect();
+    assert_eq!(owned.len(), 2);
+    assert_eq!(page.into_items()[0].artist().name(), "A");
+}
+
+#[test]
+fn a_page_number_that_no_request_could_name_does_not_decode() {
+    let mut body = paged("topartists", "artist", json!([]), 0);
+    body["topartists"]["@attr"]["page"] = json!("5000000000");
+    names(artists(&body), "topartists.@attr.page");
+    let mut body = paged("topartists", "artist", json!([]), 0);
+    body["topartists"]["@attr"]["perPage"] = json!(5_000_000_000_u64);
+    names(artists(&body), "topartists.@attr.perPage");
+}
+
+#[test]
+fn a_list_is_read_as_a_slice_of_its_rows_or_taken_apart() {
+    let list = tags(&tag_list(json!([tag_row("a"), tag_row("b")]))).unwrap();
+    assert_eq!(list.subject(), Some("rj"));
+    assert_eq!((list.len(), list.items().len()), (2, 2));
+    let places: Vec<_> = list
+        .ranked()
+        .map(|(place, tag)| (place, tag.name()))
+        .collect();
+    assert_eq!(places, [(1, "a"), (2, "b")]);
+    let borrowed: Vec<_> = (&list).into_iter().map(TopTag::name).collect();
+    assert_eq!(borrowed, ["a", "b"]);
+    assert_eq!(list.clone().into_iter().count(), 2);
+    assert_eq!(list.into_items()[1].name(), "b");
+    assert!(format!("{:?}", tags(&tag_list(json!([tag_row(SECRET)]))).unwrap()).contains("List {"));
 }

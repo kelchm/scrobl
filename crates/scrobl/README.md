@@ -38,7 +38,7 @@ async fn backup() -> Result<(), scrobl::Error> {
     // One page: how many scrobbles does a window hold?
     let window = Window::new(1_700_000_000, 1_700_086_400)?;
     let page = client.user("rj").recent_tracks().window(window).limit(1).send().await?;
-    println!("{} scrobbles", page.attr().total());
+    println!("{} scrobbles", page.total());
 
     // The whole window, every page checked against the others.
     let mut scan = client.user("rj").recent_tracks().window(window).scan()?;

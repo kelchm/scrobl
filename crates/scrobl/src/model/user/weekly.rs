@@ -8,17 +8,18 @@ use serde_json::{Map, Value};
 
 use super::top::{self, TopAlbum, TopArtist, TopTrack};
 use crate::error::Error;
+use crate::model::List;
 use crate::model::shared::{self, missing_or};
 use crate::protocol::{Raw, methods};
 
-/// The reply to `user.getWeeklyChartList`: the weeks a user's charts can be
-/// asked for, oldest first.
+/// Decodes a `user.getWeeklyChartList` response: the weeks a user's charts
+/// can be asked for, oldest first. The list's subject is the user.
 ///
-/// The list can start before the user's first scrobble, and a week
-/// without one has an empty chart.
+/// The list can start before the user's first scrobble, and a week without
+/// one has an empty chart.
 ///
 /// ```
-/// use scrobl::model::WeeklyChartList;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"weeklychartlist": {
@@ -28,60 +29,25 @@ use crate::protocol::{Raw, methods};
 /// let request = Request::new(&methods::USER_GET_WEEKLY_CHART_LIST).param("user", "rj");
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let list = WeeklyChartList::decode(&raw)?;
-/// let week = &list.ranges()[0];
-/// assert_eq!((week.from(), week.to()), (1_108_296_000, 1_108_900_800));
+/// let weeks = decode::user_get_weekly_chart_list(&raw)?;
+/// assert_eq!((weeks[0].from(), weeks[0].to()), (1_108_296_000, 1_108_900_800));
 /// # Ok::<(), scrobl::Error>(())
 /// ```
-#[derive(Clone)]
-pub struct WeeklyChartList {
-    user: String,
-    ranges: Vec<WeeklyChartRange>,
-}
-
-impl WeeklyChartList {
-    /// Decodes a `user.getWeeklyChartList` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `weeklychartlist` or `@attr.user` is missing or
-    /// malformed, when a row is not an object or lacks a `from` or a `to`
-    /// that is a number, or when an object repeats a member name. The
-    /// message names the field, such as `weeklychartlist.chart[3].from`, and
-    /// never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        const ROOT: &str = "weeklychartlist";
-        shared::decode(
-            raw,
-            &methods::USER_GET_WEEKLY_CHART_LIST,
-            ROOT,
-            |mut list| {
-                let user = shared::owner(&list, ROOT, "user")?;
-                let rows = shared::rows(&mut list, "weeklychartlist.chart", "chart")?;
-                let ranges = shared::each(rows, "weeklychartlist.chart", chart_range)?;
-                Ok(Self { user, ranges })
-            },
-        )
-    }
-
-    /// The user the service says the list is of, in its own spelling.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
-    /// The weeks, in the order the service sent them.
-    pub fn ranges(&self) -> &[WeeklyChartRange] {
-        &self.ranges
-    }
-}
-
-impl fmt::Debug for WeeklyChartList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WeeklyChartList")
-            .field("ranges", &self.ranges.len())
-            .finish_non_exhaustive()
-    }
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](crate::model::decode#errors). `@attr.user` is required, and a row
+/// needs a `from` and a `to` that are numbers.
+pub fn user_get_weekly_chart_list(raw: &Raw) -> Result<List<WeeklyChartRange>, Error> {
+    shared::listed(
+        raw,
+        &methods::USER_GET_WEEKLY_CHART_LIST,
+        "weeklychartlist",
+        "chart",
+        Some("user"),
+        chart_range,
+    )
 }
 
 /// One week a chart can be asked for: `from` and `to`, in seconds since the

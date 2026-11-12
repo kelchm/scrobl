@@ -115,10 +115,12 @@ The promise covers requests as `prepare` built them and as the client sent them.
 
 ### Typed views
 
-Typed models are decoded from `Raw` on request. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable:
+Typed models are decoded from `Raw` on request, by one function for each method in `scrobl::model::decode`. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable.
+
+A list is one of two types. `Page<T>` is one page of a list the service pages: its rows, its place (`number()`, `per_page()`, `total_pages()`, `total()`, `next_page()`), who or what it is about (`subject()`), and `ranked()`, which gives each row its place in the whole list. `List<T>` is a list the service sends whole. A page of the history is a `HistoryPage`: the scrobbles, the track playing now, and the same place accessors.
 
 ```rust
-let page = RecentTracksPage::decode(&raw)?;
+let page = decode::user_get_recent_tracks(&raw)?;   // a HistoryPage
 for scrobble in page.scrobbles() {
     scrobble.timestamp();        // seconds since the epoch, always present for a scrobble
     scrobble.track().name();
@@ -128,8 +130,8 @@ for scrobble in page.scrobbles() {
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
-page.user();                     // whose page it is, as the service spells the name
-page.attr();                     // page, per_page, total_pages, total
+page.subject();                  // whose page it is, as the service spells the name
+page.number();                   // also per_page(), total_pages(), total(), next_page()
 ```
 
 Decoding rules for every model:
@@ -263,12 +265,12 @@ impl User {
 impl TopArtistsQuery {   // the shape of a list query
     pub fn period(self, Period) -> Self;   // the top lists of artists, albums and tracks
     pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;   // where the method pages
-    pub async fn send(self) -> Result<Response<TopArtistsPage>, Error>;   // one page
+    pub async fn send(self) -> Result<Response<Page<TopArtist>>, Error>;   // one page
 }
 impl RecentTracksQuery {
     pub fn window(self, Window) -> Self;  pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;
     pub fn extended(self, bool) -> Self;  pub fn as_user(self) -> Self;
-    pub async fn send(self) -> Result<Response<RecentTracksPage>, Error>;   // one page
+    pub async fn send(self) -> Result<Response<HistoryPage>, Error>;   // one page
     pub fn scan(self) -> Result<Scan, Error>;   // the window and limit come from the query
 }
 impl Scan {
@@ -429,7 +431,7 @@ let total = client.user("rj").recent_tracks()
     .window(Window::new(from, to)?)
     .limit(1)
     .send().await?
-    .attr().total();
+    .total();
 
 match error.api_code() {
     Some(ApiErrorCode::LOGIN_REQUIRED) => { /* access or privacy change, not empty */ }

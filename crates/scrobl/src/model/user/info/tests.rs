@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Request};
 
 // Fixtures. Provenance for each:
@@ -38,8 +39,8 @@ fn info(user: &Value) -> Result<UserInfo, Error> {
     ))
 }
 
-fn friends(body: &Value) -> Result<FriendsPage, Error> {
-    FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, body.to_string()))
+fn friends(body: &Value) -> Result<Page<UserInfo>, Error> {
+    decode::user_get_friends(&raw(&methods::USER_GET_FRIENDS, body.to_string()))
 }
 
 fn profile(name: &str) -> Value {
@@ -97,9 +98,9 @@ fn the_recorded_profile_decodes() {
 #[test]
 fn a_profile_without_an_image_has_none_and_a_malformed_one_names_the_field() {
     // Every address in the derived page is empty.
-    let page = FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
-    assert!(page.users().iter().all(|user| user.images().is_empty()));
-    assert_eq!(page.users()[0].json()["image"][0]["size"], "small");
+    let page = decode::user_get_friends(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
+    assert!(page.items().iter().all(|user| user.images().is_empty()));
+    assert_eq!(page.items()[0].json()["image"][0]["size"], "small");
 
     let mut user = profile("rj");
     user["image"] = json!([{"size": "small", "#text": 5}]);
@@ -108,21 +109,20 @@ fn a_profile_without_an_image_has_none_and_a_malformed_one_names_the_field() {
 
 #[test]
 fn the_derived_friends_page_decodes() {
-    let page = FriendsPage::decode(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
-    let attr = page.attr();
-    assert_eq!(page.user(), "rj_Synthetic");
+    let page = decode::user_get_friends(&raw(&methods::USER_GET_FRIENDS, FRIENDS)).unwrap();
+    assert_eq!(page.subject(), Some("rj_Synthetic"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 8, 24)
     );
 
     let rows: Vec<_> = page
-        .users()
+        .items()
         .iter()
         .map(|u| (u.name(), u.realname(), u.country(), u.registered()))
         .collect();
@@ -146,7 +146,7 @@ fn the_derived_friends_page_decodes() {
     );
     // A friend's row has no counts but the playcount, which the service
     // sent as 0, and `registered.#text` is a date here, not a number.
-    let first = &page.users()[0];
+    let first = &page.items()[0];
     assert_eq!(
         (first.playcount(), first.artist_count(), first.subscriber()),
         (0, None, Some(false))
@@ -158,7 +158,7 @@ fn the_derived_friends_page_decodes() {
 #[test]
 fn a_page_of_friends_may_be_one_object_or_empty() {
     let page_of_one = friends(&page(profile("only"), 1)).unwrap();
-    assert_eq!(page_of_one.users()[0].name(), "only");
+    assert_eq!(page_of_one.items()[0].name(), "only");
 
     for user in [Some(json!([])), Some(json!("")), None] {
         let mut body = page(json!([]), 0);
@@ -168,7 +168,7 @@ fn a_page_of_friends_may_be_one_object_or_empty() {
                 body["friends"].as_object_mut().unwrap().remove("user");
             }
         }
-        assert!(friends(&body).unwrap().users().is_empty());
+        assert!(friends(&body).unwrap().items().is_empty());
     }
     names(friends(&page(json!([]), 3)), "friends.user");
 }
@@ -253,7 +253,7 @@ fn a_response_to_another_method_is_refused() {
     assert!(error.to_string().contains("different method"));
 
     let as_info = raw(&methods::USER_GET_INFO, FRIENDS);
-    let error = FriendsPage::decode(&as_info).unwrap_err();
+    let error = decode::user_get_friends(&as_info).unwrap_err();
     assert!(error.to_string().contains("different method"));
 }
 
@@ -264,7 +264,7 @@ fn debug_leaves_out_the_text_of_the_response() {
     named["country"] = json!(SECRET);
     let user = info(&named).unwrap();
     let page = friends(&page(json!([named]), 1)).unwrap();
-    let shown = format!("{user:?} {page:?} {:?}", page.users());
+    let shown = format!("{user:?} {page:?} {:?}", page.items());
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(shown.contains("registered: 1500000000"), "{shown}");
 }

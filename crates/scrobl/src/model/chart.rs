@@ -6,56 +6,90 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use crate::error::Error;
-use crate::model::shared::{self, Artist, Track, list_page};
+use crate::model::shared::{self, Artist, Track};
+use crate::model::{List, Page};
+use crate::protocol::{Raw, methods};
 
-list_page! {
-    /// One page of `chart.getTopArtists`: the artists played most on the
-    /// whole service, with the paging attributes.
-    ///
-    /// `artist` is an array, for a page of one too, and `[]` for a page
-    /// beyond the last. The rows carry no place in the list: a row's place
-    /// is its position, counted on from the pages before it.
-    ///
-    /// ```
-    /// use scrobl::model::ChartArtistsPage;
-    /// use scrobl::protocol::{self, HttpResponse, Request, methods};
-    ///
-    /// let body = r##"{"artists": {
-    ///     "artist": [{"name": "A", "playcount": "900", "listeners": "30",
-    ///                 "mbid": "", "url": "https://www.last.fm/music/A"}],
-    ///     "@attr": {"page": "1", "perPage": "1", "totalPages": "10000", "total": "10000"}
-    /// }}"##;
-    /// let request = Request::new(&methods::CHART_GET_TOP_ARTISTS).param("limit", 1);
-    /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
-    ///
-    /// let page = ChartArtistsPage::decode(&raw)?;
-    /// assert_eq!(page.attr().total(), 10_000);
-    /// let first = &page.artists()[0];
-    /// assert_eq!(first.artist().name(), "A");
-    /// assert_eq!((first.playcount(), first.listeners()), (900, 30));
-    /// # Ok::<(), scrobl::Error>(())
-    /// ```
-    ChartArtistsPage, "chart.getTopArtists", CHART_GET_TOP_ARTISTS, "artists", "artist",
-    artists: ChartArtist = chart_artist
+/// Decodes a `chart.getTopArtists` response: one page of the artists played
+/// most on the whole service.
+///
+/// The rows carry no place in the list: [`Page::ranked`] gives it.
+///
+/// ```
+/// use scrobl::model::decode;
+/// use scrobl::protocol::{self, HttpResponse, Request, methods};
+///
+/// let body = r##"{"artists": {
+///     "artist": [{"name": "A", "playcount": "900", "listeners": "30",
+///                 "mbid": "", "url": "https://www.last.fm/music/A"}],
+///     "@attr": {"page": "1", "perPage": "1", "totalPages": "10000", "total": "10000"}
+/// }}"##;
+/// let request = Request::new(&methods::CHART_GET_TOP_ARTISTS).param("limit", 1);
+/// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
+///
+/// let page = decode::chart_get_top_artists(&raw)?;
+/// assert_eq!(page.total(), 10_000);
+/// assert_eq!(page[0].artist().name(), "A");
+/// assert_eq!((page[0].playcount(), page[0].listeners()), (900, 30));
+/// # Ok::<(), scrobl::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). A row needs a `name`, a `playcount` and
+/// `listeners`.
+pub fn chart_get_top_artists(raw: &Raw) -> Result<Page<ChartArtist>, Error> {
+    shared::paged(
+        raw,
+        &methods::CHART_GET_TOP_ARTISTS,
+        "artists",
+        "artist",
+        None,
+        chart_artist,
+    )
 }
 
-list_page! {
-    /// One page of `chart.getTopTracks`: the tracks played most on the
-    /// whole service, with the paging attributes. It is laid out as a
-    /// [`ChartArtistsPage`] is.
-    ChartTracksPage, "chart.getTopTracks", CHART_GET_TOP_TRACKS, "tracks", "track",
-    tracks: ChartTrack = chart_track
+/// Decodes a `chart.getTopTracks` response: one page of the tracks played
+/// most on the whole service.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). A row needs a `name`, an `artist`, a
+/// `playcount` and `listeners`.
+pub fn chart_get_top_tracks(raw: &Raw) -> Result<Page<ChartTrack>, Error> {
+    shared::paged(
+        raw,
+        &methods::CHART_GET_TOP_TRACKS,
+        "tracks",
+        "track",
+        None,
+        chart_track,
+    )
 }
 
-list_page! {
-    /// One page of `chart.getTopTags`: the tags used most on the whole
-    /// service, with the paging attributes.
-    ///
-    /// The service has not paged this list: on 2026-11-11 it sent the same
-    /// first rows for page 2, and for a page far beyond the last, as for
-    /// page 1. A larger `limit` is the way to read further.
-    ChartTagsPage, "chart.getTopTags", CHART_GET_TOP_TAGS, "tags", "tag",
-    tags: ChartTag = chart_tag
+/// Decodes a `chart.getTopTags` response: the tags used most on the whole
+/// service.
+///
+/// It is a [`List`] and not a [`Page`] because the service does not page
+/// it: on 2026-11-11 it sent the same first rows for page 2, and for a page
+/// far beyond the last, as for page 1. Its paging attributes are not read.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). A row needs a `name`, a `reach` and
+/// `taggings`.
+pub fn chart_get_top_tags(raw: &Raw) -> Result<List<ChartTag>, Error> {
+    shared::listed(
+        raw,
+        &methods::CHART_GET_TOP_TAGS,
+        "tags",
+        "tag",
+        None,
+        chart_tag,
+    )
 }
 
 /// An artist in the chart of the whole service. [`json`](Self::json) is the

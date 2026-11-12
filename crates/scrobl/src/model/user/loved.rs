@@ -1,4 +1,4 @@
-//! [`LovedTracksPage`], the reply to `user.getLovedTracks`.
+//! The reply to `user.getLovedTracks`.
 
 use std::fmt;
 
@@ -6,92 +6,51 @@ use serde_json::{Map, Value};
 
 use crate::de;
 use crate::error::Error;
-use crate::model::shared::{self, Artist, PageAttr, Track, missing_or};
+use crate::model::Page;
+use crate::model::shared::{self, Artist, Track, missing_or};
 use crate::protocol::{Raw, methods};
 
-const ROOT: &str = "lovedtracks";
-
-/// One page of `user.getLovedTracks`: tracks the user has loved, newest
-/// first, with the paging attributes.
+/// Decodes a `user.getLovedTracks` response: one page of the tracks a user
+/// has loved, newest first. The page's subject is the user.
 ///
 /// The list is what is loved now. A track that was loved and later unloved
 /// is not in it, and nothing says it ever was.
 ///
-/// `track` is an array, a single object when the page has exactly one row,
-/// and for an empty page absent, `[]` or `""`, under the same rule as
-/// [`RecentTracksPage`](super::RecentTracksPage): only when `@attr` allows
-/// no rows.
-///
 /// ```
-/// use scrobl::model::LovedTracksPage;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"lovedtracks": {
-///     "track": [
-///         {"date": {"uts": "1700000000", "#text": "14 Nov 2023, 22:13"},
-///          "artist": {"name": "A", "mbid": "", "url": ""},
-///          "name": "Loved", "mbid": "", "url": ""}
-///     ],
-///     "@attr": {"user": "rj", "page": "1", "perPage": "50",
-///               "totalPages": "1", "total": "1"}
+///     "track": [{"name": "Loved", "mbid": "", "url": "https://www.last.fm/music/A/_/Loved",
+///                "date": {"uts": "1700000000", "#text": "14 Nov 2023, 22:13"},
+///                "artist": {"name": "A", "mbid": "", "url": "https://www.last.fm/music/A"}}],
+///     "@attr": {"user": "rj", "page": "1", "perPage": "50", "totalPages": "1", "total": "1"}
 /// }}"##;
 /// let request = Request::new(&methods::USER_GET_LOVED_TRACKS).param("user", "rj");
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let page = LovedTracksPage::decode(&raw)?;
-/// assert_eq!(page.attr().total(), 1);
-/// assert_eq!(page.tracks()[0].loved_at(), 1_700_000_000);
-/// assert_eq!(page.tracks()[0].track().name(), "Loved");
-/// assert_eq!(page.tracks()[0].artist().mbid(), None);
+/// let page = decode::user_get_loved_tracks(&raw)?;
+/// assert_eq!(page.total(), 1);
+/// assert_eq!(page[0].loved_at(), 1_700_000_000);
+/// assert_eq!(page[0].track().name(), "Loved");
+/// assert_eq!(page[0].artist().mbid(), None);
 /// # Ok::<(), scrobl::Error>(())
 /// ```
-#[derive(Clone)]
-pub struct LovedTracksPage {
-    user: String,
-    attr: PageAttr,
-    tracks: Vec<LovedTrack>,
-}
-
-impl LovedTracksPage {
-    /// Decodes a `user.getLovedTracks` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `lovedtracks`, `@attr` or any of its five
-    /// members is missing or malformed, when a row is not an object or has
-    /// no valid `date.uts`, when `track` is absent or empty although `@attr`
-    /// promises rows on the page, when an object repeats a member name, or
-    /// when a field of a row has the wrong type. The message names the
-    /// field, such as `lovedtracks.track[3].date.uts`, and never repeats
-    /// response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        shared::decode(raw, &methods::USER_GET_LOVED_TRACKS, ROOT, parse)
-    }
-
-    /// The user the service says the page is for, in its own spelling.
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
-    /// The paging attributes.
-    pub fn attr(&self) -> &PageAttr {
-        &self.attr
-    }
-
-    /// The loved tracks, in the order the service sent them.
-    pub fn tracks(&self) -> &[LovedTrack] {
-        &self.tracks
-    }
-}
-
-impl fmt::Debug for LovedTracksPage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LovedTracksPage")
-            .field("attr", &self.attr)
-            .field("tracks", &self.tracks.len())
-            .finish()
-    }
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](crate::model::decode#errors). `@attr.user` is required, and a row
+/// needs a `name`, an `artist` and a `date.uts`.
+pub fn user_get_loved_tracks(raw: &Raw) -> Result<Page<LovedTrack>, Error> {
+    shared::paged(
+        raw,
+        &methods::USER_GET_LOVED_TRACKS,
+        "lovedtracks",
+        "track",
+        Some("user"),
+        parse_row,
+    )
 }
 
 /// A track the user has loved, and when.
@@ -136,13 +95,6 @@ impl fmt::Debug for LovedTrack {
             .field("loved_at", &self.loved_at)
             .finish_non_exhaustive()
     }
-}
-
-fn parse(mut loved: Map<String, Value>) -> Result<LovedTracksPage, Error> {
-    let user = shared::owner(&loved, ROOT, "user")?;
-    let (attr, rows) = shared::page(&mut loved, ROOT, "track")?;
-    let tracks = shared::each(rows, "lovedtracks.track", parse_row)?;
-    Ok(LovedTracksPage { user, attr, tracks })
 }
 
 fn parse_row(row: Map<String, Value>, at: &str) -> Result<LovedTrack, Error> {

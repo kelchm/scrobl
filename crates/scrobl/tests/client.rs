@@ -34,7 +34,7 @@ use std::time::Duration;
 use proptest::prelude::*;
 use scrobl::client::{Period, RecentTracksQuery, Scan, TopArtistsQuery, User};
 use scrobl::history::{ScanPage, ScanSummary, Window};
-use scrobl::model::RecentTracksPage;
+use scrobl::model::HistoryPage;
 use scrobl::protocol::{Request, Requirement, methods};
 use scrobl::{
     ApiErrorCode, ApiKey, ApiSecret, Client, ClientBuilder, Delivery, Error, ErrorKind, Response,
@@ -1274,7 +1274,7 @@ async fn gate8_a_genuinely_empty_window_is_a_success_with_nothing_in_it() {
             .send()
             .await
             .unwrap();
-        assert_eq!(page.attr().total(), 0);
+        assert_eq!(page.total(), 0);
         assert!(page.scrobbles().is_empty());
 
         let (pages, summary) = read_scan(
@@ -1645,9 +1645,9 @@ async fn gate9_a_page_carries_the_exact_bytes_the_server_sent() {
         assert_eq!(page.raw().status(), 200);
         assert_eq!(page.raw().method(), "user.getRecentTracks");
         assert_eq!(page.scrobbles().len(), 3);
-        assert_eq!(page.attr().total(), 5);
+        assert_eq!(page.total(), 5);
 
-        let (typed, raw): (RecentTracksPage, _) = page.into_parts();
+        let (typed, raw): (HistoryPage, _) = page.into_parts();
         assert_eq!(typed.scrobbles().len(), 3);
         assert_eq!(raw.body(), body.as_slice());
     })
@@ -2049,7 +2049,7 @@ fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<TopArtistsQuery>();
     assert_shareable::<ClientBuilder>();
     assert_owned::<Scan>();
-    assert_shareable::<Response<RecentTracksPage>>();
+    assert_shareable::<Response<HistoryPage>>();
     assert_owned::<Error>();
     assert_sync::<Error>();
 
@@ -2515,15 +2515,14 @@ async fn loved_tracks_are_read_a_page_at_a_time_with_the_exact_bytes() {
         assert_eq!(page.raw().method(), "user.getLovedTracks");
 
         // Newest first: page 2 of five holds the third and fourth newest.
-        let attr = page.attr();
-        assert_eq!((attr.page(), attr.per_page(), attr.total()), (2, 2, 5));
+        assert_eq!((page.number(), page.per_page(), page.total()), (2, 2, 5));
         let loved: Vec<(u64, &str)> = page
-            .tracks()
+            .items()
             .iter()
             .map(|t| (t.loved_at(), t.track().name()))
             .collect();
         assert_eq!(loved, [(BASE + 300, "Loved 3"), (BASE + 200, "Loved 2")]);
-        assert_eq!(page.tracks()[0].artist().mbid(), Some(ARTIST_MBID));
+        assert_eq!(page.items()[0].artist().mbid(), Some(ARTIST_MBID));
     })
     .await;
 }
@@ -2538,8 +2537,8 @@ async fn a_loved_tracks_query_sends_only_what_was_set() {
             .send()
             .await
             .unwrap();
-        assert!(page.tracks().is_empty());
-        assert_eq!(page.attr().total(), 0);
+        assert!(page.items().is_empty());
+        assert_eq!(page.total(), 0);
 
         let request = &server.requests()[0];
         assert_eq!(request.param("limit"), None);
@@ -2643,8 +2642,8 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(artists.raw().body(), TOP_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Portugal. The Man");
-        assert_eq!(artists.attr().total(), 10_105);
+        assert_eq!(artists.items()[0].artist().name(), "Portugal. The Man");
+        assert_eq!(artists.total(), 10_105);
 
         let albums = user
             .top_albums()
@@ -2656,7 +2655,7 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .unwrap();
         assert_eq!(albums.raw().body(), TOP_ALBUMS);
         assert_eq!(
-            albums.albums()[0].album().title(),
+            albums.items()[0].album().title(),
             Some("The Social Network")
         );
 
@@ -2669,11 +2668,11 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(tracks.raw().body(), TOP_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Swim");
+        assert_eq!(tracks.items()[0].track().name(), "Swim");
 
         let tags = user.top_tags().limit(5).send().await.unwrap();
         assert_eq!(tags.raw().body(), TOP_TAGS);
-        assert_eq!(tags.tags()[0].name(), "indie");
+        assert_eq!(tags.items()[0].name(), "indie");
 
         let library = user
             .library_artists()
@@ -2683,7 +2682,7 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(library.raw().body(), LIBRARY_ARTISTS);
-        assert_eq!(library.artists()[0].playcount(), 5584);
+        assert_eq!(library.items()[0].playcount(), 5584);
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -2862,7 +2861,7 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
 
         let weeks = user.weekly_chart_list().send().await.unwrap();
         assert_eq!(weeks.raw().body(), WEEKLY_CHART_LIST);
-        let week = weeks.ranges().last().unwrap();
+        let week = weeks.items().last().unwrap();
         let (from, to) = (week.from(), week.to());
         assert_eq!((from, to), (1_793_534_400, 1_794_139_200));
 
@@ -2947,11 +2946,11 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
 
         let friends = user.friends().limit(3).page(1).send().await.unwrap();
         assert_eq!(friends.raw().body(), FRIENDS);
-        assert_eq!(friends.users()[2].country(), Some("Iceland"));
+        assert_eq!(friends.items()[2].country(), Some("Iceland"));
 
         let artists = user.tagged_artists("indie").send().await.unwrap();
         assert_eq!(artists.raw().body(), TAGGED_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Panic at the Disco");
+        assert_eq!(artists.items()[0].artist().name(), "Panic at the Disco");
 
         let albums = user
             .tagged_albums("synthetic tag")
@@ -2961,7 +2960,7 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
             .await
             .unwrap();
         assert_eq!(albums.raw().body(), TAGGED_ALBUMS);
-        assert_eq!(albums.albums()[1].album().title(), Some("Second Album"));
+        assert_eq!(albums.items()[1].album().title(), Some("Second Album"));
 
         let tracks = user
             .tagged_tracks(String::from("interesting"))
@@ -2971,7 +2970,7 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
             .await
             .unwrap();
         assert_eq!(tracks.raw().body(), TAGGED_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Bedroom in Hell");
+        assert_eq!(tracks.items()[0].track().name(), "Bedroom in Hell");
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -3055,26 +3054,26 @@ async fn the_charts_are_read_with_what_was_set_and_the_exact_bytes() {
 
         let artists = chart.top_artists().limit(3).page(2).send().await.unwrap();
         assert_eq!(artists.raw().body(), CHART_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Olivia Rodrigo");
-        assert_eq!(artists.attr().total(), 10_000);
+        assert_eq!(artists.items()[0].artist().name(), "Olivia Rodrigo");
+        assert_eq!(artists.total(), 10_000);
 
         let tracks = chart.top_tracks().limit(3).send().await.unwrap();
         assert_eq!(tracks.raw().body(), CHART_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Nicole Kidman");
+        assert_eq!(tracks.items()[0].track().name(), "Nicole Kidman");
 
         let tags = chart.top_tags().send().await.unwrap();
         assert_eq!(tags.raw().body(), CHART_TAGS);
-        assert_eq!(tags.tags()[0].name(), "rock");
+        assert_eq!(tags.items()[0].name(), "rock");
 
         let artists = country.top_artists().limit(3).send().await.unwrap();
         assert_eq!(artists.raw().body(), GEO_ARTISTS);
         // The service spells the country its own way.
-        assert_eq!(artists.country(), "United States");
-        assert_eq!(artists.artists()[0].listeners(), 69_663);
+        assert_eq!(artists.subject(), Some("United States"));
+        assert_eq!(artists.items()[0].listeners(), 69_663);
 
         let tracks = country.top_tracks().page(1).send().await.unwrap();
         assert_eq!(tracks.raw().body(), GEO_TRACKS);
-        assert_eq!(tracks.tracks()[2].track().name(), "Earrings");
+        assert_eq!(tracks.items()[2].track().name(), "Earrings");
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -3156,22 +3155,22 @@ async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
 
         let similar = tag.similar().send().await.unwrap();
         assert_eq!(similar.raw().body(), TAG_SIMILAR);
-        assert!(similar.tags().is_empty());
+        assert!(similar.items().is_empty());
 
         let albums = tag.top_albums().limit(3).page(2).send().await.unwrap();
         assert_eq!(albums.raw().body(), TAG_ALBUMS);
-        assert_eq!(albums.tag(), "indie");
-        assert_eq!(albums.albums()[0].album().title(), Some("Le Tigre"));
+        assert_eq!(albums.subject(), Some("indie"));
+        assert_eq!(albums.items()[0].album().title(), Some("Le Tigre"));
 
         let artists = tag.top_artists().limit(3).send().await.unwrap();
-        assert_eq!(artists.artists()[1].artist().name(), "Arctic Monkeys");
+        assert_eq!(artists.items()[1].artist().name(), "Arctic Monkeys");
 
         let tracks = tag.top_tracks().page(1).send().await.unwrap();
-        assert_eq!(tracks.tracks()[1].track().name(), "505");
+        assert_eq!(tracks.items()[1].track().name(), "505");
 
         let weeks = tag.weekly_chart_list().send().await.unwrap();
         assert_eq!(weeks.raw().body(), TAG_WEEKS);
-        assert_eq!(weeks.ranges().len(), 4);
+        assert_eq!(weeks.items().len(), 4);
 
         let all = client.chart().all_tags().send().await.unwrap();
         assert_eq!(all.raw().body(), ALL_TAGS);

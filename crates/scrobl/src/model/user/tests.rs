@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -80,8 +81,8 @@ fn raw_of(body: &Value) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.to_string())).unwrap()
 }
 
-fn decode(body: &Value) -> Result<RecentTracksPage, Error> {
-    RecentTracksPage::decode(&raw_of(body))
+fn decode(body: &Value) -> Result<HistoryPage, Error> {
+    decode::user_get_recent_tracks(&raw_of(body))
 }
 
 fn rows(rows: Vec<Value>) -> Value {
@@ -111,11 +112,11 @@ fn plain_page_with_now_playing() {
     ]))
     .unwrap();
 
-    assert_eq!(page.user(), "rj");
-    assert_eq!(page.attr().page(), 1);
-    assert_eq!(page.attr().per_page(), 50);
-    assert_eq!(page.attr().total_pages(), 1);
-    assert_eq!(page.attr().total(), 2);
+    assert_eq!(page.subject(), Some("rj"));
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.per_page(), 50);
+    assert_eq!(page.total_pages(), 1);
+    assert_eq!(page.total(), 2);
 
     let scrobbles = page.scrobbles();
     assert_eq!(scrobbles.len(), 2);
@@ -420,7 +421,6 @@ fn page_attr_counts_accept_numbers_and_digit_strings_only() {
             numeric
         ))
         .unwrap()
-        .attr()
         .total(),
         7
     );
@@ -498,7 +498,7 @@ fn a_row_without_an_album_has_no_album() {
 fn a_response_for_another_method_is_an_error() {
     let request = Request::new(&methods::USER_GET_INFO).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, rows(vec![]).to_string())).unwrap();
-    let error = RecentTracksPage::decode(&raw).unwrap_err();
+    let error = decode::user_get_recent_tracks(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
 }
 
@@ -524,8 +524,7 @@ fn errors_and_debug_never_contain_response_text() {
     ))
     .unwrap();
     let rendered = format!(
-        "{page:?} {:?} {:?} {:?} {:?} {:?}",
-        page.attr(),
+        "{page:?} {:?} {:?} {:?} {:?}",
         page.scrobbles()[0],
         page.scrobbles()[0].track(),
         page.scrobbles()[0].artist(),
@@ -560,8 +559,9 @@ fn errors_and_debug_never_contain_response_text() {
 #[test]
 fn model_types_are_send_sync_and_clone() {
     fn assert_traits<T: Send + Sync + Clone + std::fmt::Debug>() {}
-    assert_traits::<RecentTracksPage>();
-    assert_traits::<PageAttr>();
+    assert_traits::<HistoryPage>();
+    assert_traits::<crate::model::Page<Scrobble>>();
+    assert_traits::<crate::model::List<Scrobble>>();
     assert_traits::<Scrobble>();
     assert_traits::<NowPlaying>();
     assert_traits::<Track>();
@@ -572,10 +572,10 @@ fn model_types_are_send_sync_and_clone() {
 // Duplicate members. A `serde_json::Value` keeps the last of two members with
 // one name, so a decoder built on it would drop the first without a word.
 
-fn decode_text(body: &str) -> Result<RecentTracksPage, Error> {
+fn decode_text(body: &str) -> Result<HistoryPage, Error> {
     let request = Request::new(&methods::USER_GET_RECENT_TRACKS).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, body.to_owned())).unwrap();
-    RecentTracksPage::decode(&raw)
+    decode::user_get_recent_tracks(&raw)
 }
 
 /// A page promising one row, with `track`, `@attr` and the row's own members

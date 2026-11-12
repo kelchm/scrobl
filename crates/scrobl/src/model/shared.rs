@@ -1,62 +1,14 @@
-//! What the packages share: the paging attributes, a track, an artist and an
-//! album as a list names them, their images, and the decoding every list
-//! goes through.
+//! What the packages share: a track, an artist and an album as a list names
+//! them, their images, and the decoding every list goes through.
 
 use std::fmt;
 
 use serde_json::{Map, Value};
 
+use super::page::{List, Page, Paging};
 use crate::de;
 use crate::error::Error;
 use crate::protocol::{MethodSpec, Raw};
-
-/// The paging attributes of a page, from its `@attr`: which page of how many.
-///
-/// The service sends these as strings. All four are required. Whose list
-/// the page belongs to is on the page itself, such as
-/// [`RecentTracksPage::user`](super::RecentTracksPage::user).
-#[derive(Clone)]
-pub struct PageAttr {
-    page: u64,
-    per_page: u64,
-    total_pages: u64,
-    total: u64,
-}
-
-impl PageAttr {
-    /// The page number, from 1.
-    pub fn page(&self) -> u64 {
-        self.page
-    }
-
-    /// The page size the service applied.
-    pub fn per_page(&self) -> u64 {
-        self.per_page
-    }
-
-    /// The number of pages the service says there are.
-    pub fn total_pages(&self) -> u64 {
-        self.total_pages
-    }
-
-    /// The number of items the service says match the request: for a
-    /// history, the scrobbles within the `from` and `to` bounds if any were
-    /// sent.
-    pub fn total(&self) -> u64 {
-        self.total
-    }
-}
-
-impl fmt::Debug for PageAttr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PageAttr")
-            .field("page", &self.page)
-            .field("per_page", &self.per_page)
-            .field("total_pages", &self.total_pages)
-            .field("total", &self.total)
-            .finish_non_exhaustive()
-    }
-}
 
 /// One address of an image, in one of the sizes the service offers.
 ///
@@ -69,7 +21,7 @@ impl fmt::Debug for PageAttr {
 /// 2026-11-10 had the same one, a placeholder; albums had their covers.
 ///
 /// ```
-/// use scrobl::model::TopArtistsPage;
+/// use scrobl::model::decode;
 /// use scrobl::protocol::{self, HttpResponse, Request, methods};
 ///
 /// let body = r##"{"topartists": {
@@ -82,8 +34,8 @@ impl fmt::Debug for PageAttr {
 /// let request = Request::new(&methods::USER_GET_TOP_ARTISTS).param("user", "rj");
 /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
 ///
-/// let page = TopArtistsPage::decode(&raw)?;
-/// let largest = page.artists()[0].artist().images().last().unwrap();
+/// let page = decode::user_get_top_artists(&raw)?;
+/// let largest = page[0].artist().images().last().unwrap();
 /// assert_eq!(largest.size(), Some("large"));
 /// assert_eq!(largest.url(), "https://example.org/174.png");
 /// # Ok::<(), scrobl::Error>(())
@@ -243,82 +195,6 @@ impl fmt::Debug for Album {
     }
 }
 
-/// Defines one page of a list that the service pages: the paging attributes,
-/// whose list it is where the service says, and the rows.
-///
-/// The pages differ in the method, the names of the root and of the rows,
-/// the row type, and whether `@attr` names an owner such as a country.
-macro_rules! list_page {
-    (
-        $(#[$doc:meta])*
-        $name:ident, $method:literal, $spec:ident, $root:literal, $key:literal,
-        $(@of $owner:ident = $owner_key:literal, $owner_doc:literal;)?
-        $rows:ident: $row:ty = $parse:path
-    ) => {
-        $(#[$doc])*
-        #[derive(Clone)]
-        pub struct $name {
-            $($owner: String,)?
-            attr: $crate::model::PageAttr,
-            $rows: Vec<$row>,
-        }
-
-        impl $name {
-            #[doc = concat!("Decodes a `", $method, "` response.")]
-            ///
-            /// # Errors
-            ///
-            /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is
-            #[doc = concat!("for another method, when `", $root, "`, its `@attr` or a member read from")]
-            /// it is missing or malformed, when a row is not an object or
-            /// lacks what its type requires, when the rows are absent or
-            /// empty although `@attr` promises rows on the page, or when an
-            /// object repeats a member name. The message names the field,
-            #[doc = concat!("such as `", $root, ".", $key, "[3].name`, and never repeats response text.")]
-            pub fn decode(raw: &$crate::protocol::Raw) -> Result<Self, $crate::error::Error> {
-                use $crate::model::shared;
-                shared::decode(raw, &$crate::protocol::methods::$spec, $root, |mut list| {
-                    $(let $owner = shared::owner(&list, $root, $owner_key)?;)?
-                    let (attr, rows) = shared::page(&mut list, $root, $key)?;
-                    let $rows = shared::each(rows, concat!($root, ".", $key), $parse)?;
-                    Ok(Self {
-                        $($owner,)?
-                        attr,
-                        $rows,
-                    })
-                })
-            }
-
-            $(
-                #[doc = $owner_doc]
-                pub fn $owner(&self) -> &str {
-                    &self.$owner
-                }
-            )?
-
-            /// The paging attributes.
-            pub fn attr(&self) -> &$crate::model::PageAttr {
-                &self.attr
-            }
-
-            /// The rows, in the order the service sent them.
-            pub fn $rows(&self) -> &[$row] {
-                &self.$rows
-            }
-        }
-
-        impl ::std::fmt::Debug for $name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_struct(stringify!($name))
-                    .field("attr", &self.attr)
-                    .field(stringify!($rows), &self.$rows.len())
-                    .finish_non_exhaustive()
-            }
-        }
-    };
-}
-pub(super) use list_page;
-
 // Decoding. Every error names a field path; none repeats response text.
 
 pub(super) fn missing_or(path: &str, expected: &str) -> Error {
@@ -351,20 +227,58 @@ pub(super) fn decode<T>(
     })
 }
 
+/// One page of a paged list: the object under `root`, with its paging
+/// attributes at `@attr` and its rows at `key`. `subject` names the member
+/// of `@attr` that says who or what the list is about, where there is one.
+pub(super) fn paged<T>(
+    raw: &Raw,
+    spec: &'static MethodSpec,
+    root: &str,
+    key: &str,
+    subject: Option<&str>,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<Page<T>, Error> {
+    decode(raw, spec, root, |mut list| {
+        let (paging, rows) = page(&mut list, root, key, subject)?;
+        let items = each(rows, &format!("{root}.{key}"), parse)?;
+        Ok(Page::new(items, paging))
+    })
+}
+
+/// A whole list that the service does not page: the object under `root`,
+/// with its rows at `key`, which may be none. `subject` names the member of
+/// `@attr` that says who or what the list is about, where there is one.
+pub(super) fn listed<T>(
+    raw: &Raw,
+    spec: &'static MethodSpec,
+    root: &str,
+    key: &str,
+    subject: Option<&str>,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<List<T>, Error> {
+    decode(raw, spec, root, |mut list| {
+        let subject = subject.map(|name| owner(&list, root, name)).transpose()?;
+        let path = format!("{root}.{key}");
+        let rows = rows(&mut list, &path, key)?;
+        Ok(List::new(each(rows, &path, parse)?, subject))
+    })
+}
+
 /// The paging attributes and the rows of a list: `list.@attr` and
 /// `list.<key>`, where `root` is the name of `list` for the error.
 pub(super) fn page(
     list: &mut Map<String, Value>,
     root: &str,
     key: &str,
-) -> Result<(PageAttr, Vec<Value>), Error> {
-    let attr = page_attr(list, root)?;
-    let rows = promised_rows(list, &attr, &format!("{root}.{key}"), key)?;
-    Ok((attr, rows))
+    subject: Option<&str>,
+) -> Result<(Paging, Vec<Value>), Error> {
+    let paging = paging(list, root, subject)?;
+    let rows = promised_rows(list, &paging, &format!("{root}.{key}"), key)?;
+    Ok((paging, rows))
 }
 
-/// Whose list a page is: `list.@attr.<key>`, such as its `user` or its
-/// `tag`. Read it before [`page`] or [`page_attr`], which take `@attr` out.
+/// Who or what a list is about: `list.@attr.<key>`, such as its `user` or
+/// its `tag`.
 pub(super) fn owner(list: &Map<String, Value>, root: &str, key: &str) -> Result<String, Error> {
     let at = format!("{root}.@attr");
     match list.get("@attr") {
@@ -373,12 +287,27 @@ pub(super) fn owner(list: &Map<String, Value>, root: &str, key: &str) -> Result<
     }
 }
 
-/// The paging attributes of a list, at `list.@attr`.
-pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<PageAttr, Error> {
-    match list.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(root, &attr),
-        _ => Err(missing_or(&format!("{root}.@attr"), "an object")),
-    }
+/// The paging attributes of a list, at `list.@attr`: the four numbers, which
+/// the service sends as strings and which are all required, and the subject
+/// where `subject` names its member.
+pub(super) fn paging(
+    list: &mut Map<String, Value>,
+    root: &str,
+    subject: Option<&str>,
+) -> Result<Paging, Error> {
+    let at = format!("{root}.@attr");
+    let Some(Value::Object(attr)) = list.remove("@attr") else {
+        return Err(missing_or(&at, "an object"));
+    };
+    Ok(Paging {
+        subject: subject
+            .map(|name| required_str(&attr, &at, name).map(str::to_owned))
+            .transpose()?,
+        number: required_u32(&attr, &at, "page")?,
+        per_page: required_u32(&attr, &at, "perPage")?,
+        total_pages: required_u32(&attr, &at, "totalPages")?,
+        total: required_uint(&attr, &at, "total")?,
+    })
 }
 
 /// The rows of a page, at `list.<key>`, where `path` names them for the
@@ -386,16 +315,17 @@ pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<Pag
 ///
 /// The rows are an array, a single object when there is exactly one, and
 /// for an empty page absent, `[]` or `""`. Those three are accepted only
-/// when `attr` allows no rows: nothing matches (`total` is 0) or the page
-/// lies beyond the last one. Otherwise the rows are missing, not absent.
+/// when the paging attributes allow no rows: nothing matches (`total` is 0)
+/// or the page lies beyond the last one. Otherwise the rows are missing,
+/// not absent.
 pub(super) fn promised_rows(
     list: &mut Map<String, Value>,
-    attr: &PageAttr,
+    paging: &Paging,
     path: &str,
     key: &str,
 ) -> Result<Vec<Value>, Error> {
     let rows = rows(list, path, key)?;
-    if rows.is_empty() && attr.total != 0 && attr.page <= attr.total_pages {
+    if rows.is_empty() && paging.total != 0 && paging.number <= paging.total_pages {
         return Err(Error::decode_field(
             path,
             "absent or empty, but `@attr` says the page holds rows",
@@ -437,16 +367,6 @@ pub(super) fn each<T>(
             }
         })
         .collect()
-}
-
-fn parse_attr(root: &str, attr: &Map<String, Value>) -> Result<PageAttr, Error> {
-    let at = format!("{root}.@attr");
-    Ok(PageAttr {
-        page: required_uint(attr, &at, "page")?,
-        per_page: required_uint(attr, &at, "perPage")?,
-        total_pages: required_uint(attr, &at, "totalPages")?,
-        total: required_uint(attr, &at, "total")?,
-    })
 }
 
 /// The track a row is: its own `name`, `mbid` and `url`.
@@ -596,6 +516,12 @@ pub(super) fn required_uint(map: &Map<String, Value>, at: &str, key: &str) -> Re
     map.get(key)
         .and_then(de::uint)
         .ok_or_else(|| missing_or(&format!("{at}.{key}"), "an unsigned integer"))
+}
+
+/// A count that must fit 32 bits, as a page number and a page size do.
+fn required_u32(map: &Map<String, Value>, at: &str, key: &str) -> Result<u32, Error> {
+    u32::try_from(required_uint(map, at, key)?)
+        .map_err(|_| Error::decode_field(&format!("{at}.{key}"), "too large"))
 }
 
 /// A string field that may be missing or empty, both reading as `None`. A

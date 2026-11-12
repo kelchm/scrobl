@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 
 use super::user::chart_range;
 use crate::error::Error;
-use crate::model::WeeklyChartRange;
-use crate::model::shared::{self, Album, Artist, Track, list_page, missing_or};
+use crate::model::shared::{self, Album, Artist, Track, missing_or};
+use crate::model::{List, Page, WeeklyChartRange};
 use crate::protocol::{Raw, methods};
 
 /// What the service says about one tag: the reply to `tag.getInfo`.
@@ -121,62 +121,33 @@ impl fmt::Debug for TagInfo {
     }
 }
 
-/// The tags the service finds like one tag: the reply to `tag.getSimilar`.
+/// Decodes a `tag.getSimilar` response: the tags the service finds like one
+/// tag. The list's subject is the tag the service says the list is for.
 ///
 /// On 2026-11-11 the service answered every tag asked about with no rows
-/// and `n/a` for the tag's name, so [`tags`](Self::tags) was always empty.
-/// The rows are modelled on the method's official sample: a `name` and a
-/// `url`.
-#[derive(Clone)]
-pub struct SimilarTags {
-    tag: String,
-    tags: Vec<SimilarTag>,
-}
-
-impl SimilarTags {
-    /// Decodes a `tag.getSimilar` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `similartags` or `@attr.tag` is missing or
-    /// malformed, when a row is not an object or lacks a `name`, or when
-    /// an object repeats a member name. The message names the field, such
-    /// as `similartags.tag[3].name`, and never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        const ROOT: &str = "similartags";
-        shared::decode(raw, &methods::TAG_GET_SIMILAR, ROOT, |mut list| {
-            let tag = shared::owner(&list, ROOT, "tag")?;
-            let rows = shared::rows(&mut list, "similartags.tag", "tag")?;
-            let tags = shared::each(rows, "similartags.tag", |row, at| {
-                Ok(SimilarTag {
-                    name: shared::required_str(&row, at, "name")?.to_owned(),
-                    url: shared::optional_str(&row, at, "url")?,
-                    json: Value::Object(row),
-                })
-            })?;
-            Ok(Self { tag, tags })
-        })
-    }
-
-    /// The tag the service says the list is for. It has sent `n/a` here
-    /// whatever tag was asked about.
-    pub fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    /// The similar tags, in the order the service sent them.
-    pub fn tags(&self) -> &[SimilarTag] {
-        &self.tags
-    }
-}
-
-impl fmt::Debug for SimilarTags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SimilarTags")
-            .field("tags", &self.tags.len())
-            .finish_non_exhaustive()
-    }
+/// and `n/a` for the subject. The rows are modelled on the method's official
+/// sample: a `name` and a `url`.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). `@attr.tag` is required, and a row needs
+/// a `name`.
+pub fn tag_get_similar(raw: &Raw) -> Result<List<SimilarTag>, Error> {
+    shared::listed(
+        raw,
+        &methods::TAG_GET_SIMILAR,
+        "similartags",
+        "tag",
+        Some("tag"),
+        |row, at| {
+            Ok(SimilarTag {
+                name: shared::required_str(&row, at, "name")?.to_owned(),
+                url: shared::optional_str(&row, at, "url")?,
+                json: Value::Object(row),
+            })
+        },
+    )
 }
 
 /// A tag in a list of similar tags. [`json`](Self::json) is the row exactly
@@ -211,55 +182,86 @@ impl fmt::Debug for SimilarTag {
     }
 }
 
-list_page! {
-    /// One page of `tag.getTopAlbums`: the albums given a tag most, with
-    /// the paging attributes.
-    ///
-    /// `album` is an array, for a page of one too, and `[]` for a page
-    /// beyond the last. A tag nobody has used is an empty page with a
-    /// `total` of 0, not an error. The `@attr.rank` of a row is not read:
-    /// the service counts it from the top of each page, not of the list, so
-    /// a row's place is its position, counted on from the pages before it.
-    ///
-    /// ```
-    /// use scrobl::model::TagTopAlbumsPage;
-    /// use scrobl::protocol::{self, HttpResponse, Request, methods};
-    ///
-    /// let body = r##"{"albums": {
-    ///     "album": [{"name": "Record", "mbid": "", "url": "https://www.last.fm/music/A/Record",
-    ///                "artist": {"name": "A", "mbid": "", "url": "https://www.last.fm/music/A"},
-    ///                "@attr": {"rank": "1"}}],
-    ///     "@attr": {"tag": "disco", "page": "1", "perPage": "1",
-    ///               "totalPages": "900", "total": "900"}
-    /// }}"##;
-    /// let request = Request::new(&methods::TAG_GET_TOP_ALBUMS).param("tag", "disco");
-    /// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
-    ///
-    /// let page = TagTopAlbumsPage::decode(&raw)?;
-    /// assert_eq!(page.tag(), "disco");
-    /// assert_eq!(page.albums()[0].album().title(), Some("Record"));
-    /// assert_eq!(page.albums()[0].artist().name(), "A");
-    /// # Ok::<(), scrobl::Error>(())
-    /// ```
-    TagTopAlbumsPage, "tag.getTopAlbums", TAG_GET_TOP_ALBUMS, "albums", "album",
-    @of tag = "tag", "The tag, as the service spells it back.";
-    albums: TagTopAlbum = top_album
+/// Decodes a `tag.getTopAlbums` response: one page of the albums given a tag
+/// most. The page's subject is the tag, as the service spells it back.
+///
+/// A tag nobody has used is an empty page with a `total` of 0, not an error.
+/// The `@attr.rank` of a row is not read: the service counts it from the top
+/// of each page, not of the list. [`Page::ranked`] gives a row's place.
+///
+/// ```
+/// use scrobl::model::decode;
+/// use scrobl::protocol::{self, HttpResponse, Request, methods};
+///
+/// let body = r##"{"albums": {
+///     "album": [{"name": "Record", "mbid": "", "url": "https://www.last.fm/music/A/Record",
+///                "artist": {"name": "A", "mbid": "", "url": "https://www.last.fm/music/A"},
+///                "@attr": {"rank": "1"}}],
+///     "@attr": {"tag": "disco", "page": "1", "perPage": "1",
+///               "totalPages": "900", "total": "900"}
+/// }}"##;
+/// let request = Request::new(&methods::TAG_GET_TOP_ALBUMS).param("tag", "disco");
+/// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
+///
+/// let page = decode::tag_get_top_albums(&raw)?;
+/// assert_eq!(page.subject(), Some("disco"));
+/// assert_eq!(page[0].album().title(), Some("Record"));
+/// assert_eq!(page[0].artist().name(), "A");
+/// # Ok::<(), scrobl::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). `@attr.tag` is required, and a row needs
+/// a `name` and an `artist`.
+pub fn tag_get_top_albums(raw: &Raw) -> Result<Page<TagTopAlbum>, Error> {
+    shared::paged(
+        raw,
+        &methods::TAG_GET_TOP_ALBUMS,
+        "albums",
+        "album",
+        Some("tag"),
+        top_album,
+    )
 }
 
-list_page! {
-    /// One page of `tag.getTopArtists`: the artists given a tag most, with
-    /// the paging attributes. It is laid out as a [`TagTopAlbumsPage`] is.
-    TagTopArtistsPage, "tag.getTopArtists", TAG_GET_TOP_ARTISTS, "topartists", "artist",
-    @of tag = "tag", "The tag, as the service spells it back.";
-    artists: TagTopArtist = top_artist
+/// Decodes a `tag.getTopArtists` response: one page of the artists given a
+/// tag most, laid out as [`tag_get_top_albums`] is.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). `@attr.tag` is required, and a row needs
+/// a `name`.
+pub fn tag_get_top_artists(raw: &Raw) -> Result<Page<TagTopArtist>, Error> {
+    shared::paged(
+        raw,
+        &methods::TAG_GET_TOP_ARTISTS,
+        "topartists",
+        "artist",
+        Some("tag"),
+        top_artist,
+    )
 }
 
-list_page! {
-    /// One page of `tag.getTopTracks`: the tracks given a tag most, with
-    /// the paging attributes. It is laid out as a [`TagTopAlbumsPage`] is.
-    TagTopTracksPage, "tag.getTopTracks", TAG_GET_TOP_TRACKS, "tracks", "track",
-    @of tag = "tag", "The tag, as the service spells it back.";
-    tracks: TagTopTrack = top_track
+/// Decodes a `tag.getTopTracks` response: one page of the tracks given a tag
+/// most, laid out as [`tag_get_top_albums`] is.
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). `@attr.tag` is required, and a row needs
+/// a `name` and an `artist`.
+pub fn tag_get_top_tracks(raw: &Raw) -> Result<Page<TagTopTrack>, Error> {
+    shared::paged(
+        raw,
+        &methods::TAG_GET_TOP_TRACKS,
+        "tracks",
+        "track",
+        Some("tag"),
+        top_track,
+    )
 }
 
 /// An album in a list of those given a tag most. [`json`](Self::json) is
@@ -532,60 +534,26 @@ impl fmt::Debug for AllTag {
     }
 }
 
-/// The reply to `tag.getWeeklyChartList`: the weeks the service keeps
-/// charts for, oldest first.
+/// Decodes a `tag.getWeeklyChartList` response: the weeks the service keeps
+/// charts for, oldest first. The list's subject is the tag.
 ///
 /// The weeks are the service's own, the same for every tag and for a tag
 /// nobody has used: on 2026-11-11 it sent the list a user gets.
-#[derive(Clone)]
-pub struct TagWeeklyChartList {
-    tag: String,
-    ranges: Vec<WeeklyChartRange>,
-}
-
-impl TagWeeklyChartList {
-    /// Decodes a `tag.getWeeklyChartList` response.
-    ///
-    /// # Errors
-    ///
-    /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for
-    /// another method, when `weeklychartlist` or `@attr.tag` is missing or
-    /// malformed, when a row is not an object or lacks a `from` or a `to`
-    /// that is a number, or when an object repeats a member name. The
-    /// message names the field, such as `weeklychartlist.chart[3].from`, and
-    /// never repeats response text.
-    pub fn decode(raw: &Raw) -> Result<Self, Error> {
-        const ROOT: &str = "weeklychartlist";
-        shared::decode(
-            raw,
-            &methods::TAG_GET_WEEKLY_CHART_LIST,
-            ROOT,
-            |mut list| {
-                let tag = shared::owner(&list, ROOT, "tag")?;
-                let rows = shared::rows(&mut list, "weeklychartlist.chart", "chart")?;
-                let ranges = shared::each(rows, "weeklychartlist.chart", chart_range)?;
-                Ok(Self { tag, ranges })
-            },
-        )
-    }
-
-    /// The tag, as the service spells it back.
-    pub fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    /// The weeks, in the order the service sent them.
-    pub fn ranges(&self) -> &[WeeklyChartRange] {
-        &self.ranges
-    }
-}
-
-impl fmt::Debug for TagWeeklyChartList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TagWeeklyChartList")
-            .field("ranges", &self.ranges.len())
-            .finish_non_exhaustive()
-    }
+///
+/// # Errors
+///
+/// [`ErrorKind::Decode`](crate::ErrorKind) under [the rules every list
+/// shares](super::decode#errors). `@attr.tag` is required, and a row needs
+/// a `from` and a `to` that are numbers.
+pub fn tag_get_weekly_chart_list(raw: &Raw) -> Result<List<WeeklyChartRange>, Error> {
+    shared::listed(
+        raw,
+        &methods::TAG_GET_WEEKLY_CHART_LIST,
+        "weeklychartlist",
+        "chart",
+        Some("tag"),
+        chart_range,
+    )
 }
 
 #[cfg(test)]
