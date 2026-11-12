@@ -198,7 +198,7 @@ pub(super) fn required_uint(map: &Map<String, Value>, at: &str, key: &str) -> Re
 }
 
 /// A count that must fit 32 bits, as a page number and a page size do.
-fn required_u32(map: &Map<String, Value>, at: &str, key: &str) -> Result<u32, Error> {
+pub(super) fn required_u32(map: &Map<String, Value>, at: &str, key: &str) -> Result<u32, Error> {
     u32::try_from(required_uint(map, at, key)?)
         .map_err(|_| Error::decode_field(&format!("{at}.{key}"), "too large"))
 }

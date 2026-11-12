@@ -9,7 +9,7 @@
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The eight tests send about 140 key-only requests between them, a
+//! The nine tests send about 150 key-only requests between them, a
 //! second apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
@@ -1080,4 +1080,92 @@ async fn what_the_service_says_of_an_artist_and_an_album_against_the_live_servic
         assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
     }
     println!("unknown album: error 6 on all three");
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm; needs SCROBL_LIVE_API_KEY"]
+async fn the_searches_against_the_live_service() {
+    let key = env("SCROBL_LIVE_API_KEY");
+    let search = client(&key).search();
+
+    // Artists: the query comes back, the pages follow one another, and a
+    // page of 1000 decodes.
+    let artists = search.artists("radiohead").limit(5).send().await.unwrap();
+    capture("search-artists", artists.raw());
+    assert_eq!(artists.subject(), Some("radiohead"));
+    assert_eq!(
+        (artists.number(), artists.per_page(), artists.len()),
+        (1, 5, 5)
+    );
+    assert_eq!(artists[0].name(), "Radiohead");
+    assert!(artists.iter().all(|artist| artist.listeners().is_some()));
+    let second = search
+        .artists("radiohead")
+        .limit(5)
+        .page(2)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+    assert_ne!(second[0].name(), artists[0].name());
+    let full = search.artists("radio").limit(1000).send().await.unwrap();
+    capture("search-artists-1000", full.raw());
+    assert_eq!(full.len(), 1000);
+    let unset = search.artists("radiohead").send().await.unwrap();
+    println!(
+        "artists: {} match, {} pages of {}; {} to a page when no limit is set",
+        artists.total(),
+        artists.total_pages(),
+        artists.per_page(),
+        unset.per_page()
+    );
+
+    // Every match, page after page.
+    let mut rows = search.artists("radiohead").limit(3).all();
+    let mut seen = Vec::new();
+    while seen.len() < 7 {
+        seen.push(rows.next().await.unwrap().expect("a match"));
+    }
+    assert_eq!(seen[0].name(), artists[0].name());
+    assert_eq!(seen[4].name(), artists[4].name());
+
+    // Albums: each names its artist.
+    let albums = search.albums("ok computer").limit(5).send().await.unwrap();
+    capture("search-albums", albums.raw());
+    assert_eq!(albums.subject(), Some("ok computer"));
+    assert!(albums.iter().all(|album| album.artist().is_some()));
+    let full = search.albums("love").limit(1000).send().await.unwrap();
+    capture("search-albums-1000", full.raw());
+    assert_eq!(full.len(), 1000);
+    println!("albums: {} match", albums.total());
+
+    // Nothing found is an empty page, and a page or a limit beyond 10000
+    // is an error.
+    let none = search
+        .albums("zzqqxxjjkkvvwwyy")
+        .limit(5)
+        .send()
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+    assert_eq!(none.total(), 0);
+    for error in [
+        search
+            .artists("radiohead")
+            .page(10_001)
+            .send()
+            .await
+            .map(drop)
+            .unwrap_err(),
+        search
+            .albums("love")
+            .limit(10_001)
+            .send()
+            .await
+            .map(drop)
+            .unwrap_err(),
+    ] {
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+    }
+    println!("beyond 10000: error 6");
 }

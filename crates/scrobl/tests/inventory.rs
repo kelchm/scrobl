@@ -28,6 +28,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ("album.getInfo", "`model::AlbumInfo`", "live-verified"),
     ("album.getTags", "`model::List<Tag>`", "live-verified"),
     ("album.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("album.search", "`model::Page<Album>`", "live-verified"),
     ("artist.getCorrection", "`model::Artist`", "live-verified"),
     ("artist.getInfo", "`model::ArtistInfo`", "live-verified"),
     (
@@ -51,6 +52,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::Page<Track>`",
         "live-verified",
     ),
+    ("artist.search", "`model::Page<Artist>`", "live-verified"),
     (
         "chart.getTopArtists",
         "`model::Page<Artist>`",
