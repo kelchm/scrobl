@@ -113,7 +113,7 @@ impl Ask {
 }
 
 /// Writes a query type: a struct around an [`Ask`], a setter for each
-/// option named, and `send`.
+/// option named, `send`, and for a `Page` also `all`.
 ///
 /// ```ignore
 /// query! {
@@ -123,7 +123,48 @@ impl Ask {
 /// }
 /// ```
 macro_rules! query {
+    // A paged list: what any query has, and `all`.
     (
+        $(#[$doc:meta])*
+        $name:ident => Page<$row:ty> = $decode:path;
+        $($option:ident $(= $about:literal)?),*
+    ) => {
+        $crate::client::query::query! {
+            @define
+            $(#[$doc])*
+            $name => $crate::model::Page<$row> = $decode;
+            $($option $(= $about)?),*
+        }
+
+        impl $name {
+            /// Reads every row, page after page, from the
+            /// [`page`](Self::page) that was set, or the first. The
+            /// [`limit`](Self::limit) is the size of each page asked for.
+            ///
+            /// Nothing is sent until the first
+            /// [`next`](crate::client::Rows::next). See
+            /// [`Rows`](crate::client::Rows) for what such a read does not
+            /// check.
+            #[must_use = "rows do nothing until `next` is called"]
+            pub fn all(self) -> $crate::client::Rows<$row> {
+                $crate::client::Rows::new(self.ask, $decode)
+            }
+        }
+    };
+    (
+        $(#[$doc:meta])*
+        $name:ident => $out:ty = $decode:path;
+        $($option:ident $(= $about:literal)?),*
+    ) => {
+        $crate::client::query::query! {
+            @define
+            $(#[$doc])*
+            $name => $out = $decode;
+            $($option $(= $about)?),*
+        }
+    };
+    (
+        @define
         $(#[$doc:meta])*
         $name:ident => $out:ty = $decode:path;
         $($option:ident $(= $about:literal)?),*

@@ -8,8 +8,8 @@ use super::scan::Scan;
 use crate::error::Error;
 use crate::history::{RecentTracks, Window};
 use crate::model::{
-    Album, Artist, HistoryPage, List, LovedTrack, Page, Track, User, UserAlbum, UserArtist,
-    UserTag, UserTrack, decode,
+    Album, Artist, HistoryPage, List, LovedTrack, Track, User, UserAlbum, UserArtist, UserTag,
+    UserTrack, decode,
 };
 use crate::protocol::{MethodSpec, methods};
 use crate::response::Response;

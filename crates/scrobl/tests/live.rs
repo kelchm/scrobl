@@ -544,6 +544,17 @@ async fn the_profile_friends_tags_and_loved_tracks_of_a_user_against_the_live_se
     );
     println!("loved tracks: {}", loved.total());
 
+    // Every loved track, page after page: as many rows as the service
+    // counts, and newest first across the pages.
+    let mut rows = user.loved_tracks().limit(100).all();
+    let mut times = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        times.push(row.loved_at());
+    }
+    assert_eq!(Some(times.len() as u64), rows.total());
+    assert!(times.windows(2).all(|pair| pair[0] >= pair[1]));
+    println!("all loved tracks: {} rows", times.len());
+
     // What the user gave each of their three most used tags.
     let tags = user.top_tags().limit(3).send().await.unwrap();
     capture("top-tags-3", tags.raw());

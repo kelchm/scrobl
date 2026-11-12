@@ -3,7 +3,7 @@
 use super::Client;
 use super::query::{Ask, query};
 use crate::error::Error;
-use crate::model::{Artist, List, Page, Tag, Track, decode};
+use crate::model::{Artist, List, Tag, Track, decode};
 use crate::protocol::{Request, methods};
 use crate::response::Response;
 

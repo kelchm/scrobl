@@ -2,7 +2,7 @@
 
 use super::Client;
 use super::query::{Ask, query};
-use crate::model::{CountryArtist, CountryTrack, Page, decode};
+use crate::model::{CountryArtist, CountryTrack, decode};
 use crate::protocol::{MethodSpec, methods};
 
 /// One country, to ask about. Made by [`Client::country`].
