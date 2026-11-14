@@ -56,19 +56,16 @@ secret! {
 }
 
 secret! {
-    /// A token of the desktop or web sign-in, which the user approves and
-    /// the application then exchanges for a [`SessionKey`]. It lasts an
-    /// hour and is spent by the exchange.
+    /// A sign-in token, exchanged once for a [`SessionKey`].
     AuthToken
 }
 
 secret! {
-    /// A user's Last.fm password, for the mobile sign-in.
+    /// A user's Last.fm password.
     Password
 }
 
-/// Whether a secret is empty or only whitespace, for the secrets that cannot
-/// be. A password can be only spaces.
+// Not for `Password`, which can be only spaces.
 #[cfg(feature = "client")]
 macro_rules! blank {
     ($($name:ident),*) => {$(

@@ -555,8 +555,7 @@ impl Client {
         SearchHandle::new(self.clone())
     }
 
-    /// Signing a user in, to get the session key a client acting for them
-    /// is made with. The client needs an API secret for it.
+    /// Signing a user in. Needs an API secret.
     pub fn auth(&self) -> AuthHandle {
         AuthHandle::new(self.clone())
     }

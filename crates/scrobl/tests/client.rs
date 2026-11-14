@@ -3817,7 +3817,6 @@ const UNAPPROVED: &[u8] =
 const SPENT: &[u8] =
     br#"{"error":4,"message":"Unauthorized Token - This token has not been issued"}"#;
 
-/// The names a request sent, in order, without the ones every call has.
 fn names(request: &Recorded) -> Vec<String> {
     chosen(request).into_iter().map(|(name, _)| name).collect()
 }
@@ -3845,19 +3844,17 @@ async fn the_desktop_sign_in_asks_for_a_token_and_waits_for_its_approval() {
             )
         );
 
-        // Not approved yet: an answer, not an error.
         assert!(auth.session(&token).send().await.unwrap().is_none());
         let session = auth.session(&token).send().await.unwrap().unwrap();
         assert_eq!(session.raw().body(), AUTH_SESSION);
         assert_eq!(session.name(), "MyLastFMUsername");
         assert_eq!(session.key().expose(), "d580d57f32848f5dcf574d1ce18d78b2");
 
-        // Spent: the live service answers as for a token it never issued.
+        // Spent.
         let error = auth.session(&token).send().await.unwrap_err();
         assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
         assert_eq!(error.retry(), Retry::No);
 
-        // Signed, without the session the client holds.
         let sent = server.requests();
         assert_eq!(sent.len(), 4);
         assert_eq!(names(&sent[0]), ["method", "api_sig"]);

@@ -12,18 +12,12 @@ use crate::ErrorKind;
 use crate::model::decode;
 use crate::protocol::{self, HttpResponse, Request};
 
-// Fixtures. Provenance for each:
-//
-// - `derived/auth-token.json` and `derived/auth-session.json` carry the
-//   sample values of the official pages of `auth.getToken` and
-//   `auth.getSession`, which show XML, in the JSON shape the service gives
-//   other replies. derived.
-// - Everything else is built here. synthetic.
+// provenance: derived from the official samples (see fixtures/README.md);
+// the rest synthetic.
 
 const TOKEN: &[u8] = include_bytes!("../../../fixtures/derived/auth-token.json");
 const SESSION: &[u8] = include_bytes!("../../../fixtures/derived/auth-session.json");
 
-/// The session key of the fixture, which no error or `Debug` may show.
 const KEY: &str = "d580d57f32848f5dcf574d1ce18d78b2";
 
 fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
@@ -79,7 +73,6 @@ fn the_debug_of_a_session_shows_no_key_and_no_name() {
     let debug = format!("{session:?}");
     assert!(!debug.contains(KEY), "{debug}");
     assert!(!debug.contains("MyLastFMUsername"), "{debug}");
-    // A reply that names the user after the key shows neither.
     let named = self::session(&json!({"session": {"name": KEY, "key": KEY, "subscriber": 0}}));
     assert!(!format!("{:?}", named.unwrap()).contains(KEY));
 }

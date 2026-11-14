@@ -1,5 +1,4 @@
-//! Signing in: the replies to `auth.getToken`, `auth.getSession` and
-//! `auth.getMobileSession`.
+//! Signing in: `auth.getToken`, `auth.getSession`, `auth.getMobileSession`.
 
 use std::fmt;
 
@@ -11,12 +10,8 @@ use crate::error::Error;
 use crate::protocol::{MethodSpec, Raw, methods};
 use crate::secret::{AuthToken, SessionKey};
 
-/// A signed-in user: the reply to `auth.getSession` and
-/// `auth.getMobileSession`.
-///
-/// The key is a [`SessionKey`], and `Debug` shows neither it nor the name. Unlike other
-/// models, this one does not keep its JSON, which holds the key in plain
-/// text; the exact reply is still on the [`Response`](crate::Response).
+/// A signed-in user. `Debug` shows neither the name nor the key, and there
+/// is no `json()`: it would hold the key.
 ///
 /// ```
 /// use scrobl::model::decode;
@@ -41,14 +36,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// The name of the user who signed in, as the service spells it.
+    /// The user's name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// The session key, which a client acting for the user is made with:
-    /// `Client::with_session`. It does not expire; the user can revoke it
-    /// on the website.
+    /// The session key. It does not expire.
     pub fn key(&self) -> &SessionKey {
         &self.key
     }
@@ -73,7 +66,7 @@ impl fmt::Debug for Session {
     }
 }
 
-/// Decodes an `auth.getToken` response: a token for the user to approve.
+/// Decodes an `auth.getToken` response.
 ///
 /// ```
 /// use scrobl::model::decode;
@@ -90,8 +83,7 @@ impl fmt::Debug for Session {
 ///
 /// # Errors
 ///
-/// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for another
-/// method, or `token` is missing, empty or not a string.
+/// [`ErrorKind::Decode`](crate::ErrorKind) without a non-empty `token`.
 pub fn auth_get_token(raw: &Raw) -> Result<AuthToken, Error> {
     let spec = &methods::AUTH_GET_TOKEN;
     if raw.method() != spec.name() {
@@ -110,25 +102,17 @@ pub fn auth_get_token(raw: &Raw) -> Result<AuthToken, Error> {
     parsed.map_err(|e| answered(raw, e))
 }
 
-/// Decodes an `auth.getSession` response: the session of the user who
-/// approved the token.
-///
-/// A token the user has not approved yet is answered with an error envelope,
-/// which [`protocol::decode`](crate::protocol::decode) has already turned
-/// into an error with the code
-/// [`UNAUTHORIZED_TOKEN`](crate::ApiErrorCode::UNAUTHORIZED_TOKEN).
+/// Decodes an `auth.getSession` response.
 ///
 /// # Errors
 ///
-/// [`ErrorKind::Decode`](crate::ErrorKind) when the response is for another
-/// method, or `session` is not an object with a non-empty `name` and `key`
-/// and a `subscriber` of 0 or 1.
+/// [`ErrorKind::Decode`](crate::ErrorKind) without a non-empty `name` and
+/// `key` and a `subscriber` of 0 or 1.
 pub fn auth_get_session(raw: &Raw) -> Result<Session, Error> {
     session(raw, &methods::AUTH_GET_SESSION)
 }
 
-/// Decodes an `auth.getMobileSession` response: the session of the user
-/// whose name and password were sent.
+/// Decodes an `auth.getMobileSession` response.
 ///
 /// # Errors
 ///
@@ -157,7 +141,6 @@ fn session(raw: &Raw, spec: &'static MethodSpec) -> Result<Session, Error> {
     })
 }
 
-/// `error`, with the method and the response it came from.
 fn answered(raw: &Raw, error: Error) -> Error {
     error
         .with_method(raw.spec())

@@ -15,11 +15,9 @@
 //! written there, for the owner to turn into fixtures by hand. The bodies
 //! are that user's listening history; the tests commit nothing.
 //!
-//! One more, [`the_desktop_sign_in_against_the_live_service`], also needs
-//! `SCROBL_LIVE_API_SECRET` and the owner at a browser. It prints an address
-//! for the owner to approve, waits up to five minutes, and creates a session
-//! on that account, which it uses for one read. The session key is never
-//! printed or written; the owner can revoke it on the website.
+//! [`the_desktop_sign_in_against_the_live_service`] also needs
+//! `SCROBL_LIVE_API_SECRET` and the owner at a browser. It creates a session
+//! on that account.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -1336,7 +1334,6 @@ async fn the_desktop_sign_in_against_the_live_service() {
         .unwrap();
     let auth = client.auth();
 
-    // A token, then the exchange before the owner has approved it.
     let token = auth.token().send().await.unwrap();
     println!(
         "token reply: {} (HTTP {})",
@@ -1346,7 +1343,6 @@ async fn the_desktop_sign_in_against_the_live_service() {
     let token = token.into_value();
     assert!(auth.session(&token).send().await.unwrap().is_none());
 
-    // A token the service never issued.
     let never = scrobl::AuthToken::new("00000000000000000000000000000000");
     let error = auth.session(&never).send().await.unwrap_err();
     println!(
@@ -1376,7 +1372,6 @@ async fn the_desktop_sign_in_against_the_live_service() {
     assert!(session.name().eq_ignore_ascii_case(&user));
     assert!(!format!("{session:?}").contains(session.key().expose()));
 
-    // The token is spent.
     let error = auth.session(&token).send().await.unwrap_err();
     println!(
         "the spent token again: {:?}, HTTP {:?}",
@@ -1385,7 +1380,6 @@ async fn the_desktop_sign_in_against_the_live_service() {
     );
     assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
 
-    // The key works: one read made as the user.
     let as_user = client.with_session(session.into_value().into_key());
     let request =
         scrobl::protocol::Request::new(&scrobl::protocol::methods::USER_GET_RECENT_TRACKS)
@@ -1396,8 +1390,7 @@ async fn the_desktop_sign_in_against_the_live_service() {
     println!("a read as the user: HTTP {}", raw.status());
 }
 
-/// The member names and value types of a reply, and none of its values: a
-/// sign-in reply holds a token or a session key.
+/// A reply's member names and value types, without its values.
 fn shape(raw: &Raw) -> String {
     fn of(value: &serde_json::Value) -> String {
         match value {

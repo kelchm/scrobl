@@ -69,7 +69,6 @@ impl Credentials {
         }
     }
 
-    /// The API key, for an address the user opens to approve a sign-in.
     #[cfg(feature = "client")]
     pub(crate) fn api_key(&self) -> &ApiKey {
         &self.api_key
