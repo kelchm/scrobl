@@ -1517,6 +1517,18 @@ async fn scrobbling_against_the_live_service() {
 #[ignore = "calls Last.fm and changes the account, then changes it back; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
 async fn loving_and_tagging_against_the_live_service() {
     let writer = signed_in_writer().await;
+    let info = writer
+        .track("Radiohead", "Creep")
+        .info()
+        .for_user(env("SCROBL_LIVE_USER"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        info.user_loved(),
+        Some(false),
+        "Creep is loved already, and unloving it would lose that; nothing was written"
+    );
     let tag = "scrobl-live-test";
     let changes = [
         ("love", writer.love("Radiohead", "Creep")),
