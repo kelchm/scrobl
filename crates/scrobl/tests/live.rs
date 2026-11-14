@@ -1,4 +1,5 @@
-//! Acceptance against the live Last.fm service. Nothing here writes.
+//! Acceptance against the live Last.fm service. Only the last two tests
+//! write.
 //!
 //! Nothing here runs unless asked for: the tests are ignored, and each fails
 //! at once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. They are
@@ -17,7 +18,11 @@
 //!
 //! [`the_desktop_sign_in_against_the_live_service`] also needs
 //! `SCROBL_LIVE_API_SECRET` and the owner at a browser. It creates a session
-//! on that account.
+//! on that account. [`scrobbling_against_the_live_service`] signs in the
+//! same way, then writes: one scrobble of Radiohead's "Creep", which the
+//! owner deletes afterwards on the website.
+//! [`loving_and_tagging_against_the_live_service`] loves and unloves
+//! "Creep", and adds and removes a tag on it, its album and Radiohead.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -34,7 +39,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use scrobl::client::Period;
 use scrobl::history::Window;
 use scrobl::protocol::Raw;
-use scrobl::{ApiErrorCode, ApiKey, Client, ErrorKind};
+use scrobl::{ApiErrorCode, ApiKey, Client, ErrorKind, Writer};
 
 const USER_AGENT: &str = "scrobl-live-acceptance/0 (+https://github.com/kelchm/scrobl)";
 
@@ -1409,4 +1414,144 @@ fn shape(raw: &Raw) -> String {
         }
     }
     of(&raw.json_strict().unwrap())
+}
+
+/// Signs in at the browser and returns a writer for `SCROBL_LIVE_USER`,
+/// refusing a session for any other account.
+async fn signed_in_writer() -> Writer {
+    let user = env("SCROBL_LIVE_USER");
+    let key = env("SCROBL_LIVE_API_KEY");
+    let secret = env("SCROBL_LIVE_API_SECRET");
+    let client = Client::builder(ApiKey::new(&key))
+        .secret(scrobl::ApiSecret::new(&secret))
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap();
+    let auth = client.auth();
+    let token = auth.token().send().await.unwrap().into_value();
+    println!("\nApprove the sign-in at:\n{}\n", auth.approval_url(&token));
+    let started = std::time::Instant::now();
+    let session = loop {
+        if let Some(session) = auth.session(&token).send().await.unwrap() {
+            break session.into_value();
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(300),
+            "not approved within five minutes"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    };
+    assert!(
+        session.name().eq_ignore_ascii_case(&user),
+        "approved for another account; nothing was written"
+    );
+    Client::builder(ApiKey::new(key))
+        .secret(scrobl::ApiSecret::new(secret))
+        .session(session.into_key())
+        .user_agent(USER_AGENT)
+        .build_writer()
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and adds a scrobble; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
+async fn scrobbling_against_the_live_service() {
+    let writer = signed_in_writer().await;
+
+    let now = writer
+        .now_playing("Radiohead", "Creep")
+        .album("Pablo Honey")
+        .send()
+        .await
+        .unwrap();
+    println!(
+        "now playing: {} (HTTP {})",
+        shape(now.raw()),
+        now.raw().status()
+    );
+    assert!(now.is_accepted());
+
+    // A play from five minutes ago between two from 2001, which are ignored.
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 300;
+    let plays = [
+        scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_000),
+        scrobl::client::Play::new("Radiohead", "Creep", started_at).album("Pablo Honey"),
+        scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_100),
+    ];
+    println!("\nDelete the scrobble of Radiohead, Creep at {started_at} on the website.");
+    let report = match writer.scrobble(&plays).send().await {
+        Ok(report) => report,
+        Err(error) => {
+            if let (Ok(dir), Some(body)) = (std::env::var("SCROBL_LIVE_CAPTURE_DIR"), error.body())
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(PathBuf::from(dir).join("scrobble-error.json"), body).unwrap();
+            }
+            panic!("{error:?}");
+        }
+    };
+    println!(
+        "scrobble: {} (HTTP {})",
+        shape(report.raw()),
+        report.raw().status()
+    );
+    assert_eq!(report.outcomes().len(), 3);
+    for outcome in report.outcomes() {
+        println!(
+            "{:?}: {:?}",
+            outcome.timestamp(),
+            outcome.ignored().map(scrobl::model::Ignored::code)
+        );
+        assert_eq!(
+            outcome.is_accepted(),
+            outcome.timestamp() == Some(started_at)
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and changes the account, then changes it back; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
+async fn loving_and_tagging_against_the_live_service() {
+    let writer = signed_in_writer().await;
+    let info = writer
+        .track("Radiohead", "Creep")
+        .info()
+        .for_user(env("SCROBL_LIVE_USER"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        info.user_loved(),
+        Some(false),
+        "Creep is loved already, and unloving it would lose that; nothing was written"
+    );
+    let tag = "scrobl-live-test";
+    let changes = [
+        ("love", writer.love("Radiohead", "Creep")),
+        ("unlove", writer.unlove("Radiohead", "Creep")),
+        ("tag artist", writer.tag_artist("Radiohead", [tag])),
+        ("untag artist", writer.untag_artist("Radiohead", tag)),
+        (
+            "tag album",
+            writer.tag_album("Radiohead", "Pablo Honey", [tag]),
+        ),
+        (
+            "untag album",
+            writer.untag_album("Radiohead", "Pablo Honey", tag),
+        ),
+        ("tag track", writer.tag_track("Radiohead", "Creep", [tag])),
+        ("untag track", writer.untag_track("Radiohead", "Creep", tag)),
+    ];
+    for (name, change) in changes {
+        let done = change.send().await.unwrap();
+        println!(
+            "{name}: {} (HTTP {})",
+            shape(done.raw()),
+            done.raw().status()
+        );
+    }
 }

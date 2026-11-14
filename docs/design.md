@@ -293,7 +293,7 @@ The calls so far. There are 46 for the forty-four typed methods, which are every
 | `client.search()` | `artists(query)`, `albums(query)`, `tracks(query)` |
 | `client.auth()` | `token`, `session(token)`, `mobile_session(username, password)`, and the addresses `approval_url(token)` and `web_approval_url(callback)` |
 
-Still to come: the ten writes on a `Writer`.
+On a `Writer` only: `scrobble(&plays)`, 1 to 50 `Play`s, and `now_playing(artist, track)`. And `love` and `unlove(artist, track)`, `tag_artist`, `tag_album` and `tag_track` with up to ten tags, and `untag_artist`, `untag_album` and `untag_track` with one. A tag with a comma is refused, since the service takes tags as one comma-separated list. These eight answer with nothing, so they return `Response<()>`.
 
 Signing in has three rules of its own:
 
@@ -486,7 +486,7 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 
 `Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both. Managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`. Secrets never cross IPC because the library's types do not serialize them.
 
-Signing in, and writes (writes not built; shape only, to be checked against the live service):
+Signing in and scrobbling:
 
 ```rust
 // Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
@@ -504,14 +504,14 @@ let writer = writer.with_session(session.into_key());   // typed writes exist on
 let play = Play::new("Cher", "Believe", started_at).album("Believe");
 match writer.scrobble(&[play]).send().await {              // at most 50 per call
     Ok(report) => for outcome in report.outcomes() {
-        // one for each play, in the order sent: what Last.fm corrected, or why it ignored the play
+        // one for each play, in Last.fm's order: what it corrected, or why it ignored the play
     },
     Err(e) if e.delivery() == Some(Delivery::Unknown) => { /* persist as uncertain */ }
     Err(e) => { /* e.retry() says whether to keep it queued */ }
 }
 ```
 
-A scrobble reply is checked against the request: one outcome per item, `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
+A scrobble reply is checked against the request: one outcome per play, and `accepted` and `ignored` agreeing with the outcomes. Outcomes come in the service's order, which on 2026-11-14 put accepted plays first. The reply ties an outcome to a play only by timestamp and names, so matching them is left to the caller, who knows its plays. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it. Ignore codes are kept as sent: the service gives 1 for plays it documents as 3, and the meanings are not to be relied on. Last.fm lowered its undisclosed daily limit in June 2026, and the limit can arrive as error 29 rather than code 5.
 
 ## Command-line tool
 
@@ -557,7 +557,7 @@ That one rule is the first import, the daily run and the repair of old history:
 **The newest history is always read.** Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline.
 
 - Every sync reads, whatever the counts say, from fourteen days before the newest scrobble the file holds up to the present. It reads that first, so that the newest history is in the file whatever becomes of the rest.
-- Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
+- Fourteen days because several clients report, and a moderator on Last.fm's forum confirmed (https://support.last.fm/t/6754), that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
 - A file that holds no scrobble yet, or one dated after the present, is read from fourteen days before the present instead. A scrobble that arrived in a longer gap than that is found by its count, like a change to older history.
 - The cost is that the fortnight before the newest scrobble is read by every sync, also when nothing has been played for months.
 - `--full` reads every span that way.
@@ -584,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Forty-seven have one so far: the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so has the desktop sign-in, `auth.getToken` and `auth.getSession`. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The ten left are the ten that change an account. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. All fifty-seven have one: the eight that love, unlove and tag, the two that scrobble, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so have the desktop sign-in, `auth.getToken` and `auth.getSession`, and both that scrobble. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight that love, unlove and tag stay `typed-derived` until a test account runs them (#95). One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
