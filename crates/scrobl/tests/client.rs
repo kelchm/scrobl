@@ -3979,3 +3979,18 @@ async fn the_debug_of_a_session_query_does_not_show_the_token() {
     assert!(!debug.contains("SENTINEL_TOKEN_0005"), "{debug}");
     assert!(debug.contains("AuthToken(<redacted>)"), "{debug}");
 }
+
+#[tokio::test]
+async fn a_password_of_spaces_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::status(200, AUTH_SESSION)]).await;
+        let auth = client(&server).auth();
+        let password = scrobl::Password::new("   ");
+        auth.mobile_session(USER, password).send().await.unwrap();
+        assert_eq!(
+            server.requests()[0].param("password").as_deref(),
+            Some("   ")
+        );
+    })
+    .await;
+}

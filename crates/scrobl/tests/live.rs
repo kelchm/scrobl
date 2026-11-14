@@ -1338,9 +1338,9 @@ async fn the_desktop_sign_in_against_the_live_service() {
 
     // A token, then the exchange before the owner has approved it.
     let token = auth.token().send().await.unwrap();
-    let shape = String::from_utf8_lossy(token.raw().body()).replace(token.expose(), "<token>");
     println!(
-        "token reply, token replaced: {shape} (HTTP {})",
+        "token reply: {} (HTTP {})",
+        shape(token.raw()),
         token.raw().status()
     );
     let token = token.into_value();
@@ -1354,7 +1354,7 @@ async fn the_desktop_sign_in_against_the_live_service() {
         error.api_code(),
         error.http_status()
     );
-    assert_eq!(error.kind(), ErrorKind::Api);
+    assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
 
     println!("\nApprove the sign-in at:\n{}\n", auth.approval_url(&token));
     let started = std::time::Instant::now();
@@ -1368,10 +1368,9 @@ async fn the_desktop_sign_in_against_the_live_service() {
         );
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     };
-    let shape =
-        String::from_utf8_lossy(session.raw().body()).replace(session.key().expose(), "<key>");
     println!(
-        "session reply, key replaced: {shape} (HTTP {})",
+        "session reply: {} (HTTP {})",
+        shape(session.raw()),
         session.raw().status()
     );
     assert!(session.name().eq_ignore_ascii_case(&user));
@@ -1395,4 +1394,26 @@ async fn the_desktop_sign_in_against_the_live_service() {
             .as_user();
     let raw = as_user.call(&request).await.unwrap();
     println!("a read as the user: HTTP {}", raw.status());
+}
+
+/// The member names and value types of a reply, and none of its values: a
+/// sign-in reply holds a token or a session key.
+fn shape(raw: &Raw) -> String {
+    fn of(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::Object(map) => {
+                let members: Vec<_> = map
+                    .iter()
+                    .map(|(name, value)| format!("{name:?}: {}", of(value)))
+                    .collect();
+                format!("{{{}}}", members.join(", "))
+            }
+            serde_json::Value::Array(items) => format!("[{} items]", items.len()),
+            serde_json::Value::String(s) => format!("string of {}", s.len()),
+            serde_json::Value::Number(_) => "number".to_owned(),
+            serde_json::Value::Bool(_) => "bool".to_owned(),
+            serde_json::Value::Null => "null".to_owned(),
+        }
+    }
+    of(&raw.json_strict().unwrap())
 }

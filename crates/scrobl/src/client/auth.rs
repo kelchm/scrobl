@@ -226,7 +226,11 @@ impl AuthMobileSessionQuery {
             self.username.trim().is_empty(),
             "the username is empty",
         )?;
-        refuse_blank(spec, self.password.is_blank(), "the password is empty")?;
+        refuse_blank(
+            spec,
+            self.password.expose().is_empty(),
+            "the password is empty",
+        )?;
         let request = Request::new(spec)
             .param("username", &self.username)
             .param("password", self.password.expose());

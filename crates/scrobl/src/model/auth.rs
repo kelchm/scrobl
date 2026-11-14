@@ -14,7 +14,7 @@ use crate::secret::{AuthToken, SessionKey};
 /// A signed-in user: the reply to `auth.getSession` and
 /// `auth.getMobileSession`.
 ///
-/// The key is a [`SessionKey`], so `Debug` does not show it. Unlike other
+/// The key is a [`SessionKey`], and `Debug` shows neither it nor the name. Unlike other
 /// models, this one does not keep its JSON, which holds the key in plain
 /// text; the exact reply is still on the [`Response`](crate::Response).
 ///
@@ -67,10 +67,9 @@ impl Session {
 impl fmt::Debug for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Session")
-            .field("name", &self.name)
             .field("key", &self.key)
             .field("subscriber", &self.subscriber)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

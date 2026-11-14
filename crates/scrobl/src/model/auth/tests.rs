@@ -74,11 +74,14 @@ fn a_session_is_read_from_either_method() {
 }
 
 #[test]
-fn the_debug_of_a_session_does_not_show_the_key() {
+fn the_debug_of_a_session_shows_no_key_and_no_name() {
     let session = decode::auth_get_session(&raw(&methods::AUTH_GET_SESSION, SESSION)).unwrap();
     let debug = format!("{session:?}");
     assert!(!debug.contains(KEY), "{debug}");
-    assert!(debug.contains("MyLastFMUsername"), "{debug}");
+    assert!(!debug.contains("MyLastFMUsername"), "{debug}");
+    // A reply that names the user after the key shows neither.
+    let named = self::session(&json!({"session": {"name": KEY, "key": KEY, "subscriber": 0}}));
+    assert!(!format!("{:?}", named.unwrap()).contains(KEY));
 }
 
 #[test]

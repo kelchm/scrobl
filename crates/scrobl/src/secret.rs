@@ -29,12 +29,6 @@ macro_rules! secret {
             pub fn expose(&self) -> &str {
                 &self.0
             }
-
-            /// Whether it is empty or only whitespace, without showing it.
-            #[cfg(feature = "client")]
-            pub(crate) fn is_blank(&self) -> bool {
-                self.0.trim().is_empty()
-            }
         }
 
         impl std::fmt::Debug for $name {
@@ -72,6 +66,23 @@ secret! {
     /// A user's Last.fm password, for the mobile sign-in.
     Password
 }
+
+/// Whether a secret is empty or only whitespace, for the secrets that cannot
+/// be. A password can be only spaces.
+#[cfg(feature = "client")]
+macro_rules! blank {
+    ($($name:ident),*) => {$(
+        impl $name {
+            /// Whether it is empty or only whitespace, without showing it.
+            pub(crate) fn is_blank(&self) -> bool {
+                self.0.trim().is_empty()
+            }
+        }
+    )*};
+}
+
+#[cfg(feature = "client")]
+blank!(ApiKey, ApiSecret, SessionKey, AuthToken);
 
 #[cfg(test)]
 mod tests {
