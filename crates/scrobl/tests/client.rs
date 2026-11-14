@@ -3993,3 +3993,242 @@ async fn a_password_of_spaces_is_sent() {
     })
     .await;
 }
+
+const SCROBBLE_BATCH: &[u8] = include_bytes!("../fixtures/derived/scrobble-batch.json");
+const NOW_PLAYING_REPLY: &[u8] = include_bytes!("../fixtures/derived/now-playing.json");
+
+#[tokio::test]
+async fn a_batch_of_scrobbles_is_posted_once_with_each_play_indexed() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, SCROBBLE_BATCH)],
+        )
+        .await;
+        let plays = [
+            scrobl::client::Play::new("Guns and Roses", "Paradise City", 1_287_140_447)
+                .duration(Duration::from_millis(406_500))
+                .chosen_by_user(true),
+            scrobl::client::Play::new("Cher", "Believe", 1_000_000_000)
+                .album("Believe")
+                .album_artist("Cher")
+                .track_number(1),
+        ];
+        let report = writer(&server).scrobble(&plays).send().await.unwrap();
+        assert_eq!(report.raw().body(), SCROBBLE_BATCH);
+        assert_eq!((report.accepted(), report.ignored()), (1, 1));
+
+        let sent = server.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].verb, "POST");
+        assert_eq!(
+            chosen(&sent[0])
+                .into_iter()
+                .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+                .collect::<Vec<_>>(),
+            pairs(&[
+                ("method", "track.scrobble"),
+                ("artist[0]", "Guns and Roses"),
+                ("track[0]", "Paradise City"),
+                ("timestamp[0]", "1287140447"),
+                ("duration[0]", "406"),
+                ("chosenByUser[0]", "1"),
+                ("artist[1]", "Cher"),
+                ("track[1]", "Believe"),
+                ("timestamp[1]", "1000000000"),
+                ("album[1]", "Believe"),
+                ("albumArtist[1]", "Cher"),
+                ("trackNumber[1]", "1"),
+            ])
+        );
+        assert_eq!(sent[0].param("sk").as_deref(), Some(SESSION));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_scrobble_is_never_sent_twice_and_a_bad_batch_is_never_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::html(500)]).await;
+        let writer = writer(&server);
+        let play = scrobl::client::Play::new("Cher", "Believe", 1_000_000_000);
+        let error = writer
+            .scrobble(std::slice::from_ref(&play))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+        assert_eq!(error.retry(), Retry::No);
+        assert_eq!(server.requests().len(), 1);
+
+        let too_many = vec![play; scrobl::client::MAX_BATCH + 1];
+        for plays in [&too_many[..], &[]] {
+            let error = writer.scrobble(plays).send().await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.delivery(), Some(Delivery::NotSent));
+        }
+        assert_eq!(server.requests().len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn now_playing_is_posted_once_with_what_was_set() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, NOW_PLAYING_REPLY)],
+        )
+        .await;
+        let outcome = writer(&server)
+            .now_playing("Cher", "Believe")
+            .album("Believe")
+            .album_artist("Cher")
+            .track_number(1)
+            .mbid("b-id")
+            .duration(Duration::from_secs(239))
+            .send()
+            .await
+            .unwrap();
+        assert!(outcome.is_accepted());
+        let sent = server.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].verb, "POST");
+        assert_eq!(
+            chosen(&sent[0])
+                .into_iter()
+                .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+                .collect::<Vec<_>>(),
+            pairs(&[
+                ("method", "track.updateNowPlaying"),
+                ("artist", "Cher"),
+                ("track", "Believe"),
+                ("album", "Believe"),
+                ("albumArtist", "Cher"),
+                ("trackNumber", "1"),
+                ("mbid", "b-id"),
+                ("duration", "239"),
+            ])
+        );
+    })
+    .await;
+}
+
+const ACKNOWLEDGED: &[u8] = include_bytes!("../fixtures/derived/acknowledged.json");
+
+/// What a write sent, without the session and the signature.
+fn written(request: &Recorded) -> Vec<(String, String)> {
+    chosen(request)
+        .into_iter()
+        .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+        .collect()
+}
+
+#[tokio::test]
+async fn each_change_is_posted_once_with_its_parameters() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            std::iter::repeat_n(Behaviour::status(200, ACKNOWLEDGED), 8),
+        )
+        .await;
+        let writer = writer(&server);
+        let changes = [
+            writer.love("Cher", "Believe"),
+            writer.unlove("Cher", "Believe"),
+            writer.tag_artist("Cher", ["pop", "disco"]),
+            writer.tag_album("Cher", "Believe", vec!["pop".to_owned()]),
+            writer.tag_track("Cher", "Believe", ["pop"]),
+            writer.untag_artist("Cher", "pop"),
+            writer.untag_album("Cher", "Believe", "pop"),
+            writer.untag_track("Cher", "Believe", "pop"),
+        ];
+        for change in changes {
+            change.send().await.unwrap();
+        }
+        let sent = server.requests();
+        assert!(sent.iter().all(|r| r.verb == "POST"));
+        assert!(
+            sent.iter()
+                .all(|r| r.param("sk").as_deref() == Some(SESSION))
+        );
+        let sent: Vec<_> = sent.iter().map(written).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "track.love"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "track.unlove"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "artist.addTags"),
+                    ("artist", "Cher"),
+                    ("tags", "pop,disco")
+                ]),
+                pairs(&[
+                    ("method", "album.addTags"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.addTags"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "artist.removeTag"),
+                    ("artist", "Cher"),
+                    ("tag", "pop")
+                ]),
+                pairs(&[
+                    ("method", "album.removeTag"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tag", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.removeTag"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tag", "pop"),
+                ]),
+            ]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_change_is_never_sent_twice_and_bad_tags_are_never_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::html(500)]).await;
+        let writer = writer(&server);
+        let error = writer.love("Cher", "Believe").send().await.unwrap_err();
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+        assert_eq!(error.retry(), Retry::No);
+        assert_eq!(server.requests().len(), 1);
+
+        let eleven: Vec<String> = (0..=scrobl::client::MAX_TAGS)
+            .map(|i| i.to_string())
+            .collect();
+        for tags in [vec![], eleven, vec!["rock, pop".to_owned()]] {
+            let error = writer
+                .tag_track("Cher", "Believe", tags)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.delivery(), Some(Delivery::NotSent));
+        }
+        assert_eq!(server.requests().len(), 1);
+    })
+    .await;
+}
