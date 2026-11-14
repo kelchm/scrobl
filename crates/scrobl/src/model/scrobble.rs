@@ -181,7 +181,8 @@ impl IgnoredCode {
 
 /// Decodes a `track.scrobble` response and checks it against the request:
 /// one outcome for each play sent, and `accepted` and `ignored` agreeing
-/// with them.
+/// with them. Plays are counted by `artist[i]`, as `Writer::scrobble`
+/// sends them.
 ///
 /// # Errors
 ///

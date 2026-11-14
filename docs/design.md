@@ -504,7 +504,7 @@ let writer = writer.with_session(session.into_key());   // typed writes exist on
 let play = Play::new("Cher", "Believe", started_at).album("Believe");
 match writer.scrobble(&[play]).send().await {              // at most 50 per call
     Ok(report) => for outcome in report.outcomes() {
-        // one for each play, in the order sent: what Last.fm corrected, or why it ignored the play
+        // one for each play, in Last.fm's order: what it corrected, or why it ignored the play
     },
     Err(e) if e.delivery() == Some(Delivery::Unknown) => { /* persist as uncertain */ }
     Err(e) => { /* e.retry() says whether to keep it queued */ }
@@ -584,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Forty-nine have one so far: the two that scrobble, which are `typed-derived`, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so has the desktop sign-in, `auth.getToken` and `auth.getSession`. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight left love, unlove and tag. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Forty-nine have one so far: the two that scrobble, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so have the desktop sign-in, `auth.getToken` and `auth.getSession`, and both that scrobble. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight left love, unlove and tag. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 

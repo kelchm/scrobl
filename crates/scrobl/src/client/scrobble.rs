@@ -135,7 +135,7 @@ impl ScrobbleQuery {
     pub async fn send(self) -> Result<Response<ScrobbleReport>, Error> {
         let spec = &methods::TRACK_SCROBBLE;
         if self.plays.is_empty() || self.plays.len() > MAX_BATCH {
-            return Err(Error::invalid_request(spec, "a batch holds 1 to 50 plays"));
+            return Err(Error::invalid_request(spec, &format!("a batch holds 1 to {MAX_BATCH} plays")));
         }
         let mut request = Request::new(spec);
         for (i, play) in self.plays.iter().enumerate() {
@@ -227,7 +227,7 @@ fn optional(mut request: Request, play: &Play, index: Option<usize>) -> Request 
     if let Some(duration) = play.duration {
         request = add(request, "duration", duration.as_secs().to_string());
     }
-    if let Some(chosen) = play.chosen_by_user.filter(|_| index.is_some()) {
+    if let Some(chosen) = play.chosen_by_user {
         request = add(request, "chosenByUser", u8::from(chosen).to_string());
     }
     request
