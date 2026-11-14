@@ -294,12 +294,14 @@ mod artist;
 mod auth;
 mod builder;
 mod cause;
+mod change;
 mod charts;
 mod country;
 mod pacing;
 mod query;
 mod rows;
 mod scan;
+mod scrobble;
 mod search;
 mod tag;
 mod track;
@@ -319,12 +321,14 @@ pub use artist::{
 };
 pub use auth::{AuthHandle, AuthMobileSessionQuery, AuthSessionQuery, AuthTokenQuery};
 pub use builder::ClientBuilder;
+pub use change::{ChangeQuery, MAX_TAGS};
 pub use charts::{
     ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
 };
 pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
 pub use rows::Rows;
 pub use scan::Scan;
+pub use scrobble::{MAX_BATCH, NowPlayingQuery, Play, ScrobbleQuery};
 pub use search::{SearchAlbumsQuery, SearchArtistsQuery, SearchHandle, SearchTracksQuery};
 pub use tag::{
     TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
