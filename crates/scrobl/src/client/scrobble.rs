@@ -135,7 +135,10 @@ impl ScrobbleQuery {
     pub async fn send(self) -> Result<Response<ScrobbleReport>, Error> {
         let spec = &methods::TRACK_SCROBBLE;
         if self.plays.is_empty() || self.plays.len() > MAX_BATCH {
-            return Err(Error::invalid_request(spec, &format!("a batch holds 1 to {MAX_BATCH} plays")));
+            return Err(Error::invalid_request(
+                spec,
+                &format!("a batch holds 1 to {MAX_BATCH} plays"),
+            ));
         }
         let mut request = Request::new(spec);
         for (i, play) in self.plays.iter().enumerate() {
