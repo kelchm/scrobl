@@ -21,8 +21,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use scrobl::Response;
-use scrobl::history::{ScanPage, ScanSummary};
-use scrobl::model::LovedTracksPage;
+use scrobl::history::ScanSummary;
+use scrobl::model::{HistoryPage, LovedTrack, Page};
 
 use crate::Error;
 
@@ -177,7 +177,7 @@ impl Store {
     pub fn replace(
         &mut self,
         summary: &ScanSummary,
-        pages: &[ScanPage],
+        pages: &[Response<HistoryPage>],
         now: u64,
     ) -> Result<Change, Error> {
         let span = summary.window();
@@ -213,7 +213,7 @@ impl Store {
         for scrobble in read() {
             let row = (
                 scrobble.timestamp(),
-                scrobble.artist().name(),
+                scrobble.track().artist().name(),
                 scrobble.track().name(),
             );
             *unmatched.entry(row).or_default() += 1;
@@ -252,12 +252,12 @@ impl Store {
             for scrobble in read() {
                 insert.execute(params![
                     scrobble.timestamp(),
-                    scrobble.artist().name(),
-                    scrobble.artist().mbid(),
+                    scrobble.track().artist().name(),
+                    scrobble.track().artist().mbid(),
                     scrobble.track().name(),
                     scrobble.track().mbid(),
-                    scrobble.album().title(),
-                    scrobble.album().mbid(),
+                    scrobble.track().album().map(|album| album.name()),
+                    scrobble.track().album().and_then(|album| album.mbid()),
                 ])?;
             }
         }
@@ -270,7 +270,7 @@ impl Store {
     /// `loved_read_at`.
     pub(crate) fn replace_loved(
         &mut self,
-        pages: &[Response<LovedTracksPage>],
+        pages: &[Response<Page<LovedTrack>>],
         read_at: u64,
     ) -> Result<(), Error> {
         let transaction = self
@@ -282,11 +282,11 @@ impl Store {
                 "INSERT INTO loved (loved_at, artist, artist_mbid, track, track_mbid)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
-            for loved in pages.iter().flat_map(|page| page.tracks()) {
+            for loved in pages.iter().flat_map(|page| page.items()) {
                 insert.execute(params![
                     loved.loved_at(),
-                    loved.artist().name(),
-                    loved.artist().mbid(),
+                    loved.track().artist().name(),
+                    loved.track().artist().mbid(),
                     loved.track().name(),
                     loved.track().mbid(),
                 ])?;

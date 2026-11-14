@@ -15,71 +15,71 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | Method | Verb | Credentials | Write | Paging | Parameters | Typed model | Status |
 |---|---|---|---|---|---|---|---|
 | **album** | | | | | | | |
-| `album.addTags` | POST | API key, signature, session | yes | — | artist, album, tags | — | inventoried |
-| `album.getInfo` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _username_, _lang_ | — | inventoried |
-| `album.getTags` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _user_ | — | inventoried |
-| `album.getTopTags` | GET | API key | — | — | artist\*, album\*, _autocorrect_, _mbid_ | — | inventoried |
-| `album.removeTag` | POST | API key, signature, session | yes | — | artist, album, tag | — | inventoried |
-| `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | — | inventoried |
+| `album.addTags` | POST | API key, signature, session | yes | — | artist, album, tags | `()` | typed-derived |
+| `album.getInfo` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _username_, _lang_ | `model::AlbumInfo` | live-verified |
+| `album.getTags` | GET | API key | — | — | artist\*, album\*, _mbid_, _autocorrect_, _user_ | `model::List<Tag>` | live-verified |
+| `album.getTopTags` | GET | API key | — | — | artist\*, album\*, _autocorrect_, _mbid_ | `model::List<TopTag>` | live-verified |
+| `album.removeTag` | POST | API key, signature, session | yes | — | artist, album, tag | `()` | typed-derived |
+| `album.search` | GET | API key | — | page, limit | _limit_, _page_, album | `model::Page<Album>` | live-verified |
 | **artist** | | | | | | | |
-| `artist.addTags` | POST | API key, signature, session | yes | — | artist, tags | — | inventoried |
-| `artist.getCorrection` | GET | API key | — | — | artist | — | inventoried |
-| `artist.getInfo` | GET | API key | — | — | artist\*, _mbid_, _lang_, _autocorrect_, _username_ | — | inventoried |
-| `artist.getSimilar` | GET | API key | — | limit | _limit_, artist\*, _autocorrect_, _mbid_ | — | inventoried |
-| `artist.getTags` | GET | API key | — | — | artist\*, _mbid_, _user_, _autocorrect_ | — | inventoried |
-| `artist.getTopAlbums` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | — | inventoried |
-| `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | — | inventoried |
-| `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | — | inventoried |
-| `artist.removeTag` | POST | API key, signature, session | yes | — | artist, tag | — | inventoried |
-| `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | — | inventoried |
+| `artist.addTags` | POST | API key, signature, session | yes | — | artist, tags | `()` | typed-derived |
+| `artist.getCorrection` | GET | API key | — | — | artist | `model::Artist` | live-verified |
+| `artist.getInfo` | GET | API key | — | — | artist\*, _mbid_, _lang_, _autocorrect_, _username_ | `model::ArtistInfo` | live-verified |
+| `artist.getSimilar` | GET | API key | — | limit | _limit_, artist\*, _autocorrect_, _mbid_ | `model::List<SimilarArtist>` | live-verified |
+| `artist.getTags` | GET | API key | — | — | artist\*, _mbid_, _user_, _autocorrect_ | `model::List<Tag>` | live-verified |
+| `artist.getTopAlbums` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Album>` | live-verified |
+| `artist.getTopTags` | GET | API key | — | — | artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
+| `artist.getTopTracks` | GET | API key | — | page, limit | artist\*, _mbid_, _autocorrect_, _page_, _limit_ | `model::Page<Track>` | live-verified |
+| `artist.removeTag` | POST | API key, signature, session | yes | — | artist, tag | `()` | typed-derived |
+| `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | `model::Page<Artist>` | live-verified |
 | **auth** | | | | | | | |
-| `auth.getMobileSession` | POST | API key, signature | — | — | password, username | — | inventoried |
-| `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |
-| `auth.getToken` | GET | API key, signature | — | — | — | — | inventoried |
+| `auth.getMobileSession` | POST | API key, signature | — | — | password, username | `model::Session` | typed-derived |
+| `auth.getSession` | GET | API key, signature | — | — | token | `model::Session` | live-verified |
+| `auth.getToken` | GET | API key, signature | — | — | — | `AuthToken` | live-verified |
 | **chart** | | | | | | | |
-| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartArtistsPage` | live-verified |
-| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTagsPage` | live-verified |
-| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::ChartTracksPage` | live-verified |
+| `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<Artist>` | live-verified |
+| `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::List<Tag>` | live-verified |
+| `chart.getTopTracks` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<Track>` | live-verified |
 | **geo** | | | | | | | |
-| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::GeoArtistsPage` | live-verified |
-| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::GeoTracksPage` | live-verified |
+| `geo.getTopArtists` | GET | API key | — | page, limit | country, _limit_, _page_ | `model::Page<CountryArtist>` | live-verified |
+| `geo.getTopTracks` | GET | API key | — | page, limit | country, _location_, _limit_, _page_ | `model::Page<CountryTrack>` | live-verified |
 | **library** | | | | | | | |
-| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LibraryArtistsPage` | live-verified |
+| `library.getArtists` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::Page<UserArtist>` | live-verified |
 | **tag** | | | | | | | |
 | `tag.getInfo` | GET | API key | — | — | _lang_, tag | `model::TagInfo` | live-verified |
-| `tag.getSimilar` | GET | API key | — | — | tag | `model::SimilarTags` | typed-derived |
-| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopAlbumsPage` | live-verified |
-| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopArtistsPage` | live-verified |
-| `tag.getTopTags` | GET | API key | — | — | — | `model::AllTags` | live-verified |
-| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::TagTopTracksPage` | live-verified |
-| `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::TagWeeklyChartList` | live-verified |
+| `tag.getSimilar` | GET | API key | — | — | tag | `model::List<Tag>` | typed-derived |
+| `tag.getTopAlbums` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Album>` | live-verified |
+| `tag.getTopArtists` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Artist>` | live-verified |
+| `tag.getTopTags` | GET | API key | — | — | — | `model::List<Tag>` | live-verified |
+| `tag.getTopTracks` | GET | API key | — | page, limit | tag, _limit_, _page_ | `model::Page<Track>` | live-verified |
+| `tag.getWeeklyChartList` | GET | API key | — | — | tag | `model::List<Window>` | live-verified |
 | **track** | | | | | | | |
-| `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | — | inventoried |
-| `track.getCorrection` | GET | API key | — | — | artist, track | — | inventoried |
-| `track.getInfo` | GET | API key | — | — | _mbid_, track\*, artist\*, _username_, _autocorrect_ | — | inventoried |
-| `track.getSimilar` | GET | API key | — | limit | track\*, artist\*, _mbid_, _autocorrect_, _limit_ | — | inventoried |
-| `track.getTags` | GET | API key | — | — | artist\*, track\*, _mbid_, _autocorrect_, _user_ | — | inventoried |
-| `track.getTopTags` | GET | API key | — | — | track\*, artist\*, _mbid_, _autocorrect_ | — | inventoried |
-| `track.love` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
-| `track.removeTag` | POST | API key, signature, session | yes | — | artist, track, tag | — | inventoried |
-| `track.scrobble` | POST | API key, signature, session | yes | — | artist[i], track[i], timestamp[i], _album[i]_, _context[i]_, _streamId[i]_, _chosenByUser[i]_, _trackNumber[i]_, _mbid[i]_, _albumArtist[i]_, _duration[i]_ | — | inventoried |
-| `track.search` | GET | API key | — | page, limit | _limit_, _page_, track, _artist_ | — | inventoried |
-| `track.unlove` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
-| `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | — | inventoried |
+| `track.addTags` | POST | API key, signature, session | yes | — | artist, track, tags | `()` | typed-derived |
+| `track.getCorrection` | GET | API key | — | — | artist, track | `model::Track` | live-verified |
+| `track.getInfo` | GET | API key | — | — | _mbid_, track\*, artist\*, _username_, _autocorrect_ | `model::TrackInfo` | live-verified |
+| `track.getSimilar` | GET | API key | — | limit | track\*, artist\*, _mbid_, _autocorrect_, _limit_ | `model::List<SimilarTrack>` | live-verified |
+| `track.getTags` | GET | API key | — | — | artist\*, track\*, _mbid_, _autocorrect_, _user_ | `model::List<Tag>` | live-verified |
+| `track.getTopTags` | GET | API key | — | — | track\*, artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
+| `track.love` | POST | API key, signature, session | yes | — | track, artist | `()` | typed-derived |
+| `track.removeTag` | POST | API key, signature, session | yes | — | artist, track, tag | `()` | typed-derived |
+| `track.scrobble` | POST | API key, signature, session | yes | — | artist[i], track[i], timestamp[i], _album[i]_, _context[i]_, _streamId[i]_, _chosenByUser[i]_, _trackNumber[i]_, _mbid[i]_, _albumArtist[i]_, _duration[i]_ | `model::ScrobbleReport` | live-verified |
+| `track.search` | GET | API key | — | page, limit | _limit_, _page_, track, _artist_ | `model::Page<Track>` | live-verified |
+| `track.unlove` | POST | API key, signature, session | yes | — | track, artist | `()` | typed-derived |
+| `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | `model::Outcome` | live-verified |
 | **user** | | | | | | | |
-| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::FriendsPage` | live-verified |
-| `user.getInfo` | GET | API key | — | — | _user_ | `model::UserInfo` | live-verified |
-| `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::LovedTracksPage` | live-verified |
-| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | `model::TaggedArtistsPage`, `model::TaggedAlbumsPage`, `model::TaggedTracksPage` | live-verified |
-| `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::RecentTracksPage` | live-verified |
-| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopAlbumsPage` | live-verified |
-| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopArtistsPage` | live-verified |
-| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::TopTags` | live-verified |
-| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::TopTracksPage` | live-verified |
-| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyAlbumChart` | live-verified |
-| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyArtistChart` | live-verified |
-| `user.getWeeklyChartList` | GET | API key | — | — | user | `model::WeeklyChartList` | live-verified |
-| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | `model::WeeklyTrackChart` | live-verified |
+| `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::Page<User>` | live-verified |
+| `user.getInfo` | GET | API key | — | — | _user_ | `model::User` | live-verified |
+| `user.getLovedTracks` | GET | API key | — | page, limit | user, _limit_, _page_ | `model::Page<LovedTrack>` | live-verified |
+| `user.getPersonalTags` | GET | API key | — | page, limit | user, tag, taggingtype, _limit_, _page_ | `model::Page` of `Artist`, `Album` or `Track` | live-verified |
+| `user.getRecentTracks` | GET | API key | — | page, limit | _limit_, user, _page_, _from_, _extended_, _to_ | `model::HistoryPage` | live-verified |
+| `user.getTopAlbums` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserAlbum>` | live-verified |
+| `user.getTopArtists` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserArtist>` | live-verified |
+| `user.getTopTags` | GET | API key | — | limit | user, _limit_ | `model::List<UserTag>` | live-verified |
+| `user.getTopTracks` | GET | API key | — | page, limit | user, _period_, _limit_, _page_ | `model::Page<UserTrack>` | live-verified |
+| `user.getWeeklyAlbumChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserAlbum>` | live-verified |
+| `user.getWeeklyArtistChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserArtist>` | live-verified |
+| `user.getWeeklyChartList` | GET | API key | — | — | user | `model::List<Window>` | live-verified |
+| `user.getWeeklyTrackChart` | GET | API key | — | — | user, _from_, _to_ | `model::List<UserTrack>` | live-verified |
 
 <!-- END GENERATED -->
 

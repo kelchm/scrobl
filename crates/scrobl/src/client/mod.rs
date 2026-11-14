@@ -8,9 +8,31 @@
 //! crate chose to send. Responses are requested and kept unencoded: the client
 //! sends no `Accept-Encoding` and decodes no compression, whatever other
 //! crates in the program have switched on in `reqwest`, so [`Raw::body`] is
-//! exactly the bytes the service sent. Use [`Client::user`] for typed history access and
-//! [`Client::call`] for any method that reads or authenticates, as a raw
-//! [`Raw`] response. A `Client` never changes the account; a [`Writer`] does.
+//! exactly the bytes the service sent. A `Client` never changes the account;
+//! a [`Writer`] does.
+//!
+//! # Typed calls
+//!
+//! A typed call is three steps: who or what, which question, and how to
+//! run it.
+//!
+//! 1. A handle says who or what: [`Client::user`], [`Client::artist`],
+//!    [`Client::album`], [`Client::track`], [`Client::tag`],
+//!    [`Client::country`], [`Client::charts`], [`Client::search`]. It is a
+//!    cheap value and sends nothing.
+//! 2. A method of the handle asks the question, such as
+//!    [`UserHandle::top_artists`], and returns a query with a setter for
+//!    each option the method takes.
+//! 3. `send` makes the call and gives a [`Response`]: the typed value, and
+//!    next to it the exact response. On a query for a paged list, `all`
+//!    gives [`Rows`], every row page after page. On
+//!    [`UserHandle::recent_tracks`], `scan` gives a [`Scan`], which reads a
+//!    whole window of a history and checks every page against the others.
+//!
+//! Each call has the name of its Last.fm method as a search alias, so
+//! looking for `user.getWeeklyChartList` finds [`UserHandle::weeks`].
+//! [`Client::call`] makes any method that reads or authenticates, typed or
+//! not, and returns the [`Raw`] response.
 //!
 //! ```no_run
 //! use scrobl::history::Window;
@@ -63,7 +85,7 @@
 //!     .limit(1)
 //!     .send()
 //!     .await?;
-//! println!("{} scrobbles", page.attr().total());
+//! println!("{} scrobbles", page.total());
 //! # Ok(())
 //! # }
 //! ```
@@ -254,6 +276,7 @@
 //! [`no_proxy`]: ClientBuilder::no_proxy
 //! [`Raw::body`]: crate::protocol::Raw::body
 //! [`Raw`]: crate::protocol::Raw
+//! [`Response`]: crate::Response
 //! [`Retry`]: crate::Retry
 //! [`Retry::Later`]: crate::Retry::Later
 //! [`Retry::AfterBackoff`]: crate::Retry::AfterBackoff
@@ -266,13 +289,23 @@
 //! [`Error::retry`]: crate::Error::retry
 //! [`Error::delivery`]: crate::Error::delivery
 
+mod album;
+mod artist;
+mod auth;
 mod builder;
 mod cause;
+mod change;
 mod charts;
-mod history;
-mod lists;
+mod country;
 mod pacing;
-mod tags;
+mod query;
+mod rows;
+mod scan;
+mod scrobble;
+mod search;
+mod tag;
+mod track;
+mod user;
 
 use std::fmt;
 use std::sync::Arc;
@@ -281,21 +314,36 @@ use std::time::Duration;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 
+pub use album::{AlbumHandle, AlbumInfoQuery, AlbumTagsOfQuery, AlbumTopTagsQuery};
+pub use artist::{
+    ArtistCorrectionQuery, ArtistHandle, ArtistInfoQuery, ArtistSimilarQuery, ArtistTagsOfQuery,
+    ArtistTopAlbumsQuery, ArtistTopTagsQuery, ArtistTopTracksQuery,
+};
+pub use auth::{AuthHandle, AuthMobileSessionQuery, AuthSessionQuery, AuthTokenQuery};
 pub use builder::ClientBuilder;
+pub use change::{ChangeQuery, MAX_TAGS};
 pub use charts::{
-    Chart, ChartArtistsQuery, ChartTagsQuery, ChartTracksQuery, Geo, GeoArtistsQuery,
-    GeoTracksQuery,
+    ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
 };
-pub use history::{LovedTracksQuery, RecentTracksQuery, Scan, User};
-pub use lists::{
-    FriendsQuery, LibraryArtistsQuery, Period, TaggedAlbumsQuery, TaggedArtistsQuery,
-    TaggedTracksQuery, TopAlbumsQuery, TopArtistsQuery, TopTagsQuery, TopTracksQuery,
-    UserInfoQuery, WeeklyAlbumChartQuery, WeeklyArtistChartQuery, WeeklyChartListQuery,
-    WeeklyTrackChartQuery,
+pub use country::{CountryHandle, CountryTopArtistsQuery, CountryTopTracksQuery};
+pub use rows::Rows;
+pub use scan::Scan;
+pub use scrobble::{MAX_BATCH, NowPlayingQuery, Play, ScrobbleQuery};
+pub use search::{SearchAlbumsQuery, SearchArtistsQuery, SearchHandle, SearchTracksQuery};
+pub use tag::{
+    TagHandle, TagInfoQuery, TagSimilarQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
+    TagTopTracksQuery, TagWeeksQuery,
 };
-pub use tags::{
-    AllTagsQuery, SimilarTagsQuery, Tag, TagInfoQuery, TagTopAlbumsQuery, TagTopArtistsQuery,
-    TagTopTracksQuery, TagWeeklyChartListQuery,
+pub use track::{
+    TrackCorrectionQuery, TrackHandle, TrackInfoQuery, TrackSimilarQuery, TrackTagsOfQuery,
+    TrackTopTagsQuery,
+};
+pub use user::{
+    Period, UserFriendsQuery, UserHandle, UserInfoQuery, UserLibraryArtistsQuery,
+    UserLovedTracksQuery, UserRecentTracksQuery, UserTaggedAlbumsQuery, UserTaggedArtistsQuery,
+    UserTaggedTracksQuery, UserTopAlbumsInQuery, UserTopAlbumsQuery, UserTopArtistsInQuery,
+    UserTopArtistsQuery, UserTopTagsQuery, UserTopTracksInQuery, UserTopTracksQuery,
+    UserWeeksQuery,
 };
 
 use crate::error::{Error, Retry};
@@ -442,30 +490,78 @@ impl Client {
         }
     }
 
-    /// A handle for the user `name`, to read their history, their profile
-    /// and their lists with typed methods.
+    /// One user, to ask about: their history, their profile and their
+    /// lists.
     ///
-    /// The handle is a cheap value that holds a clone of this client.
-    pub fn user(&self, name: impl Into<String>) -> User {
-        User::new(self.clone(), name.into())
+    /// A handle is a cheap value that holds a clone of this client. It
+    /// sends nothing until a call on it is sent.
+    pub fn user(&self, name: impl Into<String>) -> UserHandle {
+        UserHandle::new(self.clone(), name.into())
     }
 
-    /// A handle for the charts of the whole service: the artists, tracks
-    /// and tags played and used most.
-    pub fn chart(&self) -> Chart {
-        Chart::new(self.clone())
+    /// One artist, by name, to ask about: what the service says about them,
+    /// who is like them, their albums and tracks, and the tags they are
+    /// given.
+    pub fn artist(&self, name: impl Into<String>) -> ArtistHandle {
+        ArtistHandle::named(self.clone(), name.into())
     }
 
-    /// A handle for the charts of one country, named as ISO 3166-1 names it
-    /// in English, such as `Germany`.
-    pub fn geo(&self, country: impl Into<String>) -> Geo {
-        Geo::new(self.clone(), country.into())
+    /// One artist, by MusicBrainz id. The service often has no artist for
+    /// an id, and answers such a call with
+    /// [`INVALID_PARAMETERS`](crate::ApiErrorCode::INVALID_PARAMETERS).
+    pub fn artist_mbid(&self, mbid: impl Into<String>) -> ArtistHandle {
+        ArtistHandle::with_mbid(self.clone(), mbid.into())
     }
 
-    /// A handle for one tag: what the service says about it, and the
-    /// albums, artists and tracks given it most.
-    pub fn tag(&self, name: impl Into<String>) -> Tag {
-        Tag::new(self.clone(), name.into())
+    /// One album, by the names of its artist and of the album, to ask
+    /// about: what the service says about it and the tags it is given.
+    pub fn album(&self, artist: impl Into<String>, title: impl Into<String>) -> AlbumHandle {
+        AlbumHandle::named(self.clone(), artist.into(), title.into())
+    }
+
+    /// One album, by MusicBrainz id.
+    pub fn album_mbid(&self, mbid: impl Into<String>) -> AlbumHandle {
+        AlbumHandle::with_mbid(self.clone(), mbid.into())
+    }
+
+    /// One track, by the names of its artist and of the track, to ask
+    /// about: what the service says about it, what is like it, and the
+    /// tags it is given.
+    pub fn track(&self, artist: impl Into<String>, title: impl Into<String>) -> TrackHandle {
+        TrackHandle::named(self.clone(), artist.into(), title.into())
+    }
+
+    /// One track, by MusicBrainz id.
+    pub fn track_mbid(&self, mbid: impl Into<String>) -> TrackHandle {
+        TrackHandle::with_mbid(self.clone(), mbid.into())
+    }
+
+    /// One tag, to ask about: what the service says of it, and the artists,
+    /// albums and tracks given it most.
+    pub fn tag(&self, name: impl Into<String>) -> TagHandle {
+        TagHandle::new(self.clone(), name.into())
+    }
+
+    /// One country, to ask what it plays most. It is named as ISO 3166-1
+    /// names it in English, such as `Germany`.
+    pub fn country(&self, name: impl Into<String>) -> CountryHandle {
+        CountryHandle::new(self.clone(), name.into())
+    }
+
+    /// The charts of the whole service: the artists, tracks and tags played
+    /// and used most.
+    pub fn charts(&self) -> ChartsHandle {
+        ChartsHandle::new(self.clone())
+    }
+
+    /// The service's search, for artists, albums and tracks by name.
+    pub fn search(&self) -> SearchHandle {
+        SearchHandle::new(self.clone())
+    }
+
+    /// Signing a user in. Needs an API secret.
+    pub fn auth(&self) -> AuthHandle {
+        AuthHandle::new(self.clone())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the

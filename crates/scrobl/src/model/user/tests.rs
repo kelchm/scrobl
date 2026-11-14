@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::{Album, Artist, decode};
 use crate::protocol::{self, HttpResponse, Request};
 
 // Fixtures. Provenance for each:
@@ -80,8 +81,8 @@ fn raw_of(body: &Value) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.to_string())).unwrap()
 }
 
-fn decode(body: &Value) -> Result<RecentTracksPage, Error> {
-    RecentTracksPage::decode(&raw_of(body))
+fn decode(body: &Value) -> Result<HistoryPage, Error> {
+    decode::user_get_recent_tracks(&raw_of(body))
 }
 
 fn rows(rows: Vec<Value>) -> Value {
@@ -111,11 +112,11 @@ fn plain_page_with_now_playing() {
     ]))
     .unwrap();
 
-    assert_eq!(page.user(), "rj");
-    assert_eq!(page.attr().page(), 1);
-    assert_eq!(page.attr().per_page(), 50);
-    assert_eq!(page.attr().total_pages(), 1);
-    assert_eq!(page.attr().total(), 2);
+    assert_eq!(page.subject(), Some("rj"));
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.per_page(), 50);
+    assert_eq!(page.total_pages(), 1);
+    assert_eq!(page.total(), 2);
 
     let scrobbles = page.scrobbles();
     assert_eq!(scrobbles.len(), 2);
@@ -126,18 +127,24 @@ fn plain_page_with_now_playing() {
         scrobbles[0].track().url(),
         Some("https://example.invalid/track")
     );
-    assert_eq!(scrobbles[0].artist().name(), "Artist");
-    assert_eq!(scrobbles[0].artist().mbid(), None);
-    assert_eq!(scrobbles[0].artist().url(), None);
-    assert_eq!(scrobbles[0].album().title(), Some("Album"));
-    assert_eq!(scrobbles[0].album().mbid(), None);
+    assert_eq!(scrobbles[0].track().artist().name(), "Artist");
+    assert_eq!(scrobbles[0].track().artist().mbid(), None);
+    assert_eq!(scrobbles[0].track().artist().url(), None);
+    assert_eq!(
+        scrobbles[0].track().album().map(|album| album.name()),
+        Some("Album")
+    );
+    assert_eq!(
+        scrobbles[0].track().album().and_then(|album| album.mbid()),
+        None
+    );
     assert_eq!(scrobbles[0].loved(), None);
     assert_eq!(scrobbles[1].timestamp(), 1_699_999_999);
 
     let playing = page.now_playing().unwrap();
     assert_eq!(playing.track().name(), "Playing");
-    assert_eq!(playing.artist().name(), "Playing Artist");
-    assert_eq!(playing.album().title(), None);
+    assert_eq!(playing.track().artist().name(), "Playing Artist");
+    assert_eq!(playing.track().album().map(|album| album.name()), None);
 }
 
 #[test]
@@ -149,14 +156,17 @@ fn extended_page_reads_artist_name_url_and_loved() {
     .unwrap();
 
     let first = &page.scrobbles()[0];
-    assert_eq!(first.artist().name(), "Artist");
+    assert_eq!(first.track().artist().name(), "Artist");
     assert_eq!(
-        first.artist().mbid(),
+        first.track().artist().mbid(),
         Some("11111111-1111-1111-1111-111111111111")
     );
-    assert_eq!(first.artist().url(), Some("https://example.invalid/artist"));
+    assert_eq!(
+        first.track().artist().url(),
+        Some("https://example.invalid/artist")
+    );
     assert_eq!(first.loved(), Some(true));
-    assert_eq!(first.album().title(), None);
+    assert_eq!(first.track().album().map(|album| album.name()), None);
     assert_eq!(page.scrobbles()[1].loved(), Some(false));
 }
 
@@ -420,7 +430,6 @@ fn page_attr_counts_accept_numbers_and_digit_strings_only() {
             numeric
         ))
         .unwrap()
-        .attr()
         .total(),
         7
     );
@@ -490,15 +499,27 @@ fn a_row_without_an_album_has_no_album() {
     let mut row = plain_row("1700000000", "One");
     row.as_object_mut().unwrap().remove("album");
     let page = decode(&rows(vec![row])).unwrap();
-    assert_eq!(page.scrobbles()[0].album().title(), None);
-    assert_eq!(page.scrobbles()[0].album().mbid(), None);
+    assert_eq!(
+        page.scrobbles()[0]
+            .track()
+            .album()
+            .map(|album| album.name()),
+        None
+    );
+    assert_eq!(
+        page.scrobbles()[0]
+            .track()
+            .album()
+            .and_then(|album| album.mbid()),
+        None
+    );
 }
 
 #[test]
 fn a_response_for_another_method_is_an_error() {
     let request = Request::new(&methods::USER_GET_INFO).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, rows(vec![]).to_string())).unwrap();
-    let error = RecentTracksPage::decode(&raw).unwrap_err();
+    let error = decode::user_get_recent_tracks(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
 }
 
@@ -524,12 +545,11 @@ fn errors_and_debug_never_contain_response_text() {
     ))
     .unwrap();
     let rendered = format!(
-        "{page:?} {:?} {:?} {:?} {:?} {:?}",
-        page.attr(),
+        "{page:?} {:?} {:?} {:?} {:?}",
         page.scrobbles()[0],
         page.scrobbles()[0].track(),
-        page.scrobbles()[0].artist(),
-        page.scrobbles()[0].album(),
+        page.scrobbles()[0].track().artist(),
+        page.scrobbles()[0].track().album(),
     );
     assert!(!rendered.contains(SECRET), "{rendered}");
 
@@ -560,8 +580,9 @@ fn errors_and_debug_never_contain_response_text() {
 #[test]
 fn model_types_are_send_sync_and_clone() {
     fn assert_traits<T: Send + Sync + Clone + std::fmt::Debug>() {}
-    assert_traits::<RecentTracksPage>();
-    assert_traits::<PageAttr>();
+    assert_traits::<HistoryPage>();
+    assert_traits::<crate::model::Page<Scrobble>>();
+    assert_traits::<crate::model::List<Scrobble>>();
     assert_traits::<Scrobble>();
     assert_traits::<NowPlaying>();
     assert_traits::<Track>();
@@ -572,10 +593,10 @@ fn model_types_are_send_sync_and_clone() {
 // Duplicate members. A `serde_json::Value` keeps the last of two members with
 // one name, so a decoder built on it would drop the first without a word.
 
-fn decode_text(body: &str) -> Result<RecentTracksPage, Error> {
+fn decode_text(body: &str) -> Result<HistoryPage, Error> {
     let request = Request::new(&methods::USER_GET_RECENT_TRACKS).param("user", "rj");
     let raw = protocol::decode(&request, HttpResponse::new(200, body.to_owned())).unwrap();
-    RecentTracksPage::decode(&raw)
+    decode::user_get_recent_tracks(&raw)
 }
 
 /// A page promising one row, with `track`, `@attr` and the row's own members
@@ -714,7 +735,7 @@ fn an_artist_with_both_name_fields_that_agree_is_accepted() {
         json!({"name": "X", "#text": "X", "mbid": ""}),
     )]))
     .unwrap();
-    assert_eq!(page.scrobbles()[0].artist().name(), "X");
+    assert_eq!(page.scrobbles()[0].track().artist().name(), "X");
 }
 
 #[test]
@@ -752,4 +773,24 @@ fn the_artist_name_is_checked_on_the_now_playing_row_too() {
     playing["artist"] = json!({"name": "X", "#text": "Y"});
     let error = decode_error(&rows(vec![playing]));
     assert_names(&error, "recenttracks.track[0].artist");
+}
+
+#[test]
+fn a_scrobble_and_the_track_playing_wrap_a_track() {
+    let page = decode(&rows(vec![
+        now_playing_row(),
+        plain_row("1700000000", "One"),
+    ]))
+    .unwrap();
+    let scrobble = page.scrobbles()[0].clone();
+    let track: &Track = scrobble.as_ref();
+    assert_eq!((track.name(), track.artist().name()), ("One", "Artist"));
+    assert_eq!(scrobble.json()["name"], "One");
+    assert_eq!(scrobble.into_track().name(), "One");
+
+    let playing = page.now_playing().unwrap().clone();
+    let track: &Track = playing.as_ref();
+    assert_eq!(playing.json()["name"], track.name());
+    assert_eq!(playing.clone().into_track().name(), track.name());
+    assert_eq!(page.clone().into_scrobbles().len(), 1);
 }

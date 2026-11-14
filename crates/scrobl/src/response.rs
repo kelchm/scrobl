@@ -20,10 +20,10 @@ use crate::protocol::Raw;
 ///
 /// ```
 /// use scrobl::Response;
-/// use scrobl::model::RecentTracksPage;
+/// use scrobl::model::HistoryPage;
 ///
-/// fn inspect(page: Response<RecentTracksPage>) {
-///     // `page` derefs to the typed `RecentTracksPage`.
+/// fn inspect(page: Response<HistoryPage>) {
+///     // `page` derefs to the typed `HistoryPage`.
 ///     let rows = page.scrobbles().len();
 ///
 ///     // The exact bytes Last.fm sent.

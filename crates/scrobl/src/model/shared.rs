@@ -1,323 +1,11 @@
-//! What the packages share: the paging attributes, a track, an artist and an
-//! album as a list names them, their images, and the decoding every list
-//! goes through.
-
-use std::fmt;
+//! The decoding every list goes through.
 
 use serde_json::{Map, Value};
 
+use super::page::{List, Page, Paging};
 use crate::de;
 use crate::error::Error;
 use crate::protocol::{MethodSpec, Raw};
-
-/// The paging attributes of a page, from its `@attr`: which page of how many.
-///
-/// The service sends these as strings. All four are required. Whose list
-/// the page belongs to is on the page itself, such as
-/// [`RecentTracksPage::user`](super::RecentTracksPage::user).
-#[derive(Clone)]
-pub struct PageAttr {
-    page: u64,
-    per_page: u64,
-    total_pages: u64,
-    total: u64,
-}
-
-impl PageAttr {
-    /// The page number, from 1.
-    pub fn page(&self) -> u64 {
-        self.page
-    }
-
-    /// The page size the service applied.
-    pub fn per_page(&self) -> u64 {
-        self.per_page
-    }
-
-    /// The number of pages the service says there are.
-    pub fn total_pages(&self) -> u64 {
-        self.total_pages
-    }
-
-    /// The number of items the service says match the request: for a
-    /// history, the scrobbles within the `from` and `to` bounds if any were
-    /// sent.
-    pub fn total(&self) -> u64 {
-        self.total
-    }
-}
-
-impl fmt::Debug for PageAttr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PageAttr")
-            .field("page", &self.page)
-            .field("per_page", &self.per_page)
-            .field("total_pages", &self.total_pages)
-            .field("total", &self.total)
-            .finish_non_exhaustive()
-    }
-}
-
-/// One address of an image, in one of the sizes the service offers.
-///
-/// The service sends an image as a list of these, one for each size. In
-/// every response recorded the list runs from the smallest to the largest:
-/// `small`, `medium` and `large`, then `extralarge` in most lists, then
-/// `mega` where the row is itself an artist.
-///
-/// What an image shows is the service's choice. Every artist recorded on
-/// 2026-11-10 had the same one, a placeholder; albums had their covers.
-///
-/// ```
-/// use scrobl::model::TopArtistsPage;
-/// use scrobl::protocol::{self, HttpResponse, Request, methods};
-///
-/// let body = r##"{"topartists": {
-///     "artist": [{"name": "Cher", "playcount": "9", "@attr": {"rank": "1"}, "image": [
-///         {"size": "small", "#text": "https://example.org/34.png"},
-///         {"size": "large", "#text": "https://example.org/174.png"}
-///     ]}],
-///     "@attr": {"user": "rj", "page": "1", "perPage": "1", "totalPages": "1", "total": "1"}
-/// }}"##;
-/// let request = Request::new(&methods::USER_GET_TOP_ARTISTS).param("user", "rj");
-/// let raw = protocol::decode(&request, HttpResponse::new(200, body))?;
-///
-/// let page = TopArtistsPage::decode(&raw)?;
-/// let largest = page.artists()[0].artist().images().last().unwrap();
-/// assert_eq!(largest.size(), Some("large"));
-/// assert_eq!(largest.url(), "https://example.org/174.png");
-/// # Ok::<(), scrobl::Error>(())
-/// ```
-#[derive(Clone)]
-pub struct Image {
-    size: Option<String>,
-    url: String,
-}
-
-impl Image {
-    /// The size as the service names it, such as `large`, if it sent a
-    /// non-empty one.
-    pub fn size(&self) -> Option<&str> {
-        self.size.as_deref()
-    }
-
-    /// The address of the image. Never empty.
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-}
-
-impl fmt::Debug for Image {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Image").finish_non_exhaustive()
-    }
-}
-
-/// A track, as named in a row.
-///
-/// `mbid` and `url` are `None` when the field is missing or an empty string;
-/// the row's own `json` tells the two apart.
-#[derive(Clone)]
-pub struct Track {
-    name: String,
-    mbid: Option<String>,
-    url: Option<String>,
-    images: Vec<Image>,
-}
-
-impl Track {
-    /// The track name. May be empty.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-
-    /// The Last.fm page of the track, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-
-    /// The track's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty
-    /// is left out; the row's own `json` still holds it.
-    pub fn images(&self) -> &[Image] {
-        &self.images
-    }
-}
-
-impl fmt::Debug for Track {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Track").finish_non_exhaustive()
-    }
-}
-
-/// An artist, as named in a row.
-///
-/// The name is `name` where the row gives the artist's details and `#text`
-/// where it gives only a name and an id. A row that carries both must carry
-/// the same string twice. `mbid` and `url` are `None` when the field is
-/// missing or an empty string, and `url` is not sent in the `#text` shape.
-#[derive(Clone)]
-pub struct Artist {
-    name: String,
-    mbid: Option<String>,
-    url: Option<String>,
-    images: Vec<Image>,
-}
-
-impl Artist {
-    /// The artist name. May be empty.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-
-    /// The Last.fm page of the artist, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-
-    /// The artist's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty
-    /// is left out; the row's own `json` still holds it.
-    pub fn images(&self) -> &[Image] {
-        &self.images
-    }
-}
-
-impl fmt::Debug for Artist {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Artist").finish_non_exhaustive()
-    }
-}
-
-/// An album, as named in a row. A row without an album decodes to an album
-/// with no title, no mbid, no url and no images.
-///
-/// Every field is `None` when missing or an empty string, but where the
-/// row is itself an album, as in a list of top albums, a missing name is an
-/// error. `url` is sent only in such a row.
-#[derive(Clone)]
-pub struct Album {
-    title: Option<String>,
-    mbid: Option<String>,
-    url: Option<String>,
-    images: Vec<Image>,
-}
-
-impl Album {
-    /// The album title, if the service sent a non-empty one.
-    pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
-    }
-
-    /// The MusicBrainz id, if the service sent a non-empty one.
-    pub fn mbid(&self) -> Option<&str> {
-        self.mbid.as_deref()
-    }
-
-    /// The Last.fm page of the album, if the service sent a non-empty one.
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-
-    /// The album's image in the sizes the service sent, in its order.
-    /// Empty when it sent none. An entry whose address is missing or empty
-    /// is left out; the row's own `json` still holds it.
-    pub fn images(&self) -> &[Image] {
-        &self.images
-    }
-}
-
-impl fmt::Debug for Album {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Album").finish_non_exhaustive()
-    }
-}
-
-/// Defines one page of a list that the service pages: the paging attributes,
-/// whose list it is where the service says, and the rows.
-///
-/// The pages differ in the method, the names of the root and of the rows,
-/// the row type, and whether `@attr` names an owner such as a country.
-macro_rules! list_page {
-    (
-        $(#[$doc:meta])*
-        $name:ident, $method:literal, $spec:ident, $root:literal, $key:literal,
-        $(@of $owner:ident = $owner_key:literal, $owner_doc:literal;)?
-        $rows:ident: $row:ty = $parse:path
-    ) => {
-        $(#[$doc])*
-        #[derive(Clone)]
-        pub struct $name {
-            $($owner: String,)?
-            attr: $crate::model::PageAttr,
-            $rows: Vec<$row>,
-        }
-
-        impl $name {
-            #[doc = concat!("Decodes a `", $method, "` response.")]
-            ///
-            /// # Errors
-            ///
-            /// [`ErrorKind::Decode`](crate::ErrorKind) when the response is
-            #[doc = concat!("for another method, when `", $root, "`, its `@attr` or a member read from")]
-            /// it is missing or malformed, when a row is not an object or
-            /// lacks what its type requires, when the rows are absent or
-            /// empty although `@attr` promises rows on the page, or when an
-            /// object repeats a member name. The message names the field,
-            #[doc = concat!("such as `", $root, ".", $key, "[3].name`, and never repeats response text.")]
-            pub fn decode(raw: &$crate::protocol::Raw) -> Result<Self, $crate::error::Error> {
-                use $crate::model::shared;
-                shared::decode(raw, &$crate::protocol::methods::$spec, $root, |mut list| {
-                    $(let $owner = shared::owner(&list, $root, $owner_key)?;)?
-                    let (attr, rows) = shared::page(&mut list, $root, $key)?;
-                    let $rows = shared::each(rows, concat!($root, ".", $key), $parse)?;
-                    Ok(Self {
-                        $($owner,)?
-                        attr,
-                        $rows,
-                    })
-                })
-            }
-
-            $(
-                #[doc = $owner_doc]
-                pub fn $owner(&self) -> &str {
-                    &self.$owner
-                }
-            )?
-
-            /// The paging attributes.
-            pub fn attr(&self) -> &$crate::model::PageAttr {
-                &self.attr
-            }
-
-            /// The rows, in the order the service sent them.
-            pub fn $rows(&self) -> &[$row] {
-                &self.$rows
-            }
-        }
-
-        impl ::std::fmt::Debug for $name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_struct(stringify!($name))
-                    .field("attr", &self.attr)
-                    .field(stringify!($rows), &self.$rows.len())
-                    .finish_non_exhaustive()
-            }
-        }
-    };
-}
-pub(super) use list_page;
 
 // Decoding. Every error names a field path; none repeats response text.
 
@@ -351,20 +39,58 @@ pub(super) fn decode<T>(
     })
 }
 
+/// One page of a paged list: the object under `root`, with its paging
+/// attributes at `@attr` and its rows at `key`. `subject` names the member
+/// of `@attr` that says who or what the list is about, where there is one.
+pub(super) fn paged<T>(
+    raw: &Raw,
+    spec: &'static MethodSpec,
+    root: &str,
+    key: &str,
+    subject: Option<&str>,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<Page<T>, Error> {
+    decode(raw, spec, root, |mut list| {
+        let (paging, rows) = page(&mut list, root, key, subject)?;
+        let items = each(rows, &format!("{root}.{key}"), parse)?;
+        Ok(Page::new(items, paging))
+    })
+}
+
+/// A whole list that the service does not page: the object under `root`,
+/// with its rows at `key`, which may be none. `subject` names the member of
+/// `@attr` that says who or what the list is about, where there is one.
+pub(super) fn listed<T>(
+    raw: &Raw,
+    spec: &'static MethodSpec,
+    root: &str,
+    key: &str,
+    subject: Option<&str>,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<List<T>, Error> {
+    decode(raw, spec, root, |mut list| {
+        let subject = subject.map(|name| owner(&list, root, name)).transpose()?;
+        let path = format!("{root}.{key}");
+        let rows = rows(&mut list, &path, key)?;
+        Ok(List::new(each(rows, &path, parse)?, subject))
+    })
+}
+
 /// The paging attributes and the rows of a list: `list.@attr` and
 /// `list.<key>`, where `root` is the name of `list` for the error.
 pub(super) fn page(
     list: &mut Map<String, Value>,
     root: &str,
     key: &str,
-) -> Result<(PageAttr, Vec<Value>), Error> {
-    let attr = page_attr(list, root)?;
-    let rows = promised_rows(list, &attr, &format!("{root}.{key}"), key)?;
-    Ok((attr, rows))
+    subject: Option<&str>,
+) -> Result<(Paging, Vec<Value>), Error> {
+    let paging = paging(list, root, subject)?;
+    let rows = promised_rows(list, &paging, &format!("{root}.{key}"), key)?;
+    Ok((paging, rows))
 }
 
-/// Whose list a page is: `list.@attr.<key>`, such as its `user` or its
-/// `tag`. Read it before [`page`] or [`page_attr`], which take `@attr` out.
+/// Who or what a list is about: `list.@attr.<key>`, such as its `user` or
+/// its `tag`.
 pub(super) fn owner(list: &Map<String, Value>, root: &str, key: &str) -> Result<String, Error> {
     let at = format!("{root}.@attr");
     match list.get("@attr") {
@@ -373,12 +99,27 @@ pub(super) fn owner(list: &Map<String, Value>, root: &str, key: &str) -> Result<
     }
 }
 
-/// The paging attributes of a list, at `list.@attr`.
-pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<PageAttr, Error> {
-    match list.remove("@attr") {
-        Some(Value::Object(attr)) => parse_attr(root, &attr),
-        _ => Err(missing_or(&format!("{root}.@attr"), "an object")),
-    }
+/// The paging attributes of a list, at `list.@attr`: the four numbers, which
+/// the service sends as strings and which are all required, and the subject
+/// where `subject` names its member.
+pub(super) fn paging(
+    list: &mut Map<String, Value>,
+    root: &str,
+    subject: Option<&str>,
+) -> Result<Paging, Error> {
+    let at = format!("{root}.@attr");
+    let Some(Value::Object(attr)) = list.remove("@attr") else {
+        return Err(missing_or(&at, "an object"));
+    };
+    Ok(Paging {
+        subject: subject
+            .map(|name| required_str(&attr, &at, name).map(str::to_owned))
+            .transpose()?,
+        number: required_u32(&attr, &at, "page")?,
+        per_page: required_u32(&attr, &at, "perPage")?,
+        total_pages: required_u32(&attr, &at, "totalPages")?,
+        total: required_uint(&attr, &at, "total")?,
+    })
 }
 
 /// The rows of a page, at `list.<key>`, where `path` names them for the
@@ -386,16 +127,17 @@ pub(super) fn page_attr(list: &mut Map<String, Value>, root: &str) -> Result<Pag
 ///
 /// The rows are an array, a single object when there is exactly one, and
 /// for an empty page absent, `[]` or `""`. Those three are accepted only
-/// when `attr` allows no rows: nothing matches (`total` is 0) or the page
-/// lies beyond the last one. Otherwise the rows are missing, not absent.
+/// when the paging attributes allow no rows: nothing matches (`total` is 0)
+/// or the page lies beyond the last one. Otherwise the rows are missing,
+/// not absent.
 pub(super) fn promised_rows(
     list: &mut Map<String, Value>,
-    attr: &PageAttr,
+    paging: &Paging,
     path: &str,
     key: &str,
 ) -> Result<Vec<Value>, Error> {
     let rows = rows(list, path, key)?;
-    if rows.is_empty() && attr.total != 0 && attr.page <= attr.total_pages {
+    if rows.is_empty() && paging.total != 0 && paging.number <= paging.total_pages {
         return Err(Error::decode_field(
             path,
             "absent or empty, but `@attr` says the page holds rows",
@@ -439,149 +181,6 @@ pub(super) fn each<T>(
         .collect()
 }
 
-fn parse_attr(root: &str, attr: &Map<String, Value>) -> Result<PageAttr, Error> {
-    let at = format!("{root}.@attr");
-    Ok(PageAttr {
-        page: required_uint(attr, &at, "page")?,
-        per_page: required_uint(attr, &at, "perPage")?,
-        total_pages: required_uint(attr, &at, "totalPages")?,
-        total: required_uint(attr, &at, "total")?,
-    })
-}
-
-/// The track a row is: its own `name`, `mbid` and `url`.
-pub(super) fn parse_track(row: &Map<String, Value>, at: &str) -> Result<Track, Error> {
-    Ok(Track {
-        name: required_str(row, at, "name")?.to_owned(),
-        mbid: optional_str(row, at, "mbid")?,
-        url: optional_str(row, at, "url")?,
-        images: parse_images(row, at)?,
-    })
-}
-
-/// The artist a row is: its own `name`, `mbid` and `url`.
-pub(super) fn parse_artist_row(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
-    Ok(Artist {
-        name: required_str(row, at, "name")?.to_owned(),
-        mbid: optional_str(row, at, "mbid")?,
-        url: optional_str(row, at, "url")?,
-        images: parse_images(row, at)?,
-    })
-}
-
-/// The album a row is: its own `name`, `mbid` and `url`.
-pub(super) fn parse_album_row(row: &Map<String, Value>, at: &str) -> Result<Album, Error> {
-    let name = required_str(row, at, "name")?;
-    Ok(Album {
-        title: (!name.is_empty()).then(|| name.to_owned()),
-        mbid: optional_str(row, at, "mbid")?,
-        url: optional_str(row, at, "url")?,
-        images: parse_images(row, at)?,
-    })
-}
-
-/// The artist a row names, under `artist`.
-pub(super) fn parse_artist(row: &Map<String, Value>, at: &str) -> Result<Artist, Error> {
-    let path = format!("{at}.artist");
-    let Some(Value::Object(artist)) = row.get("artist") else {
-        return Err(missing_or(&path, "an object"));
-    };
-    // `name` where the row gives the artist's details, `#text` where it
-    // gives a name and an id. Each one present must be a string, and two
-    // that are present must agree.
-    let name_in = |key: &str| match artist.get(key) {
-        None => Ok(None),
-        Some(Value::String(name)) => Ok(Some(name)),
-        Some(_) => Err(Error::decode_field(
-            &format!("{path}.{key}"),
-            "not a string",
-        )),
-    };
-    let name = match (name_in("name")?, name_in("#text")?) {
-        (Some(name), Some(text)) if name != text => {
-            return Err(Error::decode_field(
-                &path,
-                "`name` and `#text` are both present and disagree",
-            ));
-        }
-        (Some(name), _) | (None, Some(name)) => name.clone(),
-        (None, None) => {
-            return Err(Error::decode_field(
-                &format!("{path}.name"),
-                "neither `name` nor `#text` is present",
-            ));
-        }
-    };
-    Ok(Artist {
-        name,
-        mbid: optional_str(artist, &path, "mbid")?,
-        url: optional_str(artist, &path, "url")?,
-        images: parse_images(artist, &path)?,
-    })
-}
-
-/// The album a row names, under `album`. A row without one names an album
-/// with nothing in it.
-pub(super) fn parse_album(row: &Map<String, Value>, at: &str) -> Result<Album, Error> {
-    let path = format!("{at}.album");
-    match row.get("album") {
-        None => Ok(Album {
-            title: None,
-            mbid: None,
-            url: None,
-            images: Vec::new(),
-        }),
-        Some(Value::Object(album)) => Ok(Album {
-            title: optional_str(album, &path, "#text")?,
-            mbid: optional_str(album, &path, "mbid")?,
-            url: None,
-            images: parse_images(album, &path)?,
-        }),
-        Some(_) => Err(Error::decode_field(&path, "not an object")),
-    }
-}
-
-/// The image of whatever `map` is, under `image`: an array of sizes, a
-/// single one, or none when the member is absent or `""`, as the rows of a
-/// page are read.
-///
-/// An entry whose address is missing or empty is left out, as a missing or
-/// empty `mbid` reads as none: the service sends an empty address where it
-/// has no image. An address or a size of another type is an error.
-pub(super) fn parse_images(map: &Map<String, Value>, at: &str) -> Result<Vec<Image>, Error> {
-    let path = format!("{at}.image");
-    let entries = match map.get("image") {
-        None => return Ok(Vec::new()),
-        Some(Value::String(s)) if s.is_empty() => return Ok(Vec::new()),
-        Some(Value::Array(entries)) => entries.as_slice(),
-        Some(entry @ Value::Object(_)) => std::slice::from_ref(entry),
-        Some(_) => {
-            return Err(Error::decode_field(
-                &path,
-                "expected an array, an object or an empty string",
-            ));
-        }
-    };
-    let mut images = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        let at = format!("{path}[{index}]");
-        let Value::Object(entry) = entry else {
-            return Err(Error::decode_field(&at, "not an object"));
-        };
-        let size = optional_str(entry, &at, "size")?;
-        if let Some(url) = optional_str(entry, &at, "#text")? {
-            images.push(Image { size, url });
-        }
-    }
-    Ok(images)
-}
-
-/// The length of a track in seconds, under `duration`. Missing or 0 reads as
-/// `None`: 0 is what the service sends for a length it does not know.
-pub(super) fn duration(row: &Map<String, Value>, at: &str) -> Result<Option<u64>, Error> {
-    Ok(optional_uint(row, at, "duration")?.filter(|&seconds| seconds != 0))
-}
-
 pub(super) fn required_str<'a>(
     map: &'a Map<String, Value>,
     at: &str,
@@ -596,6 +195,12 @@ pub(super) fn required_uint(map: &Map<String, Value>, at: &str, key: &str) -> Re
     map.get(key)
         .and_then(de::uint)
         .ok_or_else(|| missing_or(&format!("{at}.{key}"), "an unsigned integer"))
+}
+
+/// A count that must fit 32 bits, as a page number and a page size do.
+pub(super) fn required_u32(map: &Map<String, Value>, at: &str, key: &str) -> Result<u32, Error> {
+    u32::try_from(required_uint(map, at, key)?)
+        .map_err(|_| Error::decode_field(&format!("{at}.{key}"), "too large"))
 }
 
 /// A string field that may be missing or empty, both reading as `None`. A
@@ -625,5 +230,55 @@ pub(super) fn optional_uint(
         Some(value) => de::uint(value)
             .map(Some)
             .ok_or_else(|| Error::decode_field(&format!("{at}.{key}"), "not an unsigned integer")),
+    }
+}
+
+/// The rows a reply nests one level down, at `<outer>.<key>` of `map`, as
+/// the tags, the tracks and the similar artists of a `getInfo` reply are.
+/// `outer` may be absent or `""`, which the service sends where there are
+/// none.
+pub(super) fn nested<T>(
+    map: &Map<String, Value>,
+    at: &str,
+    outer: &str,
+    key: &str,
+    parse: impl Fn(Map<String, Value>, &str) -> Result<T, Error>,
+) -> Result<Vec<T>, Error> {
+    let path = format!("{at}.{outer}");
+    match map.get(outer) {
+        None => Ok(Vec::new()),
+        Some(Value::String(s)) if s.is_empty() => Ok(Vec::new()),
+        Some(Value::Object(inner)) => {
+            let path = format!("{path}.{key}");
+            let rows = rows(&mut inner.clone(), &path, key)?;
+            each(rows, &path, parse)
+        }
+        Some(_) => Err(Error::decode_field(
+            &path,
+            "expected an object or an empty string",
+        )),
+    }
+}
+
+/// What the service's users wrote about an artist or an album, under `bio`
+/// or `wiki`: the start of it, all of it, and when it was last changed.
+/// Every part is `None` where the reply has no such text.
+#[derive(Clone, Default)]
+pub(super) struct Wiki {
+    pub(super) summary: Option<String>,
+    pub(super) content: Option<String>,
+    pub(super) published: Option<String>,
+}
+
+pub(super) fn wiki(map: &Map<String, Value>, at: &str, key: &str) -> Result<Wiki, Error> {
+    let path = format!("{at}.{key}");
+    match map.get(key) {
+        None => Ok(Wiki::default()),
+        Some(Value::Object(wiki)) => Ok(Wiki {
+            summary: optional_str(wiki, &path, "summary")?,
+            content: optional_str(wiki, &path, "content")?,
+            published: optional_str(wiki, &path, "published")?,
+        }),
+        Some(_) => Err(Error::decode_field(&path, "not an object")),
     }
 }

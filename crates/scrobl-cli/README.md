@@ -47,7 +47,7 @@ Each [release](https://github.com/kelchm/scrobl/releases) is also a `linux/amd64
 
 ```sh
 docker run --rm --read-only -e SCROBL_API_KEY -v scrobl:/data \
-  ghcr.io/kelchm/scrobl:0.1.1 sync --db /data/history.db --user rj
+  ghcr.io/kelchm/scrobl:0.2.0 sync --db /data/history.db --user rj
 ```
 
 The image runs as user and group 1000 and writes only under `/data`. Mount a volume there that this user can write to.

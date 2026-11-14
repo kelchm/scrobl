@@ -5,8 +5,9 @@
 //! responses it is given; the caller, or the async client, moves the bytes.
 
 use crate::error::Error;
-use crate::model::{NowPlaying, PageAttr, RecentTracksPage, Scrobble};
+use crate::model::{HistoryPage, decode};
 use crate::protocol::{MethodSpec, Raw, Request, methods};
+use crate::response::Response;
 
 /// The largest `limit` the documentation allows for `user.getRecentTracks`.
 const MAX_LIMIT: u32 = 200;
@@ -439,7 +440,7 @@ impl WindowScan {
     /// page does not decode. Either abandons the scan. Calling this with no
     /// request outstanding is also an error and leaves a finished scan as it
     /// was.
-    pub fn accept(&mut self, raw: Raw) -> Result<ScanPage, Error> {
+    pub fn accept(&mut self, raw: Raw) -> Result<Response<HistoryPage>, Error> {
         match self.state {
             State::Failed => return Err(abandoned()),
             State::Done => {
@@ -453,11 +454,7 @@ impl WindowScan {
         match self.validate(&raw) {
             Ok((page, progress)) => {
                 self.commit(&page, progress);
-                Ok(ScanPage {
-                    raw,
-                    number: progress.page,
-                    page,
-                })
+                Ok(Response::new(page, raw))
             }
             Err(error) => {
                 self.state = State::Failed;
@@ -502,38 +499,38 @@ impl WindowScan {
     }
 
     /// Checks `raw` against the rules without changing the scan.
-    fn validate(&self, raw: &Raw) -> Result<(RecentTracksPage, Progress), Error> {
+    fn validate(&self, raw: &Raw) -> Result<(HistoryPage, Progress), Error> {
         if raw.request() != &self.query.build() {
             return Err(Error::inconsistent(
                 "the response answers a different request",
             ));
         }
-        let page = RecentTracksPage::decode(raw)?;
-        let attr = page.attr();
+        let page = decode::user_get_recent_tracks(raw)?;
         let limit = u64::from(self.page_size());
         let number = self.next_page;
 
         // 1
-        if page.user().to_lowercase() != self.query.user.to_lowercase() {
+        let user = page.subject().unwrap_or_default();
+        if user.to_lowercase() != self.query.user.to_lowercase() {
             return Err(Error::inconsistent(
                 "rule 1: the page is for a different user",
             ));
         }
         // 2
-        if attr.page() != u64::from(number) {
+        if page.number() != number {
             return Err(Error::inconsistent(
                 "rule 2: `page` is not the requested page",
             ));
         }
-        if attr.per_page() != limit {
+        if u64::from(page.per_page()) != limit {
             return Err(Error::inconsistent(
                 "rule 2: `perPage` is not the requested limit",
             ));
         }
         // 3
         let totals = Totals {
-            total: attr.total(),
-            total_pages: attr.total_pages(),
+            total: page.total(),
+            total_pages: u64::from(page.total_pages()),
         };
         if self.totals.is_some_and(|first| first != totals) {
             return Err(Error::inconsistent(
@@ -551,8 +548,7 @@ impl WindowScan {
             ));
         }
         // A scan of an empty window is one page.
-        let last_page = u32::try_from(totals.total_pages.max(1))
-            .map_err(|_| Error::inconsistent("rule 3: `totalPages` is out of range"))?;
+        let last_page = page.total_pages().max(1);
 
         // 4
         let count = page.scrobbles().len() as u64;
@@ -601,9 +597,9 @@ impl WindowScan {
     }
 
     /// Records a page that passed.
-    fn commit(&mut self, page: &RecentTracksPage, progress: Progress) {
+    fn commit(&mut self, page: &HistoryPage, progress: Progress) {
         if self.echoed_user.is_none() {
-            self.echoed_user = Some(page.user().to_owned());
+            self.echoed_user = page.subject().map(str::to_owned);
         }
         self.totals = Some(progress.totals);
         self.last_timestamp = progress.last_timestamp;
@@ -630,57 +626,6 @@ struct Progress {
 
 fn abandoned() -> Error {
     Error::inconsistent("the scan was abandoned after an earlier failure")
-}
-
-/// A page that passed every rule of the scan.
-///
-/// `Debug` leaves out the response.
-#[derive(Clone)]
-pub struct ScanPage {
-    raw: Raw,
-    number: u32,
-    page: RecentTracksPage,
-}
-
-impl ScanPage {
-    /// The response exactly as received.
-    pub fn raw(&self) -> &Raw {
-        &self.raw
-    }
-
-    /// The page number, from 1.
-    pub fn number(&self) -> u32 {
-        self.number
-    }
-
-    /// The decoded page.
-    pub fn page(&self) -> &RecentTracksPage {
-        &self.page
-    }
-
-    /// The historical rows in response order, without the now-playing row.
-    pub fn scrobbles(&self) -> &[Scrobble] {
-        self.page.scrobbles()
-    }
-
-    /// The now-playing row, if the page had one.
-    pub fn now_playing(&self) -> Option<&NowPlaying> {
-        self.page.now_playing()
-    }
-
-    /// The paging attributes.
-    pub fn attr(&self) -> &PageAttr {
-        self.page.attr()
-    }
-}
-
-impl std::fmt::Debug for ScanPage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScanPage")
-            .field("number", &self.number)
-            .field("page", &self.page)
-            .finish()
-    }
 }
 
 /// What a completed scan read.

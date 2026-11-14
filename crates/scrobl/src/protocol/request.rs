@@ -69,6 +69,11 @@ impl Credentials {
         }
     }
 
+    #[cfg(feature = "client")]
+    pub(crate) fn api_key(&self) -> &ApiKey {
+        &self.api_key
+    }
+
     /// Credentials with an API key only, enough for plain reads.
     pub fn new(api_key: ApiKey) -> Self {
         Self {
@@ -219,6 +224,10 @@ impl Request {
             .iter()
             .find(|(set, _)| set == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    pub(crate) fn params(&self) -> &[(String, String)] {
+        &self.params
     }
 
     pub(crate) fn spec(&self) -> &'static MethodSpec {

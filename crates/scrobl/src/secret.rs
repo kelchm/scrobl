@@ -1,6 +1,6 @@
 //! Secrets that must not leak through logs, errors or serialization.
 //!
-//! The three types here wrap a string and nothing more. `Debug` prints a
+//! The types here wrap a string and nothing more. `Debug` prints a
 //! fixed redaction, there is no `Display`, no `Serialize` and no
 //! `PartialEq`, so a secret reaches the outside only through an explicit
 //! call to `expose`.
@@ -29,12 +29,6 @@ macro_rules! secret {
             pub fn expose(&self) -> &str {
                 &self.0
             }
-
-            /// Whether it is empty or only whitespace, without showing it.
-            #[cfg(feature = "client")]
-            pub(crate) fn is_blank(&self) -> bool {
-                self.0.trim().is_empty()
-            }
         }
 
         impl std::fmt::Debug for $name {
@@ -61,6 +55,32 @@ secret! {
     SessionKey
 }
 
+secret! {
+    /// A sign-in token, exchanged once for a [`SessionKey`].
+    AuthToken
+}
+
+secret! {
+    /// A user's Last.fm password.
+    Password
+}
+
+// Not for `Password`, which can be only spaces.
+#[cfg(feature = "client")]
+macro_rules! blank {
+    ($($name:ident),*) => {$(
+        impl $name {
+            /// Whether it is empty or only whitespace, without showing it.
+            pub(crate) fn is_blank(&self) -> bool {
+                self.0.trim().is_empty()
+            }
+        }
+    )*};
+}
+
+#[cfg(feature = "client")]
+blank!(ApiKey, ApiSecret, SessionKey, AuthToken);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +90,8 @@ mod tests {
         assert_eq!(ApiKey::new("k").expose(), "k");
         assert_eq!(ApiSecret::new(String::from("s")).expose(), "s");
         assert_eq!(SessionKey::new("sk").expose(), "sk");
+        assert_eq!(AuthToken::new("t").expose(), "t");
+        assert_eq!(Password::new("p").expose(), "p");
     }
 
     #[cfg(feature = "client")]
@@ -95,6 +117,14 @@ mod tests {
         assert_eq!(
             format!("{:#?}", SessionKey::new(SENTINEL)),
             "SessionKey(<redacted>)"
+        );
+        assert_eq!(
+            format!("{:?}", AuthToken::new(SENTINEL)),
+            "AuthToken(<redacted>)"
+        );
+        assert_eq!(
+            format!("{:?}", Password::new(SENTINEL)),
+            "Password(<redacted>)"
         );
         assert_eq!(
             format!("{:?}", Some(vec![ApiKey::new(SENTINEL)])),

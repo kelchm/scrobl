@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::Image;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Raw, Request, methods};
 
 // Fixtures. Provenance for each:
@@ -31,16 +33,16 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
     protocol::decode(&request, HttpResponse::new(200, body.into())).unwrap()
 }
 
-fn artists(body: &Value) -> Result<ChartArtistsPage, Error> {
-    ChartArtistsPage::decode(&raw(&methods::CHART_GET_TOP_ARTISTS, body.to_string()))
+fn artists(body: &Value) -> Result<Page<Artist>, Error> {
+    decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<ChartTracksPage, Error> {
-    ChartTracksPage::decode(&raw(&methods::CHART_GET_TOP_TRACKS, body.to_string()))
+fn tracks(body: &Value) -> Result<Page<Track>, Error> {
+    decode::chart_get_top_tracks(&raw(&methods::CHART_GET_TOP_TRACKS, body.to_string()))
 }
 
-fn tags(body: &Value) -> Result<ChartTagsPage, Error> {
-    ChartTagsPage::decode(&raw(&methods::CHART_GET_TOP_TAGS, body.to_string()))
+fn tags(body: &Value) -> Result<List<Tag>, Error> {
+    decode::chart_get_top_tags(&raw(&methods::CHART_GET_TOP_TAGS, body.to_string()))
 }
 
 /// A page of `total` rows in all, of which `rows` are on this one.
@@ -81,21 +83,21 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_recorded_chart_of_artists_decodes() {
-    let page = ChartArtistsPage::decode(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
-    let attr = page.attr();
+    let page =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 3334, 10_000)
     );
     let rows: Vec<_> = page
-        .artists()
+        .items()
         .iter()
-        .map(|a| (a.artist().name(), a.playcount(), a.listeners()))
+        .map(|a| (a.name(), a.playcount().unwrap(), a.listeners().unwrap()))
         .collect();
     assert_eq!(
         rows,
@@ -105,44 +107,39 @@ fn the_recorded_chart_of_artists_decodes() {
             ("Ariana Grande", 1_242_703_717, 4_752_771)
         ]
     );
-    let first = &page.artists()[0];
+    let first = &page.items()[0];
+    assert_eq!(first.mbid(), Some("6925db17-f35e-42f3-a4eb-84ee6bf5d4b0"));
     assert_eq!(
-        first.artist().mbid(),
-        Some("6925db17-f35e-42f3-a4eb-84ee6bf5d4b0")
-    );
-    assert_eq!(
-        first.artist().url(),
+        first.url(),
         Some("https://www.last.fm/music/Olivia+Rodrigo")
     );
-    assert_eq!(first.artist().images().len(), 5);
+    assert_eq!(first.images().len(), 5);
     // What the model does not name is still in the row.
     assert_eq!(first.json()["streamable"], "0");
 }
 
 #[test]
 fn the_recorded_page_beyond_the_last_is_empty() {
-    let page = ChartArtistsPage::decode(&raw(&methods::CHART_GET_TOP_ARTISTS, BEYOND)).unwrap();
-    assert!(page.artists().is_empty());
-    assert_eq!(
-        (page.attr().page(), page.attr().total_pages()),
-        (999_999, 200)
-    );
+    let page =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, BEYOND)).unwrap();
+    assert!(page.items().is_empty());
+    assert_eq!((page.number(), page.total_pages()), (999_999, 200));
 }
 
 #[test]
 fn the_recorded_chart_of_tracks_decodes() {
-    let page = ChartTracksPage::decode(&raw(&methods::CHART_GET_TOP_TRACKS, TRACKS)).unwrap();
-    assert_eq!(page.attr().total(), 10_000);
+    let page = decode::chart_get_top_tracks(&raw(&methods::CHART_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!(page.total(), 10_000);
     let rows: Vec<_> = page
-        .tracks()
+        .items()
         .iter()
         .map(|t| {
             (
-                t.track().name(),
+                t.name(),
                 t.artist().name(),
-                t.duration(),
-                t.playcount(),
-                t.listeners(),
+                t.duration().map(|length| length.as_secs()),
+                t.playcount().unwrap(),
+                t.listeners().unwrap(),
             )
         })
         .collect();
@@ -154,30 +151,26 @@ fn the_recorded_chart_of_tracks_decodes() {
             ("the cure", "Olivia Rodrigo", Some(296), 16_463_151, 920_111)
         ]
     );
-    let first = &page.tracks()[0];
-    assert_eq!(
-        first.track().mbid(),
-        Some("7c959127-f934-4ea8-ae27-99b2533cbf9e")
-    );
+    let first = &page.items()[0];
+    assert_eq!(first.mbid(), Some("7c959127-f934-4ea8-ae27-99b2533cbf9e"));
     assert_eq!(
         first.artist().url(),
         Some("https://www.last.fm/music/AD%C3%89LA")
     );
-    assert_eq!(first.track().images().len(), 4);
+    assert_eq!(first.images().len(), 4);
     assert_eq!(first.json()["streamable"]["fulltrack"], "0");
 }
 
 #[test]
 fn the_recorded_chart_of_tags_decodes() {
-    let page = ChartTagsPage::decode(&raw(&methods::CHART_GET_TOP_TAGS, TAGS)).unwrap();
-    assert_eq!(
-        (page.attr().per_page(), page.attr().total()),
-        (3, 2_896_879)
-    );
+    let page = decode::chart_get_top_tags(&raw(&methods::CHART_GET_TOP_TAGS, TAGS)).unwrap();
+    // The reply has paging attributes, and the list does not read them.
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.subject(), None);
     let rows: Vec<_> = page
-        .tags()
+        .items()
         .iter()
-        .map(|t| (t.name(), t.reach(), t.taggings()))
+        .map(|t| (t.name(), t.reach().unwrap(), t.taggings().unwrap()))
         .collect();
     assert_eq!(
         rows,
@@ -188,24 +181,34 @@ fn the_recorded_chart_of_tags_decodes() {
         ]
     );
     assert_eq!(
-        page.tags()[2].url(),
+        page.items()[2].url(),
         Some("https://www.last.fm/tag/seen+live")
     );
-    assert_eq!(page.tags()[0].json()["streamable"], "1");
+    assert_eq!(page.items()[0].json()["streamable"], "1");
 }
 
 #[test]
 fn a_page_may_be_one_object_or_empty() {
     let one = artists(&paged("artists", "artist", artist_row("Only"), 1)).unwrap();
-    assert_eq!(one.artists().len(), 1);
-    assert_eq!(one.artists()[0].artist().name(), "Only");
+    assert_eq!(one.items().len(), 1);
+    assert_eq!(one.items()[0].name(), "Only");
 
     for empty in [json!([]), json!("")] {
         let page = tracks(&paged("tracks", "track", empty, 0)).unwrap();
-        assert!(page.tracks().is_empty());
+        assert!(page.items().is_empty());
     }
     // Rows that `@attr` promises and the page lacks are an error.
-    names(tags(&paged("tags", "tag", json!([]), 5)), "tags.tag");
+    names(
+        tracks(&paged("tracks", "track", json!([]), 5)),
+        "tracks.track",
+    );
+    // The list of tags is not held to its paging attributes, which the
+    // service does not keep to.
+    assert!(
+        tags(&paged("tags", "tag", json!([]), 5))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -213,7 +216,7 @@ fn what_a_row_may_leave_out_reads_as_none() {
     let mut artist = artist_row("A");
     artist.as_object_mut().unwrap().remove("mbid");
     let page = artists(&paged("artists", "artist", json!([artist]), 1)).unwrap();
-    assert_eq!(page.artists()[0].artist().mbid(), None);
+    assert_eq!(page.items()[0].mbid(), None);
 
     for duration in [Some(json!("0")), Some(json!(0)), None] {
         let mut track = track_row("T");
@@ -224,13 +227,13 @@ fn what_a_row_may_leave_out_reads_as_none() {
             }
         }
         let page = tracks(&paged("tracks", "track", json!([track]), 1)).unwrap();
-        assert_eq!(page.tracks()[0].duration(), None);
+        assert_eq!(page.items()[0].duration(), None);
     }
 
     let mut tag = tag_row("t");
     tag["url"] = json!("");
     let page = tags(&paged("tags", "tag", json!([tag]), 1)).unwrap();
-    assert_eq!(page.tags()[0].url(), None);
+    assert_eq!(page.items()[0].url(), None);
 }
 
 #[test]
@@ -289,7 +292,7 @@ fn a_malformed_page_names_the_field() {
 #[test]
 fn a_response_to_another_method_is_refused() {
     let raw = raw(&methods::CHART_GET_TOP_TRACKS, TRACKS);
-    let error = ChartArtistsPage::decode(&raw).unwrap_err();
+    let error = decode::chart_get_top_artists(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert_eq!(error.method(), Some("chart.getTopTracks"));
 }
@@ -301,10 +304,68 @@ fn debug_leaves_out_the_text_of_the_response() {
     let tags = tags(&paged("tags", "tag", json!([tag_row(SECRET)]), 1)).unwrap();
     let shown = format!(
         "{artists:?} {:?} {tracks:?} {:?} {tags:?} {:?}",
-        artists.artists()[0],
-        tracks.tracks()[0],
-        tags.tags()[0]
+        artists.items()[0],
+        tracks.items()[0],
+        tags.items()[0]
     );
     assert!(!shown.contains(SECRET), "{shown}");
-    assert!(shown.contains("ChartArtistsPage"), "{shown}");
+    assert!(shown.contains("Page {"), "{shown}");
+}
+
+#[test]
+fn the_things_on_a_chart_say_the_counts_for_everyone_and_keep_their_json() {
+    let artists =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let artist: &Artist = artists[0].as_ref();
+    assert_eq!(
+        (artist.listeners(), artist.playcount()),
+        (Some(3_431_916), Some(722_263_496))
+    );
+    assert_eq!(artist.json()["name"], "Olivia Rodrigo");
+
+    let tracks =
+        decode::chart_get_top_tracks(&raw(&methods::CHART_GET_TOP_TRACKS, TRACKS)).unwrap();
+    let track: &Track = tracks[0].as_ref();
+    assert_eq!(track.listeners(), Some(313_352));
+    assert_eq!(track.duration(), Some(std::time::Duration::from_secs(219)));
+    // The artist a track names has no counts of its own in this reply, and
+    // the track names no album.
+    assert_eq!(
+        (track.artist().listeners(), track.artist().playcount()),
+        (None, None)
+    );
+    assert_eq!(track.artist().json()["name"], "ADÉLA");
+    assert!(track.album().is_none());
+
+    let tags = decode::chart_get_top_tags(&raw(&methods::CHART_GET_TOP_TAGS, TAGS)).unwrap();
+    let tag: &Tag = tags[0].as_ref();
+    assert_eq!(
+        (tag.taggings(), tag.reach()),
+        (Some(4_077_917), Some(403_467))
+    );
+    assert_eq!(tag.json()["taggings"], "4077917");
+}
+
+#[test]
+fn an_image_is_asked_for_by_size_or_by_its_place() {
+    let page =
+        decode::chart_get_top_artists(&raw(&methods::CHART_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    let images = page[0].images();
+    assert_eq!(images.len(), 5);
+    assert_eq!(images.smallest().and_then(Image::size), Some("small"));
+    assert_eq!(images.largest().and_then(Image::size), Some("mega"));
+    assert_eq!(
+        images.get("large").map(Image::url),
+        Some("https://lastfm-img.freetls.fastly.net/i/u/174s/2a96cbd8b46e442fc41c2b86b821562f.png")
+    );
+    assert!(images.get("huge").is_none());
+    let sizes: Vec<_> = images.into_iter().filter_map(Image::size).collect();
+    assert_eq!(sizes, ["small", "medium", "large", "extralarge", "mega"]);
+
+    // An artist without an image has none to give.
+    let bare = artists(&paged("artists", "artist", json!([artist_row("A")]), 1)).unwrap();
+    assert!(bare[0].images().is_empty());
+    assert!(bare[0].images().largest().is_none());
+    assert!(bare[0].images().smallest().is_none());
+    assert!(format!("{:?}", bare[0].images()).contains("Images(0)"));
 }

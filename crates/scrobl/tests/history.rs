@@ -23,10 +23,10 @@ mod support;
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;
-use scrobl::history::{RecentTracks, ScanPage, ScanSummary, Window, WindowScan};
-use scrobl::model::RecentTracksPage;
+use scrobl::history::{RecentTracks, ScanSummary, Window, WindowScan};
+use scrobl::model::{HistoryPage, decode};
 use scrobl::protocol::{self, Credentials, HttpRequest, HttpResponse, Raw, Request};
-use scrobl::{ApiErrorCode, ApiKey, Error, ErrorKind};
+use scrobl::{ApiErrorCode, ApiKey, Error, ErrorKind, Response};
 use serde_json::{Value, json};
 use support::*;
 
@@ -50,7 +50,7 @@ fn fetch(dataset: &Dataset, request: &Request) -> (HttpRequest, Result<Raw, Erro
 
 struct Driven {
     requests: Vec<HttpRequest>,
-    pages: Vec<ScanPage>,
+    pages: Vec<Response<HistoryPage>>,
     /// The first error, from the transport layer or from the scan.
     error: Option<Error>,
     scan: WindowScan,
@@ -114,7 +114,7 @@ fn scan_of(window: Window, page_size: u32, extended: bool) -> WindowScan {
 
 struct Completed {
     requests: Vec<HttpRequest>,
-    pages: Vec<ScanPage>,
+    pages: Vec<Response<HistoryPage>>,
     summary: ScanSummary,
 }
 
@@ -453,8 +453,11 @@ fn gate4_identical_rows_in_one_second_are_all_kept() {
     for row in &rows {
         assert_eq!(row.timestamp(), first.timestamp());
         assert_eq!(row.track().name(), first.track().name());
-        assert_eq!(row.artist().name(), first.artist().name());
-        assert_eq!(row.album().title(), first.album().title());
+        assert_eq!(row.track().artist().name(), first.track().artist().name());
+        assert_eq!(
+            row.track().album().map(|album| album.name()),
+            first.track().album().map(|album| album.name())
+        );
     }
     let unique: BTreeSet<_> = done.markers().into_iter().collect();
     assert_eq!(unique.len(), 401);
@@ -1208,7 +1211,7 @@ fn hand_page(
 }
 
 #[track_caller]
-fn assert_rule(result: Result<ScanPage, Error>, rule: &str) {
+fn assert_rule(result: Result<Response<HistoryPage>, Error>, rule: &str) {
     let error = result.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Inconsistent, "{error:?}");
     assert!(
@@ -1285,12 +1288,20 @@ fn rule3_an_empty_window_may_report_zero_or_one_page() {
 
 #[test]
 fn rule3_an_absurd_page_count_is_rejected_rather_than_followed() {
+    // A count of pages that no page number could reach does not decode, so
+    // the scan never gets as far as holding it to the totals.
     let mut scan = scan_for("rj", Window::ALL, 200);
     let total = 200 * 5_000_000_000_u64;
-    assert_rule(
-        scan.accept(hand_page(&scan, "rj", 1, 200, 5_000_000_000, total, &[5])),
-        "rule 3",
+    let error = scan
+        .accept(hand_page(&scan, "rj", 1, 200, 5_000_000_000, total, &[5]))
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert!(
+        error.to_string().contains("recenttracks.@attr.totalPages"),
+        "{error}"
     );
+    assert!(scan.next_request().is_none());
+    assert_eq!(scan.finish().unwrap_err().kind(), ErrorKind::Inconsistent);
 }
 
 #[test]
@@ -1557,9 +1568,9 @@ fn gate10_a_failed_attempt_can_be_retried_without_losing_the_scan() {
 fn gate11_scan_types_are_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<WindowScan>();
-    assert_send_sync::<ScanPage>();
+    assert_send_sync::<Response<HistoryPage>>();
     assert_send_sync::<ScanSummary>();
-    assert_send_sync::<RecentTracksPage>();
+    assert_send_sync::<HistoryPage>();
     assert_send_sync::<RecentTracks>();
     assert_send_sync::<Window>();
     assert_send_sync::<Error>();
@@ -1575,8 +1586,6 @@ fn the_exact_response_is_kept_with_each_page() {
     for (page, request) in done.pages.iter().zip(&done.requests) {
         assert_eq!(page.raw().body(), &respond(&dataset, request).1[..]);
         assert_eq!(page.raw().method(), "user.getRecentTracks");
-        assert_eq!(page.attr().page(), u64::from(page.number()));
-        assert_eq!(page.page().scrobbles().len(), page.scrobbles().len());
     }
 }
 
@@ -1991,8 +2000,8 @@ fn recent_tracks_response_decodes_through_the_public_model() {
         .request()
         .unwrap();
     let raw = fetch(&dataset, &probe).1.unwrap();
-    let page = RecentTracksPage::decode(&raw).unwrap();
-    assert_eq!(page.attr().total(), 90);
-    assert_eq!(page.attr().per_page(), 1);
+    let page = decode::user_get_recent_tracks(&raw).unwrap();
+    assert_eq!(page.total(), 90);
+    assert_eq!(page.per_page(), 1);
     assert_eq!(page.scrobbles().len(), 1);
 }

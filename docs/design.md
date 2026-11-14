@@ -115,21 +115,28 @@ The promise covers requests as `prepare` built them and as the client sent them.
 
 ### Typed views
 
-Typed models are decoded from `Raw` on request. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable:
+Typed models are decoded from `Raw` on request, by one function for each method in `scrobl::model::decode`. Fields are private with accessors. Each item keeps its own decoded JSON, so unknown fields and the difference between a missing and an empty field stay reachable. The one exception is a week in a list of weeks, which is a plain `Window`; the response it came from has the rest.
+
+A list is one of two types. `Page<T>` is one page of a list the service pages: its rows, its place (`number()`, `per_page()`, `total_pages()`, `total()`, `next_page()`), who or what it is about (`subject()`), and `ranked()`, which gives each row its place in the whole list. `List<T>` is a list the service sends whole. A page of the history is a `HistoryPage`: the scrobbles, the track playing now, and the same place accessors.
+
+Five things have one type each wherever a reply names them: `Artist`, `Album`, `Track`, `Tag` and `User`. Each carries what identifies it: a `name` always, and an `mbid`, a `url` and `images` where the service has such a thing for it (a tag has no id and no image, a user no id). An artist, an album, a track and a tag also carry what is true of them everywhere (a track's `artist`, `album` and `duration`) and the service's counts for everyone (`listeners`, `playcount`, a tag's `taggings` and `reach`) where a reply has them. A `User`'s counts are that user's own. A count a reply does not send is `None`.
+
+A number that is true only inside one list is on a row of that list, which wraps the thing: `UserArtist`, `UserAlbum`, `UserTrack` and `UserTag` hold a user's own play or use count, `CountryArtist` and `CountryTrack` the listeners in one country, `LovedTrack` when a track was loved, `SimilarArtist` and `SimilarTrack` how alike the service finds two artists or two tracks, and `TopTag` how much a tag is given to one thing compared with its others. So the chart of the service is a `Page<Artist>`, and a user's top artists a `Page<UserArtist>`: the two play counts mean different things and cannot be mistaken for each other. A span of time is a `Window` wherever one appears: the weeks the service keeps charts for are a `List<Window>`, and what a user played in a window is a `List` of the same rows as their other top lists. The rank the service sends with a row is not read. On some methods it starts again on every page, and `ranked()` is right on all of them.
 
 ```rust
-let page = RecentTracksPage::decode(&raw)?;
+let page = decode::user_get_recent_tracks(&raw)?;   // a HistoryPage
 for scrobble in page.scrobbles() {
     scrobble.timestamp();        // seconds since the epoch, always present for a scrobble
     scrobble.track().name();
-    scrobble.artist().mbid();    // None when missing or empty
+    scrobble.track().artist().mbid();   // None when missing or empty
+    scrobble.track().album();    // None for a scrobble without an album
     scrobble.loved();            // None unless the page was requested with extended=1
-    scrobble.track().images();   // &[Image]: one address for each size, in the service's order
+    scrobble.track().images().largest();   // the largest size the row has an address for, or None
     scrobble.json();             // &serde_json::Value, the row exactly as decoded
 }
 page.now_playing();              // Option<&NowPlaying>, never mixed into scrobbles()
-page.user();                     // whose page it is, as the service spells the name
-page.attr();                     // page, per_page, total_pages, total
+page.subject();                  // whose page it is, as the service spells the name
+page.number();                   // also per_page(), total_pages(), total(), next_page()
 ```
 
 Decoding rules for every model:
@@ -160,7 +167,7 @@ let mut scan = RecentTracks::new(user)
     .scan()?;                          // validates; the scan cannot be changed afterwards
 while let Some(request) = scan.next_request() {
     let raw = /* execute */;
-    let page = scan.accept(raw)?;      // validates, then yields the page
+    let page = scan.accept(raw)?;      // validates, then yields a Response<HistoryPage>
 }
 let summary = scan.finish()?;          // total scrobbles, pages, the window
 ```
@@ -224,10 +231,10 @@ impl Client {
     pub fn builder(api_key: ApiKey) -> ClientBuilder;
     pub fn with_session(&self, session: SessionKey) -> Client;   // shares the pool and the pacing clock
     pub async fn call(&self, request: &Request) -> Result<Raw, Error>;   // any method that is not a write
-    pub fn user(&self, name: impl Into<String>) -> User;
-    pub fn chart(&self) -> Chart;                           // the whole service: top_artists, top_tracks, top_tags, all_tags
-    pub fn geo(&self, country: impl Into<String>) -> Geo;   // one country: top_artists, top_tracks
-    pub fn tag(&self, name: impl Into<String>) -> Tag;      // one tag: info, similar, top_albums, top_artists, top_tracks, weekly_chart_list
+    pub fn user(&self, name: impl Into<String>) -> UserHandle;
+    pub fn tag(&self, name: impl Into<String>) -> TagHandle;
+    pub fn country(&self, name: impl Into<String>) -> CountryHandle;
+    pub fn charts(&self) -> ChartsHandle;
 }
 
 impl Writer {   // Clone, Deref<Target = Client>
@@ -249,42 +256,70 @@ impl ClientBuilder {   // each setting has a default; build() fails with ErrorKi
     pub fn build_writer(self) -> Result<Writer, Error>;   // may also change the account
 }
 
-impl User {
-    pub fn recent_tracks(&self) -> RecentTracksQuery;     // the history: one page, or a checked scan
-    pub fn loved_tracks(&self) -> LovedTracksQuery;       // one page, newest first; limit 1 to 1000
-    pub fn info(&self) -> UserInfoQuery;
-    pub fn friends(&self) -> FriendsQuery;
-    pub fn top_artists(&self) -> TopArtistsQuery;         // also top_albums, top_tracks, top_tags
-    pub fn weekly_chart_list(&self) -> WeeklyChartListQuery;
-    pub fn weekly_artist_chart(&self) -> WeeklyArtistChartQuery;   // also weekly_album_chart, weekly_track_chart
-    pub fn tagged_artists(&self, tag: impl Into<String>) -> TaggedArtistsQuery;   // also tagged_albums, tagged_tracks
-    pub fn library_artists(&self) -> LibraryArtistsQuery;
-}
-impl TopArtistsQuery {   // the shape of a list query
-    pub fn period(self, Period) -> Self;   // the top lists of artists, albums and tracks
-    pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;   // where the method pages
-    pub async fn send(self) -> Result<Response<TopArtistsPage>, Error>;   // one page
-}
-impl RecentTracksQuery {
-    pub fn window(self, Window) -> Self;  pub fn limit(self, u32) -> Self;  pub fn page(self, u32) -> Self;
-    pub fn extended(self, bool) -> Self;  pub fn as_user(self) -> Self;
-    pub async fn send(self) -> Result<Response<RecentTracksPage>, Error>;   // one page
-    pub fn scan(self) -> Result<Scan, Error>;   // the window and limit come from the query
-}
-impl Scan {
-    pub fn window(&self) -> Window;  pub fn page_size(&self) -> u32;
-    pub async fn next_page(&mut self) -> Result<Option<ScanPage>, Error>;
-    pub fn finish(self) -> Result<ScanSummary, Error>;
-}
-
 pub struct Response<T>;   // Deref<Target = T>; .raw() -> &Raw; .value() -> &T; .into_value() -> T; .into_parts() -> (T, Raw)
 ```
 
-**List queries.** `limit` and `page` exist where the method pages. A weekly chart takes only `range(from, to)`, and the profile and the list of weekly charts take nothing. A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) check an upper bound on `limit` in the client. For the others the service refuses a `limit` over its own maximum, which differs by method ([Coverage](#coverage) has what was seen).
-
 **`Response<T>`** is how every typed call returns its result: the typed value next to the exact `Raw`, so the bytes can be archived and a field the model lacks stays reachable. `value` and `into_value` reach the typed value without `Deref`, for a method of `T` that a method of `Response` would shadow. `Debug` of `Response`, `Raw` and `HttpResponse` shows header names and never header values, which are text the network chose; `header()` still returns them.
 
-**`scan`** mirrors `RecentTracks::scan`. The query's window (`Window::ALL` when unset), `limit` as the constant page size (200 when unset), `extended` and `as_user` become the scan, and it cannot be changed afterwards. A `page` on the query, or a `limit` outside 1 to 200, is an `InvalidRequest` from `scan` itself, before anything is sent.
+#### Typed calls
+
+A typed call is three steps: who or what, which question, and how to run it.
+
+```rust
+let page = client.user("rj").top_artists().period(Period::SevenDays).limit(10).send().await?;
+```
+
+1. **Who or what** is a handle: `client.user(name)`, `client.tag(name)`, `client.country(name)`, `client.charts()`. A handle is a cheap value that holds a clone of the client. It sends nothing.
+2. **Which question** is a method of the handle. It returns a query, a value with a setter for each option the Last.fm method takes (`limit`, `page`, `period`, `lang`, and for the history `window`, `extended` and `as_user`).
+3. **How to run it** is one of three endings.
+
+| Ending | Gives | On |
+|---|---|---|
+| `.send().await?` | `Response<T>`: one answer | every call |
+| `.all()` | `Rows<T>`: every row, page after page | every call that gives a `Page` |
+| `.scan()?` | `Scan`: every scrobble of a window, checked | `user.recent_tracks()` only |
+
+The calls so far. There are 46 for the forty-four typed methods, which are every method that reads, because `user.getPersonalTags` is three calls: `tagged_artists`, `tagged_albums` and `tagged_tracks`.
+
+| Handle | Calls |
+|---|---|
+| `client.user(name)` | `info`, `friends`, `recent_tracks`, `loved_tracks`, `top_artists`, `top_albums`, `top_tracks`, `top_tags`, `weeks`, `top_artists_in(window)`, `top_albums_in(window)`, `top_tracks_in(window)`, `tagged_artists(tag)`, `tagged_albums(tag)`, `tagged_tracks(tag)`, `library_artists` |
+| `client.tag(name)` | `info`, `similar`, `top_artists`, `top_albums`, `top_tracks`, `weeks` |
+| `client.country(name)` | `top_artists`, `top_tracks` |
+| `client.charts()` | `top_artists`, `top_tracks`, `top_tags`, `tags` |
+| `client.artist(name)`, `client.artist_mbid(id)` | `info`, `correction`, `similar`, `top_albums`, `top_tracks`, `top_tags`, `tags_of(user)` |
+| `client.album(artist, title)`, `client.album_mbid(id)` | `info`, `top_tags`, `tags_of(user)` |
+| `client.track(artist, title)`, `client.track_mbid(id)` | `info`, `correction`, `similar`, `top_tags`, `tags_of(user)` |
+| `client.search()` | `artists(query)`, `albums(query)`, `tracks(query)` |
+| `client.auth()` | `token`, `session(token)`, `mobile_session(username, password)`, and the addresses `approval_url(token)` and `web_approval_url(callback)` |
+
+On a `Writer` only: `scrobble(&plays)`, 1 to 50 `Play`s, and `now_playing(artist, track)`. And `love` and `unlove(artist, track)`, `tag_artist`, `tag_album` and `tag_track` with up to ten tags, and `untag_artist`, `untag_album` and `untag_track` with one. A tag with a comma is refused, since the service takes tags as one comma-separated list. These eight answer with nothing, so they return `Response<()>`.
+
+Signing in has three rules of its own:
+
+- **Not approved yet is an answer.** `auth.session(token).send()` gives `Ok(None)` while the user has not approved the token, which the service says with error 14. The token is not spent, so the same call is made again.
+- **A token and a password are secrets.** `AuthToken` and `Password` are redacted like `ApiKey`, and `Session::key()` is a `SessionKey`. A `Session` keeps no JSON, because its JSON holds the key in plain text; the exact reply is on the `Response`.
+- **The library makes no browser or callback.** It builds the two addresses and makes the exchanges. Opening the address, receiving the web callback and storing the key are the application's.
+
+Rules:
+
+- **A call is named for what it asks, not for the Last.fm method.** `user.getWeeklyChartList` is `weeks()`, `user.getWeeklyArtistChart` is `top_artists_in(window)`, the `geo` package is `country`, and `tag.getTopTags`, which is about no one tag, is `charts().tags()`. Every call carries its Last.fm method as a rustdoc alias, so searching the documentation for `user.getWeeklyChartList` finds `weeks()`.
+- **A handle is named `UserHandle`, not `User`,** because the model has a `User`. A query is named after its handle and its call: `UserTopArtistsQuery`, `TagInfoQuery`. All but two are written by one macro around one request builder, so a new method is a few lines.
+- **An artist, an album or a track is named once, on the handle.** `client.artist(name)` or `client.artist_mbid(id)`, and `.autocorrect()` on the handle lets the service correct a misspelt name on every call made through it. A list then says what name it was read as, in `subject()`.
+- **`limit` means rows in one request.** On a `Page` that is the page size. On a `List`, where one request is the whole list, it is how long the list is.
+- **What the client refuses itself.** A `limit` or `page` of 0 is an `InvalidRequest` before anything is sent, naming the parameter. Only the history (200) and the loved tracks (1000) check an upper bound on `limit`. For the others the service refuses a `limit` over its own maximum, which differs by method ([Coverage](#coverage) has what was seen).
+- **A window for `top_*_in` needs both its ends.** With one end or none the service charts a span of its own choosing, so the client refuses to send. It takes any window, not only one of the listed weeks.
+
+**`Rows<T>`** is what `.all()` gives: `next().await?` hands out one row at a time and asks for the next page only when the last has run out.
+
+- It starts at the `page` that was set, or the first, and uses `limit` as the size of every page.
+- Each request is paced and retried like any read. An error leaves it where it was, so calling `next()` again asks for the same page.
+- It checks nothing across pages. If the list changes while it is read, a row can come twice or be missed. Only the scan of a history checks, which is why `recent_tracks()` has `scan()` and no `all()`.
+- A search has more matches than the service will page through: it gives out 1000 pages of tracks and 10000 of artists or albums. `all()` on a larger search ends with the service's error for the page after, once the rows before it have been given out. A larger `limit` reaches further.
+- It counts pages from the one it asked for, not from the number in the reply: some methods answer a page past the end with the first page again, and following that would never end.
+- It is not a `Stream`, so that the library needs no crate for the trait.
+
+**`scan`** mirrors `RecentTracks::scan`. The query's window (`Window::ALL` when unset), `limit` as the constant page size (200 when unset), `extended` and `as_user` become the scan, and it cannot be changed afterwards. A `page` on the query, or a `limit` outside 1 to 200, is an `InvalidRequest` from `scan` itself, before anything is sent. `Scan::next_page` gives a `Response<HistoryPage>`, as `send` does.
 
 #### Fixed behaviour
 
@@ -429,7 +464,7 @@ let total = client.user("rj").recent_tracks()
     .window(Window::new(from, to)?)
     .limit(1)
     .send().await?
-    .attr().total();
+    .total();
 
 match error.api_code() {
     Some(ApiErrorCode::LOGIN_REQUIRED) => { /* access or privacy change, not empty */ }
@@ -451,26 +486,32 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 
 `Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both. Managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`. Secrets never cross IPC because the library's types do not serialize them.
 
-Authentication and writes (not built; shape only):
+Signing in and scrobbling:
 
 ```rust
 // Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
-let token = client.auth().token().await?;
-open_browser(token.authorization_url());
-let session = client.auth().session(&token).await?;   // Err(code 14) until the user approves
+let auth = client.auth();
+let token = auth.token().send().await?.into_value();
+open_browser(&auth.approval_url(&token));
+let session = loop {
+    match auth.session(&token).send().await? {
+        Some(session) => break session.into_value(),   // approved
+        None => wait_a_moment().await,                 // not yet: an ordinary answer, not an error
+    }
+};
 
-let user = writer.with_session(session.key().clone());   // a Writer; typed writes exist only on it
-let report = user.scrobble(&batch).await;             // at most 50 per call
-match report {
-    Ok(report) => for (sent, outcome) in report.items() {
-        // outcome: Accepted { corrections } | Ignored { code, message }
+let writer = writer.with_session(session.into_key());   // typed writes exist only on a Writer
+let play = Play::new("Cher", "Believe", started_at).album("Believe");
+match writer.scrobble(&[play]).send().await {              // at most 50 per call
+    Ok(report) => for outcome in report.outcomes() {
+        // one for each play, in Last.fm's order: what it corrected, or why it ignored the play
     },
     Err(e) if e.delivery() == Some(Delivery::Unknown) => { /* persist as uncertain */ }
     Err(e) => { /* e.retry() says whether to keep it queued */ }
 }
 ```
 
-A scrobble reply is checked against the request: one outcome per item, `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
+A scrobble reply is checked against the request: one outcome per play, and `accepted` and `ignored` agreeing with the outcomes. Outcomes come in the service's order, which on 2026-11-14 put accepted plays first. The reply ties an outcome to a play only by timestamp and names, so matching them is left to the caller, who knows its plays. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it. Ignore codes are kept as sent: the service gives 1 for plays it documents as 3, and the meanings are not to be relied on. Last.fm lowered its undisclosed daily limit in June 2026, and the limit can arrive as error 29 rather than code 5.
 
 ## Command-line tool
 
@@ -516,7 +557,7 @@ That one rule is the first import, the daily run and the repair of old history:
 **The newest history is always read.** Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline.
 
 - Every sync reads, whatever the counts say, from fourteen days before the newest scrobble the file holds up to the present. It reads that first, so that the newest history is in the file whatever becomes of the rest.
-- Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
+- Fourteen days because several clients report, and a moderator on Last.fm's forum confirmed (https://support.last.fm/t/6754), that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
 - A file that holds no scrobble yet, or one dated after the present, is read from fourteen days before the present instead. A scrobble that arrived in a longer gap than that is found by its count, like a change to older history.
 - The cost is that the fortnight before the newest scrobble is read by every sync, also when nothing has been played for months.
 - `--full` reads every span that way.
@@ -543,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Twenty-six have one so far: the thirteen reads of the `user` package, `library.getArtists`, the three charts of the service, the two of a country and the seven reads of the `tag` package. All twenty-six have been read from the live service through the client. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. All fifty-seven have one: the eight that love, unlove and tag, the two that scrobble, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so have the desktop sign-in, `auth.getToken` and `auth.getSession`, and both that scrobble. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight that love, unlove and tag stay `typed-derived` until a test account runs them (#95). One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -559,12 +600,15 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the twenty-six is tested against a response the owner recorded, from their own account or from the service's public charts, with five exceptions:
+Each of the forty-four reads is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
 - `user.getWeeklyChartList` and `tag.getWeeklyChartList`: each fixture is four weeks of the 1134 recorded.
-- `tag.getInfo`: a tag's description is text that users of the service wrote, so the fixture follows a recording with that text invented.
+- `tag.getInfo`, `artist.getInfo`, `album.getInfo` and `track.getInfo`: a description is text that users of the service wrote, so each fixture follows a recording with that text invented. A small album and a track nobody has described are recorded as they came.
+- `artist.getTags` and `album.getTags`: the owner has tagged neither, so the recorded replies are empty and a reply with rows is made from the shape of another user's.
+
+The three that sign a user in are tested against the samples of their official pages, which show XML, in the JSON shape of other replies. A recorded reply would hold a live token or session key.
 
 ### What the live passes showed
 
@@ -585,7 +629,7 @@ The four top lists and `library.getArtists`, on 2026-11-10, read through the cli
 - A page far beyond the last is HTTP 200 with an empty array and the true `total` and `totalPages`, not an error.
 - `@attr.rank` counts through the whole list: page 2 at `limit=5` holds ranks 6 to 10.
 - `user.getTopArtists` refuses a `limit` of 0 or above 1000 and a `page` of 0 with error 6 and HTTP 400. Its message names the parameter and its range, but a message is text the network chose, which no error of this library prints. So the client refuses a 0 itself, naming the parameter. It sets no upper bound: the ranges differ by method, and `library.getArtists` applied `limit=2000`.
-- 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `TopTrack::duration()` reads it as `None`.
+- 42 of the 1000 most played tracks have a `duration` of `"0"`, a length the service does not know. `Track::duration()` reads it as `None`.
 - The `@attr` of `user.getTopTags` holds the user and nothing else: no page and no total.
 
 The weekly charts, the same day:
@@ -593,9 +637,9 @@ The weekly charts, the same day:
 - The chart list held 1134 weeks of seven days, each ending where the next begins, on a Sunday at noon UTC. It starts in February 2005, before the account existed, and a week without a scrobble is an empty array.
 - The three charts of the last listed week hold the same plays: 217 as 158 artists, as 184 albums and as 204 tracks.
 - A chart is not always complete. The track chart of a week of 1390 plays had exactly 1000 rows holding 1167 of them, and nothing in the reply says so. That week's album chart held 1336, since a scrobble need not name an album.
-- Without `from` and `to` the service chose the seven days up to the last noon UTC, which is not a listed week. `from` alone got the same answer.
+- Without `from` and `to` the service chose the seven days up to the last noon UTC, which is not a listed week. `from` alone got the same answer. So the client asks for a window with both ends and refuses any other.
 - The week after the last listed one, still in progress, had a chart. A `from` later than the `to` was an empty array, not an error.
-- The charts apply a `limit` although their pages document none. The three recorded fixtures were made with `limit=3`; the client sends none.
+- The charts apply a `limit` although their pages document none, so the client offers one. The three recorded fixtures were made with `limit=3`.
 
 The profile, the friends, the tagged items and the loved tracks, the same day:
 
@@ -629,15 +673,62 @@ Tags, the same day:
 - `tag.getTopTags` is the 50 most used tags of the service. It ignores a `limit`. Two parameters its page does not list move through the list, `num_res` and `offset`, and its `@attr` echoes them beside the `total`, all three as numbers. Its rows have a `count`, which is the `taggings` of `chart.getTopTags`, and no `url`.
 - `tag.getWeeklyChartList` is the list of 1134 weeks a user gets, for every tag and for one nobody has used.
 
+An artist's lists, read on 2026-11-11 and through the client on 2026-11-12:
+
+- A list's `@attr.artist` is the name in the service's spelling: `radiohead` comes back as `Radiohead`, and with `autocorrect=1` `Guns and Roses` as `Guns N' Roses`. Without it the misspelling is an artist of its own.
+- An artist the service does not know is error 6 on all five methods, with HTTP 200. `artist.getCorrection` with no artist at all is HTTP 400 and the body `{}`.
+- `artist.getCorrection` answers a name that is already right with that same artist. Its `correction` is one object, not a list.
+- `artist.getSimilar` sends each row's likeness as a decimal in a string, from `"1"` down to `"0.000243"`, 100 rows when no `limit` is set and never more than 250.
+- `artist.getTopTracks` is in order of `listeners`, not of `playcount`: in 1000 rows no track had more listeners than the one before, and 491 had more plays. `artist.getTopAlbums` is not in order of `playcount` either, and its rows have no `listeners` to tell by.
+- An album's `playcount` is a JSON number, where a track's is a string. 843 of the 1000 albums and 550 of the 1000 tracks have no `mbid` member.
+- Both paged lists answer a page beyond the last with the first page, where the charts send an empty one. `Rows` counts pages for itself, so `all()` still ends.
+- A top tag's `count` is 100 for the tag given most and less for the others in proportion. It is not a number of uses, so it is on the row and not the tag's `taggings`.
+- The rank of a row starts again on each page of the albums and counts through the list of the tracks. No model reads it.
+
+What the service says of an artist and an album, read on 2026-11-11 and through the client on 2026-11-12:
+
+- `artist.getInfo` keeps its two counts under `stats`, with `userplaycount` beside them only when a `username` is sent. A user who never played the artist has a count of `"0"`, not none. It sends five similar artists and five tags at most, and `ontour` as a flag.
+- For an artist nobody has written about, `bio.summary` is still the service's link to its own page, `bio.content` is empty and `bio.published` is `01 Jan 1970, 00:00`. A misspelt name read without `autocorrect` has no similar artists and no tags.
+- `album.getInfo` names the album's artist with a string, where every list sends an object, so that artist has a name and nothing else. Its counts are strings beside the album's other members, and `userplaycount` is a JSON number. `tags` is `""` for an album nobody has tagged, and `wiki` is absent for one nobody has described.
+- An album's tracks each have an `artist` object, a `duration` as a number and a rank that counts through the album.
+- An `image` here has six entries, the last with an empty `size`.
+- `artist.getTags` and `album.getTags` need a `user`. Without one the answer is error 6, as it is for a user the service does not know. A user who has given no tag gets `#text` holding a space and no `tag` member.
+- An album the service does not know is error 6 on all three calls, with HTTP 404 from `album.getInfo` and HTTP 200 from the two lists.
+- `album.getTopTags` for an album named by `mbid` was HTTP 400 with the body `{}`, where `album.getInfo` by the same id answered.
+
+The searches, read on 2026-11-11 and through the client on 2026-11-12:
+
+- A search answers in a shape of its own: `results`, with the page at `opensearch:Query.startPage`, its size at `opensearch:itemsPerPage`, the number of matches at `opensearch:totalResults`, the query at `@attr.for`, and the rows a level down, at `artistmatches.artist` or `albummatches.album`. It sends no number of pages, so `Page::total_pages()` is worked out from the other two.
+- An artist that was found has `listeners` and no `playcount`. An album that was found names its artist with a string and has no counts.
+- The page size is 30 when no `limit` is sent. A `limit` or a `page` of 0 or above 10000 is error 6, however many matches there are.
+- A search that finds nothing is an empty array with a total of 0. An empty query is the body `{}`, which the client does not send for.
+
+A track, read and through the client on 2026-11-12:
+
+- `track.getInfo` gives the track's length in milliseconds, where every list gives seconds, and `"0"` for one it does not know. It names the track's album with a `title`, where a scrobble's row has `#text`, and gives that album a `url`, an `image` and its artist's name as a string. A track on no album has no `album` member.
+- With a `username` it adds `userplaycount` and `userloved`, both as strings, and a count of `"0"` for a track the user never played.
+- `track.getCorrection` corrected the artist's name and the letter case of the track's name, and nothing else: `creep (acoustic` came back as `Creep (Acoustic`. Its `@attr` says which of the two names it corrected.
+- `track.getSimilar` sends `match`, `playcount` and `duration` as JSON numbers, the duration in seconds. It sent 100 rows with no `limit` and 217 when asked for 1000, and none for a track it knows little about.
+- `track.getTags` and `track.getTopTags` are as an artist's and an album's. `track.getTopTags` for a track named by `mbid` was HTTP 400 with the body `{}`.
+- `track.search` rows name the artist with a string and have `listeners`. An `artist` beside the query narrows the search: 97,919 matches became 51,150. Its `limit` and its `page` each stop at 1000, a tenth of what the other two searches allow.
+- A track the service does not know is error 6 on all five calls of a track.
+
+The desktop sign-in, through the client on 2026-11-13, signed with the API secret:
+
+- `auth.getToken` answers `{"token": ...}`, 32 characters. It checks no signature: a wrong one and none both got a token.
+- `auth.getSession` with a token not yet approved is error 14, with a token never issued error 4 and HTTP 403, and with a wrong signature error 13 and HTTP 400.
+- Approved, it answers `{"session": {"key", "name", "subscriber"}}`, the key 32 characters and `subscriber` a number. The same token again is error 4 and HTTP 403, as for one never issued, not the error 15 that names an expired token.
+- A read signed with the new session key, `as_user`, was answered.
+
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
 Not yet seen live:
 
-- A signed read (`as_user`), and a hidden history.
+- A hidden history.
 - A now-playing row.
 - Several scrobbles in one second across a page boundary.
 - Rate limiting and `Retry-After`.
-- Through the client, any method that has no typed model yet.
+- `auth.getMobileSession`, and any method that changes an account.
 
 ### Order of typing
 
@@ -675,4 +766,6 @@ The recorded fixtures are the owner's own captures: of their own account, and of
 | Versions | Decided: one version for the library, the tool and its image, set in the workspace manifest, and one tag, `v` and the version, for a release. Before 1.0 a change that breaks the library's API raises the middle number and anything else the last. A release gives both crates the new number even when only one of them changed. |
 | Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See [Rust version](#rust-version). |
 | Visibility | Decided: the repository is public. A version's tag publishes both crates to crates.io, then releases it on GitHub with a container image of the command-line tool. |
+| Typed API | Decided: a call is a handle, a question and `send()`. Five things have one type each, a number true only in one list is on a row, and a list is a `Page` or a `List`. See [Typed views](#typed-views) and [Typed calls](#typed-calls). |
+| Default pacing | Open: whether the client paces unless asked, and what the setting is called ([#72](https://github.com/kelchm/scrobl/issues/72)). Until it is settled the default stays one second. |
 | Writes | Decided: a `Client` never writes; a `Writer`, from `ClientBuilder::build_writer`, is the only thing that does. Enforced in `prepare`. See [Reading and writing](#reading-and-writing). |

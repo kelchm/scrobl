@@ -28,6 +28,26 @@ pub(crate) fn uint(value: &Value) -> Option<u64> {
     }
 }
 
+/// A decimal that is not negative: a JSON number, or a string of ASCII
+/// digits with at most one `.` among them, such as `"0.944133"` and `"1"`.
+///
+/// Rejected: negative numbers, signs, exponents in a string, whitespace,
+/// the empty string, a lone `.`, booleans, `null`, arrays and objects.
+pub(crate) fn decimal(value: &Value) -> Option<f64> {
+    let number = match value {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s)
+            if s.bytes().any(|b| b.is_ascii_digit())
+                && s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+                && s.bytes().filter(|&b| b == b'.').count() <= 1 =>
+        {
+            s.parse().ok()?
+        }
+        _ => return None,
+    };
+    (number.is_finite() && number >= 0.0).then_some(number)
+}
+
 /// A 0/1 flag: the strings `"0"` and `"1"`, or the integers `0` and `1`.
 ///
 /// Rejected: every other number or string, JSON booleans, `null`.

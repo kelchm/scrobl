@@ -32,9 +32,9 @@ use std::future::Future;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use scrobl::client::{Period, RecentTracksQuery, Scan, TopArtistsQuery, User};
-use scrobl::history::{ScanPage, ScanSummary, Window};
-use scrobl::model::RecentTracksPage;
+use scrobl::client::{Period, Rows, Scan, UserHandle, UserRecentTracksQuery, UserTopArtistsQuery};
+use scrobl::history::{ScanSummary, Window};
+use scrobl::model::HistoryPage;
 use scrobl::protocol::{Request, Requirement, methods};
 use scrobl::{
     ApiErrorCode, ApiKey, ApiSecret, Client, ClientBuilder, Delivery, Error, ErrorKind, Response,
@@ -161,7 +161,7 @@ fn assert_clean(label: &str, error: &Error) {
     assert!(error.method().is_some(), "{label}: no method on {error:?}");
 }
 
-fn markers(pages: &[ScanPage]) -> Vec<usize> {
+fn markers(pages: &[Response<HistoryPage>]) -> Vec<usize> {
     pages
         .iter()
         .flat_map(|page| page.scrobbles())
@@ -169,7 +169,7 @@ fn markers(pages: &[ScanPage]) -> Vec<usize> {
         .collect()
 }
 
-async fn read_scan(mut scan: Scan) -> Result<(Vec<ScanPage>, ScanSummary), Error> {
+async fn read_scan(mut scan: Scan) -> Result<(Vec<Response<HistoryPage>>, ScanSummary), Error> {
     let mut pages = Vec::new();
     while let Some(page) = scan.next_page().await? {
         pages.push(page);
@@ -1274,7 +1274,7 @@ async fn gate8_a_genuinely_empty_window_is_a_success_with_nothing_in_it() {
             .send()
             .await
             .unwrap();
-        assert_eq!(page.attr().total(), 0);
+        assert_eq!(page.total(), 0);
         assert!(page.scrobbles().is_empty());
 
         let (pages, summary) = read_scan(
@@ -1645,9 +1645,9 @@ async fn gate9_a_page_carries_the_exact_bytes_the_server_sent() {
         assert_eq!(page.raw().status(), 200);
         assert_eq!(page.raw().method(), "user.getRecentTracks");
         assert_eq!(page.scrobbles().len(), 3);
-        assert_eq!(page.attr().total(), 5);
+        assert_eq!(page.total(), 5);
 
-        let (typed, raw): (RecentTracksPage, _) = page.into_parts();
+        let (typed, raw): (HistoryPage, _) = page.into_parts();
         assert_eq!(typed.scrobbles().len(), 3);
         assert_eq!(raw.body(), body.as_slice());
     })
@@ -1888,7 +1888,7 @@ async fn gate10_debug_never_shows_a_header_value_the_network_sent() {
                 format!("{:?}", Response::new((), raw.clone())),
             ),
             ("HttpResponse", format!("{http:?}\n{http:#?}")),
-            ("ScanPage", format!("{scan_page:?}\n{scan_page:#?}")),
+            ("a scanned page", format!("{scan_page:?}\n{scan_page:#?}")),
         ];
         for (what, text) in shown {
             assert!(!text.contains("SENTINEL"), "{what} shows a value: {text}");
@@ -2044,12 +2044,13 @@ fn assert_sync<T: Sync>() {}
 fn gate12_the_client_is_clone_send_sync_and_static_and_every_future_is_send() {
     assert_shareable::<Client>();
     assert_shareable::<Writer>();
-    assert_shareable::<User>();
-    assert_shareable::<RecentTracksQuery>();
-    assert_shareable::<TopArtistsQuery>();
+    assert_shareable::<UserHandle>();
+    assert_shareable::<UserRecentTracksQuery>();
+    assert_shareable::<UserTopArtistsQuery>();
     assert_shareable::<ClientBuilder>();
     assert_owned::<Scan>();
-    assert_shareable::<Response<RecentTracksPage>>();
+    assert_owned::<Rows<scrobl::model::UserArtist>>();
+    assert_shareable::<Response<HistoryPage>>();
     assert_owned::<Error>();
     assert_sync::<Error>();
 
@@ -2515,15 +2516,14 @@ async fn loved_tracks_are_read_a_page_at_a_time_with_the_exact_bytes() {
         assert_eq!(page.raw().method(), "user.getLovedTracks");
 
         // Newest first: page 2 of five holds the third and fourth newest.
-        let attr = page.attr();
-        assert_eq!((attr.page(), attr.per_page(), attr.total()), (2, 2, 5));
+        assert_eq!((page.number(), page.per_page(), page.total()), (2, 2, 5));
         let loved: Vec<(u64, &str)> = page
-            .tracks()
+            .items()
             .iter()
             .map(|t| (t.loved_at(), t.track().name()))
             .collect();
         assert_eq!(loved, [(BASE + 300, "Loved 3"), (BASE + 200, "Loved 2")]);
-        assert_eq!(page.tracks()[0].artist().mbid(), Some(ARTIST_MBID));
+        assert_eq!(page.items()[0].track().artist().mbid(), Some(ARTIST_MBID));
     })
     .await;
 }
@@ -2538,8 +2538,8 @@ async fn a_loved_tracks_query_sends_only_what_was_set() {
             .send()
             .await
             .unwrap();
-        assert!(page.tracks().is_empty());
-        assert_eq!(page.attr().total(), 0);
+        assert!(page.items().is_empty());
+        assert_eq!(page.total(), 0);
 
         let request = &server.requests()[0];
         assert_eq!(request.param("limit"), None);
@@ -2643,8 +2643,8 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(artists.raw().body(), TOP_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Portugal. The Man");
-        assert_eq!(artists.attr().total(), 10_105);
+        assert_eq!(artists.items()[0].artist().name(), "Portugal. The Man");
+        assert_eq!(artists.total(), 10_105);
 
         let albums = user
             .top_albums()
@@ -2655,10 +2655,7 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(albums.raw().body(), TOP_ALBUMS);
-        assert_eq!(
-            albums.albums()[0].album().title(),
-            Some("The Social Network")
-        );
+        assert_eq!(albums.items()[0].album().name(), "The Social Network");
 
         let tracks = user
             .top_tracks()
@@ -2669,11 +2666,11 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(tracks.raw().body(), TOP_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Swim");
+        assert_eq!(tracks.items()[0].track().name(), "Swim");
 
         let tags = user.top_tags().limit(5).send().await.unwrap();
         assert_eq!(tags.raw().body(), TOP_TAGS);
-        assert_eq!(tags.tags()[0].name(), "indie");
+        assert_eq!(tags.items()[0].tag().name(), "indie");
 
         let library = user
             .library_artists()
@@ -2683,7 +2680,7 @@ async fn the_lists_of_a_user_are_read_with_what_was_set_and_the_exact_bytes() {
             .await
             .unwrap();
         assert_eq!(library.raw().body(), LIBRARY_ARTISTS);
-        assert_eq!(library.artists()[0].playcount(), 5584);
+        assert_eq!(library.items()[0].playcount(), 5584);
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -2844,7 +2841,7 @@ const WEEKLY_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-
 const WEEKLY_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-weekly-track-chart.json");
 
 #[tokio::test]
-async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
+async fn what_a_user_played_in_a_window_is_read_for_that_window() {
     bounded(async {
         let bodies = [
             WEEKLY_CHART_LIST,
@@ -2860,42 +2857,29 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
         .await;
         let user = client(&server).user(USER);
 
-        let weeks = user.weekly_chart_list().send().await.unwrap();
+        let weeks = user.weeks().send().await.unwrap();
         assert_eq!(weeks.raw().body(), WEEKLY_CHART_LIST);
-        let week = weeks.ranges().last().unwrap();
-        let (from, to) = (week.from(), week.to());
-        assert_eq!((from, to), (1_793_534_400, 1_794_139_200));
+        let week = *weeks.last().unwrap();
+        assert_eq!(
+            (week.from(), week.to()),
+            (Some(1_793_534_400), Some(1_794_139_200))
+        );
 
-        let artists = user
-            .weekly_artist_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let artists = user.top_artists_in(week).send().await.unwrap();
         assert_eq!(artists.raw().body(), WEEKLY_ARTISTS);
-        assert_eq!((artists.from(), artists.to()), (from, to));
-        assert_eq!(artists.artists()[1].artist().name(), "Noah Kahan");
+        assert_eq!(artists.subject(), Some("kelchm"));
+        assert_eq!(artists[1].artist().name(), "Noah Kahan");
 
-        let albums = user
-            .weekly_album_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let albums = user.top_albums_in(week).send().await.unwrap();
         assert_eq!(albums.raw().body(), WEEKLY_ALBUMS);
-        assert_eq!(albums.albums()[2].album().title(), Some("takeaways"));
+        assert_eq!(albums[2].album().name(), "takeaways");
 
-        let tracks = user
-            .weekly_track_chart()
-            .range(from, to)
-            .send()
-            .await
-            .unwrap();
+        let tracks = user.top_tracks_in(week).send().await.unwrap();
         assert_eq!(tracks.raw().body(), WEEKLY_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Fire Island, AK");
+        assert_eq!(tracks[0].track().name(), "Fire Island, AK");
 
-        // Without a range neither bound is sent.
-        user.weekly_artist_chart().send().await.unwrap();
+        // The charts take a limit, which goes before the span.
+        user.top_artists_in(week).limit(3).send().await.unwrap();
 
         let week = [("from", "1793534400"), ("to", "1794139200")];
         let with_week = |method: &'static str| {
@@ -2911,9 +2895,37 @@ async fn the_weekly_charts_are_read_for_the_week_that_was_set() {
                 with_week("user.getWeeklyArtistChart"),
                 with_week("user.getWeeklyAlbumChart"),
                 with_week("user.getWeeklyTrackChart"),
-                pairs(&[("method", "user.getWeeklyArtistChart"), ("user", USER)]),
+                pairs(&[
+                    ("method", "user.getWeeklyArtistChart"),
+                    ("user", USER),
+                    ("limit", "3"),
+                    ("from", "1793534400"),
+                    ("to", "1794139200")
+                ]),
             ]
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_window_without_both_ends_is_refused_before_anything_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let user = client(&server).user(USER);
+        // With one end or none the service charts a span of its own choosing.
+        for window in [Window::ALL, Window::since(1), Window::before(2)] {
+            let errors = [
+                user.top_artists_in(window).send().await.map(drop),
+                user.top_albums_in(window).send().await.map(drop),
+                user.top_tracks_in(window).send().await.map(drop),
+            ];
+            for error in errors.map(Result::unwrap_err) {
+                assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+                assert!(error.to_string().contains("a start and an end"), "{error}");
+            }
+        }
+        assert!(server.requests().is_empty());
     })
     .await;
 }
@@ -2943,15 +2955,15 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
 
         let info = user.info().send().await.unwrap();
         assert_eq!(info.raw().body(), USER_INFO);
-        assert_eq!((info.name(), info.playcount()), ("kelchm", 242_328));
+        assert_eq!((info.name(), info.playcount()), ("kelchm", Some(242_328)));
 
         let friends = user.friends().limit(3).page(1).send().await.unwrap();
         assert_eq!(friends.raw().body(), FRIENDS);
-        assert_eq!(friends.users()[2].country(), Some("Iceland"));
+        assert_eq!(friends.items()[2].country(), Some("Iceland"));
 
         let artists = user.tagged_artists("indie").send().await.unwrap();
         assert_eq!(artists.raw().body(), TAGGED_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Panic at the Disco");
+        assert_eq!(artists.items()[0].name(), "Panic at the Disco");
 
         let albums = user
             .tagged_albums("synthetic tag")
@@ -2961,7 +2973,7 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
             .await
             .unwrap();
         assert_eq!(albums.raw().body(), TAGGED_ALBUMS);
-        assert_eq!(albums.albums()[1].album().title(), Some("Second Album"));
+        assert_eq!(albums.items()[1].name(), "Second Album");
 
         let tracks = user
             .tagged_tracks(String::from("interesting"))
@@ -2971,7 +2983,7 @@ async fn a_profile_friends_and_tagged_items_are_read_with_what_was_set() {
             .await
             .unwrap();
         assert_eq!(tracks.raw().body(), TAGGED_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Bedroom in Hell");
+        assert_eq!(tracks.items()[0].name(), "Bedroom in Hell");
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -3049,32 +3061,32 @@ async fn the_charts_are_read_with_what_was_set_and_the_exact_bytes() {
         )
         .await;
         let client = client(&server);
-        let chart = client.chart();
-        let country = client.geo("united states");
-        assert_eq!(country.country(), "united states");
+        let chart = client.charts();
+        let country = client.country("united states");
+        assert_eq!(country.name(), "united states");
 
         let artists = chart.top_artists().limit(3).page(2).send().await.unwrap();
         assert_eq!(artists.raw().body(), CHART_ARTISTS);
-        assert_eq!(artists.artists()[0].artist().name(), "Olivia Rodrigo");
-        assert_eq!(artists.attr().total(), 10_000);
+        assert_eq!(artists.items()[0].name(), "Olivia Rodrigo");
+        assert_eq!(artists.total(), 10_000);
 
         let tracks = chart.top_tracks().limit(3).send().await.unwrap();
         assert_eq!(tracks.raw().body(), CHART_TRACKS);
-        assert_eq!(tracks.tracks()[0].track().name(), "Nicole Kidman");
+        assert_eq!(tracks.items()[0].name(), "Nicole Kidman");
 
         let tags = chart.top_tags().send().await.unwrap();
         assert_eq!(tags.raw().body(), CHART_TAGS);
-        assert_eq!(tags.tags()[0].name(), "rock");
+        assert_eq!(tags.items()[0].name(), "rock");
 
         let artists = country.top_artists().limit(3).send().await.unwrap();
         assert_eq!(artists.raw().body(), GEO_ARTISTS);
         // The service spells the country its own way.
-        assert_eq!(artists.country(), "United States");
-        assert_eq!(artists.artists()[0].listeners(), 69_663);
+        assert_eq!(artists.subject(), Some("United States"));
+        assert_eq!(artists.items()[0].listeners(), 69_663);
 
         let tracks = country.top_tracks().page(1).send().await.unwrap();
         assert_eq!(tracks.raw().body(), GEO_TRACKS);
-        assert_eq!(tracks.tracks()[2].track().name(), "Earrings");
+        assert_eq!(tracks.items()[2].track().name(), "Earrings");
 
         let sent: Vec<_> = server.requests().iter().map(chosen).collect();
         assert_eq!(
@@ -3151,34 +3163,34 @@ async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
 
         let info = tag.info().send().await.unwrap();
         assert_eq!(info.raw().body(), TAG_INFO);
-        assert_eq!(info.total(), 2_068_156);
+        assert_eq!(info.taggings(), 2_068_156);
         tag.info().lang("de").send().await.unwrap();
 
         let similar = tag.similar().send().await.unwrap();
         assert_eq!(similar.raw().body(), TAG_SIMILAR);
-        assert!(similar.tags().is_empty());
+        assert!(similar.items().is_empty());
 
         let albums = tag.top_albums().limit(3).page(2).send().await.unwrap();
         assert_eq!(albums.raw().body(), TAG_ALBUMS);
-        assert_eq!(albums.tag(), "indie");
-        assert_eq!(albums.albums()[0].album().title(), Some("Le Tigre"));
+        assert_eq!(albums.subject(), Some("indie"));
+        assert_eq!(albums.items()[0].name(), "Le Tigre");
 
         let artists = tag.top_artists().limit(3).send().await.unwrap();
-        assert_eq!(artists.artists()[1].artist().name(), "Arctic Monkeys");
+        assert_eq!(artists.items()[1].name(), "Arctic Monkeys");
 
         let tracks = tag.top_tracks().page(1).send().await.unwrap();
-        assert_eq!(tracks.tracks()[1].track().name(), "505");
+        assert_eq!(tracks.items()[1].name(), "505");
 
-        let weeks = tag.weekly_chart_list().send().await.unwrap();
+        let weeks = tag.weeks().send().await.unwrap();
         assert_eq!(weeks.raw().body(), TAG_WEEKS);
-        assert_eq!(weeks.ranges().len(), 4);
+        assert_eq!(weeks.items().len(), 4);
 
-        let all = client.chart().all_tags().send().await.unwrap();
+        let all = client.charts().tags().send().await.unwrap();
         assert_eq!(all.raw().body(), ALL_TAGS);
-        assert_eq!(all.tags()[0].name(), "rock");
+        assert_eq!(all.items()[0].name(), "rock");
         client
-            .chart()
-            .all_tags()
+            .charts()
+            .tags()
             .limit(3)
             .offset(6)
             .send()
@@ -3231,6 +3243,992 @@ async fn what_is_asked_about_a_tag_is_read_with_what_was_set() {
             assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidRequest);
         }
         assert_eq!(server.request_count(), 9);
+    })
+    .await;
+}
+
+/// Page `number` of a user's top artists, `per_page` to a page, of `total`
+/// in all, each named after its place in the list.
+fn artists_page(number: u64, per_page: u64, total: u64) -> String {
+    let first = (number - 1) * per_page + 1;
+    let rows: Vec<_> = (first..=total.min(first + per_page - 1))
+        .map(|place| {
+            serde_json::json!({"name": format!("Artist {place}"), "playcount": "1",
+                               "mbid": "", "url": "https://example.invalid/a",
+                               "@attr": {"rank": place.to_string()}})
+        })
+        .collect();
+    serde_json::json!({"topartists": {"artist": rows, "@attr": {
+        "user": USER, "page": number.to_string(), "perPage": per_page.to_string(),
+        "totalPages": total.div_ceil(per_page).to_string(), "total": total.to_string()}}})
+    .to_string()
+}
+
+#[tokio::test]
+async fn all_reads_every_row_page_after_page() {
+    bounded(async {
+        let pages = [1, 2, 3].map(|number| Behaviour::status(200, artists_page(number, 2, 5)));
+        let server = serve(Dataset::distinct(1), pages).await;
+        let mut rows = client(&server)
+            .user(USER)
+            .top_artists()
+            .period(Period::SevenDays)
+            .limit(2)
+            .all();
+
+        // Nothing is sent until a row is asked for.
+        assert_eq!(rows.total(), None);
+        assert!(server.requests().is_empty());
+
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            // A page is asked for only when the last has run out.
+            assert_eq!(server.requests().len(), names.len() / 2 + 1);
+            names.push(row.into_artist().name().to_owned());
+        }
+        assert_eq!(
+            names,
+            ["Artist 1", "Artist 2", "Artist 3", "Artist 4", "Artist 5"]
+        );
+        assert_eq!(rows.total(), Some(5));
+        // The end stays the end, and sends nothing more.
+        assert!(rows.next().await.unwrap().is_none());
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        let page = |number: &'static str| {
+            pairs(&[
+                ("method", "user.getTopArtists"),
+                ("user", USER),
+                ("period", "7day"),
+                ("limit", "2"),
+                ("page", number),
+            ])
+        };
+        assert_eq!(sent, [page("1"), page("2"), page("3")]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_starts_at_the_page_that_was_set_and_an_empty_list_is_one_request() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(3, 2, 5)),
+                Behaviour::status(200, artists_page(1, 2, 0)),
+            ],
+        )
+        .await;
+        let user = client(&server).user(USER);
+
+        let mut rows = user.top_artists().limit(2).page(3).all();
+        let last = rows.next().await.unwrap().unwrap();
+        assert_eq!(last.artist().name(), "Artist 5");
+        assert!(rows.next().await.unwrap().is_none());
+
+        let mut none = user.top_artists().all();
+        assert!(none.next().await.unwrap().is_none());
+        assert_eq!(none.total(), Some(0));
+
+        let pages: Vec<_> = server
+            .requests()
+            .iter()
+            .map(|request| request.param("page"))
+            .collect();
+        assert_eq!(pages, [Some("3".to_owned()), Some("1".to_owned())]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_asks_for_the_same_page_again_after_an_error() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(1, 1, 2)),
+                Behaviour::api_error(6),
+                Behaviour::status(200, artists_page(2, 1, 2)),
+            ],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(1).all();
+
+        let first = rows.next().await.unwrap().unwrap();
+        assert_eq!(first.artist().name(), "Artist 1");
+        let error = rows.next().await.unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::INVALID_PARAMETERS));
+        // The error moved nothing: the same page is asked for again.
+        let second = rows.next().await.unwrap().unwrap();
+        assert_eq!(second.artist().name(), "Artist 2");
+        assert!(rows.next().await.unwrap().is_none());
+
+        let pages: Vec<_> = server
+            .requests()
+            .iter()
+            .map(|request| request.param("page"))
+            .collect();
+        assert_eq!(pages, ["1", "2", "2"].map(|page| Some(page.to_owned())));
+
+        // An option out of range is refused each time, and nothing is sent.
+        let mut refused = client(&server).user(USER).top_artists().limit(0).all();
+        for _ in 0..2 {
+            let error = refused.next().await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        }
+        assert_eq!(server.requests().len(), 3);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn all_does_not_follow_a_reply_that_names_another_page() {
+    bounded(async {
+        // The list shrank to one page after the first was read, and the
+        // service answers the page now past the end with the first again.
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, artists_page(1, 2, 4)),
+                Behaviour::status(200, artists_page(1, 2, 2)),
+            ],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(2).all();
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            names.push(row.into_artist().name().to_owned());
+        }
+        // Rows can come twice when a list changes, but the read ends.
+        assert_eq!(names, ["Artist 1", "Artist 2", "Artist 1", "Artist 2"]);
+        assert_eq!(server.requests().len(), 2);
+        assert_eq!(rows.total(), Some(2));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_debug_of_rows_shows_where_the_read_stands_and_no_row() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, artists_page(1, 2, 5))],
+        )
+        .await;
+        let mut rows = client(&server).user(USER).top_artists().limit(2).all();
+        rows.next().await.unwrap();
+        let shown = format!("{rows:?}");
+        assert_eq!(
+            shown,
+            "Rows { next_page: Some(2), ready: 1, total: Some(5), .. }"
+        );
+    })
+    .await;
+}
+
+const ARTIST_SIMILAR: &[u8] = include_bytes!("../fixtures/recorded/artist-similar.json");
+const ARTIST_ALBUMS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-albums.json");
+const ARTIST_TRACKS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-tracks.json");
+const ARTIST_TAGS: &[u8] = include_bytes!("../fixtures/recorded/artist-top-tags.json");
+const ARTIST_CORRECTION: &[u8] = include_bytes!("../fixtures/recorded/artist-correction.json");
+
+#[tokio::test]
+async fn the_lists_of_an_artist_are_read_by_name_or_by_id_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            ARTIST_SIMILAR,
+            ARTIST_ALBUMS,
+            ARTIST_TRACKS,
+            ARTIST_TAGS,
+            ARTIST_CORRECTION,
+            ARTIST_TAGS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let artist = client.artist("radiohead");
+
+        let similar = artist.similar().limit(3).send().await.unwrap();
+        assert_eq!(similar.raw().body(), ARTIST_SIMILAR);
+        assert_eq!(similar.subject(), Some("Radiohead"));
+        assert_eq!(similar[1].artist().name(), "Atoms for Peace");
+
+        let albums = artist.top_albums().limit(3).page(2).send().await.unwrap();
+        assert_eq!(albums.raw().body(), ARTIST_ALBUMS);
+        assert_eq!(albums[0].name(), "OK Computer");
+
+        // Every call through a handle that corrects names says so.
+        let corrected = artist.clone().autocorrect();
+        let tracks = corrected.top_tracks().send().await.unwrap();
+        assert_eq!(tracks.raw().body(), ARTIST_TRACKS);
+        assert_eq!(tracks[0].name(), "Creep");
+        let tags = corrected.top_tags().send().await.unwrap();
+        assert_eq!(tags[0].tag().name(), "rock");
+
+        // A correction is asked for by name, and never with `autocorrect`.
+        let filed = client
+            .artist("Guns and Roses")
+            .autocorrect()
+            .correction()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(filed.raw().body(), ARTIST_CORRECTION);
+        assert_eq!(filed.name(), "Guns N' Roses");
+
+        let by_id = client.artist_mbid("a74b1b7f-71a5-4011-9441-d0b5e4122711");
+        by_id.top_tags().send().await.unwrap();
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "artist.getSimilar"),
+                    ("artist", "radiohead"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopAlbums"),
+                    ("artist", "radiohead"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTracks"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTags"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "artist.getCorrection"),
+                    ("artist", "Guns and Roses")
+                ]),
+                pairs(&[
+                    ("method", "artist.getTopTags"),
+                    ("mbid", "a74b1b7f-71a5-4011-9441-d0b5e4122711")
+                ]),
+            ]
+        );
+
+        // An id has no name to correct: refused before anything is sent.
+        let error = by_id.correction().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("by name"), "{error}");
+        let error = artist.similar().limit(0).send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert_eq!(server.requests().len(), 6);
+    })
+    .await;
+}
+
+const ARTIST_INFO: &[u8] = include_bytes!("../fixtures/derived/artist-info.json");
+const ARTIST_USER_TAGS: &[u8] = include_bytes!("../fixtures/derived/artist-tags.json");
+const ALBUM_INFO: &[u8] = include_bytes!("../fixtures/derived/album-info.json");
+const ALBUM_TOP_TAGS: &[u8] = include_bytes!("../fixtures/recorded/album-top-tags.json");
+const ALBUM_USER_TAGS: &[u8] = include_bytes!("../fixtures/derived/album-tags.json");
+
+#[tokio::test]
+async fn what_the_service_says_of_an_artist_and_an_album_is_read_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            ARTIST_INFO,
+            ARTIST_INFO,
+            ARTIST_USER_TAGS,
+            ALBUM_INFO,
+            ALBUM_INFO,
+            ALBUM_TOP_TAGS,
+            ALBUM_USER_TAGS,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let artist = client.artist("radiohead");
+
+        let info = artist.info().send().await.unwrap();
+        assert_eq!(info.raw().body(), ARTIST_INFO);
+        assert_eq!(info.artist().name(), "Radiohead");
+        let info = artist
+            .clone()
+            .autocorrect()
+            .info()
+            .lang("de")
+            .for_user(USER)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(info.user_playcount(), Some(386));
+        let tags = artist.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags.raw().body(), ARTIST_USER_TAGS);
+        assert_eq!(tags[0].name(), "synthetic tag");
+
+        let album = client.album("radiohead", "ok computer");
+        let info = album.info().for_user(USER).send().await.unwrap();
+        assert_eq!(info.raw().body(), ALBUM_INFO);
+        assert_eq!(info.album().name(), "OK Computer");
+        assert_eq!(info.tracks().len(), 12);
+        client
+            .album_mbid("0b6b4ba0-d36f-47bd-b4ea-6a5b91842d29")
+            .info()
+            .lang("de")
+            .send()
+            .await
+            .unwrap();
+        let top = album.clone().autocorrect().top_tags().send().await.unwrap();
+        assert_eq!(top.subject(), Some("OK Computer"));
+        assert_eq!(top[0].count(), 100);
+        let tags = album.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags.len(), 2);
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[("method", "artist.getInfo"), ("artist", "radiohead")]),
+                pairs(&[
+                    ("method", "artist.getInfo"),
+                    ("artist", "radiohead"),
+                    ("autocorrect", "1"),
+                    ("lang", "de"),
+                    ("username", USER)
+                ]),
+                pairs(&[
+                    ("method", "artist.getTags"),
+                    ("artist", "radiohead"),
+                    ("user", USER)
+                ]),
+                pairs(&[
+                    ("method", "album.getInfo"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("username", USER)
+                ]),
+                pairs(&[
+                    ("method", "album.getInfo"),
+                    ("mbid", "0b6b4ba0-d36f-47bd-b4ea-6a5b91842d29"),
+                    ("lang", "de")
+                ]),
+                pairs(&[
+                    ("method", "album.getTopTags"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "album.getTags"),
+                    ("artist", "radiohead"),
+                    ("album", "ok computer"),
+                    ("user", USER)
+                ]),
+            ]
+        );
+    })
+    .await;
+}
+
+const ARTIST_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/artist-search.json");
+const ALBUM_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/album-search.json");
+
+#[tokio::test]
+async fn a_search_is_read_with_what_was_set_and_an_empty_one_is_refused() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [ARTIST_SEARCH, ALBUM_SEARCH].map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let search = client(&server).search();
+
+        let artists = search.artists("radiohead").limit(3).send().await.unwrap();
+        assert_eq!(artists.raw().body(), ARTIST_SEARCH);
+        assert_eq!(artists.subject(), Some("radiohead"));
+        assert_eq!(artists[0].name(), "Radiohead");
+        assert_eq!(artists.total(), 9275);
+
+        let albums = search
+            .albums("ok computer")
+            .limit(3)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(albums.raw().body(), ALBUM_SEARCH);
+        assert_eq!(albums[2].artist().unwrap().name(), "Lemaitre");
+
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "artist.search"),
+                    ("artist", "radiohead"),
+                    ("limit", "3")
+                ]),
+                pairs(&[
+                    ("method", "album.search"),
+                    ("album", "ok computer"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+            ]
+        );
+
+        // The service answers an empty query with `{}`, so none is sent.
+        for error in [
+            search.artists("").send().await.map(drop).unwrap_err(),
+            search.albums("").send().await.map(drop).unwrap_err(),
+            search.artists("").all().next().await.map(drop).unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert!(error.to_string().contains("query is empty"), "{error}");
+        }
+        assert_eq!(server.requests().len(), 2);
+    })
+    .await;
+}
+
+const TRACK_INFO: &[u8] = include_bytes!("../fixtures/derived/track-info.json");
+const TRACK_CORRECTION: &[u8] = include_bytes!("../fixtures/recorded/track-correction.json");
+const TRACK_SIMILAR: &[u8] = include_bytes!("../fixtures/recorded/track-similar.json");
+const TRACK_TOP_TAGS: &[u8] = include_bytes!("../fixtures/recorded/track-top-tags.json");
+const TRACK_USER_TAGS: &[u8] = include_bytes!("../fixtures/recorded/kelchm-track-tags.json");
+const TRACK_SEARCH: &[u8] = include_bytes!("../fixtures/recorded/track-search.json");
+
+#[tokio::test]
+async fn a_track_is_read_by_name_or_by_id_with_what_was_set() {
+    bounded(async {
+        let bodies = [
+            TRACK_INFO,
+            TRACK_INFO,
+            TRACK_CORRECTION,
+            TRACK_SIMILAR,
+            TRACK_TOP_TAGS,
+            TRACK_USER_TAGS,
+            TRACK_SEARCH,
+        ];
+        let server = serve(
+            Dataset::distinct(1),
+            bodies.map(|body| Behaviour::status(200, body)),
+        )
+        .await;
+        let client = client(&server);
+        let track = client.track("radiohead", "creep");
+
+        let info = track.info().for_user(USER).send().await.unwrap();
+        assert_eq!(info.raw().body(), TRACK_INFO);
+        assert_eq!(info.track().name(), "Creep");
+        assert_eq!(info.user_loved(), Some(false));
+        let by_id = client.track_mbid("012e70cd-4ef6-37bf-8ebf-02d318fe5151");
+        by_id.clone().autocorrect().info().send().await.unwrap();
+
+        // A correction is asked for by name, and never with `autocorrect`.
+        let filed = client
+            .track("Guns and Roses", "Paradise City")
+            .autocorrect()
+            .correction()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(filed.raw().body(), TRACK_CORRECTION);
+        assert_eq!(filed.artist().name(), "Guns N' Roses");
+
+        let similar = track.similar().limit(3).send().await.unwrap();
+        assert_eq!(similar.subject(), Some("Creep"));
+        assert_eq!(similar[2].track().artist().name(), "Foo Fighters");
+        let top = track.clone().autocorrect().top_tags().send().await.unwrap();
+        assert_eq!(top[0].count(), 100);
+        let tags = track.tags_of(USER).send().await.unwrap();
+        assert_eq!(tags[0].name(), "interesting");
+
+        let found = client
+            .search()
+            .tracks("creep")
+            .artist("radiohead")
+            .limit(3)
+            .page(2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(found.raw().body(), TRACK_SEARCH);
+        assert_eq!(found[1].artist().name(), "Frost Children");
+
+        let named = [("artist", "radiohead"), ("track", "creep")];
+        let with = |method: &'static str, more: &[(&'static str, &'static str)]| {
+            let mut sent = vec![("method", method)];
+            sent.extend(named);
+            sent.extend(more);
+            pairs(&sent)
+        };
+        let sent: Vec<_> = server.requests().iter().map(chosen).collect();
+        assert_eq!(
+            sent,
+            [
+                with("track.getInfo", &[("username", USER)]),
+                pairs(&[
+                    ("method", "track.getInfo"),
+                    ("mbid", "012e70cd-4ef6-37bf-8ebf-02d318fe5151"),
+                    ("autocorrect", "1")
+                ]),
+                pairs(&[
+                    ("method", "track.getCorrection"),
+                    ("artist", "Guns and Roses"),
+                    ("track", "Paradise City")
+                ]),
+                with("track.getSimilar", &[("limit", "3")]),
+                with("track.getTopTags", &[("autocorrect", "1")]),
+                with("track.getTags", &[("user", USER)]),
+                pairs(&[
+                    ("method", "track.search"),
+                    ("track", "creep"),
+                    ("artist", "radiohead"),
+                    ("limit", "3"),
+                    ("page", "2")
+                ]),
+            ]
+        );
+
+        // Refused before anything is sent: a correction by id, and a search
+        // for nothing.
+        let error = by_id.correction().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("by name"), "{error}");
+        let error = client.search().tracks("").send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert_eq!(server.requests().len(), 7);
+    })
+    .await;
+}
+
+const AUTH_TOKEN: &[u8] = include_bytes!("../fixtures/derived/auth-token.json");
+const AUTH_SESSION: &[u8] = include_bytes!("../fixtures/derived/auth-session.json");
+const UNAPPROVED: &[u8] =
+    br#"{"error":14,"message":"Unauthorized Token - This token has not been authorized"}"#;
+const SPENT: &[u8] =
+    br#"{"error":4,"message":"Unauthorized Token - This token has not been issued"}"#;
+
+fn names(request: &Recorded) -> Vec<String> {
+    chosen(request).into_iter().map(|(name, _)| name).collect()
+}
+
+#[tokio::test]
+async fn the_desktop_sign_in_asks_for_a_token_and_waits_for_its_approval() {
+    bounded(async {
+        let script = [
+            Behaviour::status(200, AUTH_TOKEN),
+            Behaviour::status(200, UNAPPROVED),
+            Behaviour::status(200, AUTH_SESSION),
+            Behaviour::status(403, SPENT),
+        ];
+        let server = serve(Dataset::distinct(1), script).await;
+        let client = client(&server);
+        let auth = client.auth();
+
+        let token = auth.token().send().await.unwrap();
+        assert_eq!(token.raw().body(), AUTH_TOKEN);
+        let token = token.into_value();
+        assert_eq!(
+            auth.approval_url(&token),
+            format!(
+                "https://www.last.fm/api/auth/?api_key={KEY}&token=cf45fe5a3e3cebe168480a086d7fe481"
+            )
+        );
+
+        assert!(auth.session(&token).send().await.unwrap().is_none());
+        let session = auth.session(&token).send().await.unwrap().unwrap();
+        assert_eq!(session.raw().body(), AUTH_SESSION);
+        assert_eq!(session.name(), "MyLastFMUsername");
+        assert_eq!(session.key().expose(), "d580d57f32848f5dcf574d1ce18d78b2");
+
+        // Spent.
+        let error = auth.session(&token).send().await.unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
+        assert_eq!(error.retry(), Retry::No);
+
+        let sent = server.requests();
+        assert_eq!(sent.len(), 4);
+        assert_eq!(names(&sent[0]), ["method", "api_sig"]);
+        assert_eq!(sent[0].param("method").as_deref(), Some("auth.getToken"));
+        for request in &sent[1..] {
+            assert_eq!(request.verb, "GET");
+            assert_eq!(names(request), ["method", "token", "api_sig"]);
+            assert_eq!(request.param("method").as_deref(), Some("auth.getSession"));
+            assert_eq!(
+                request.param("token").as_deref(),
+                Some("cf45fe5a3e3cebe168480a086d7fe481")
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_web_sign_in_address_carries_the_key_and_the_callback() {
+    let server = serve(Dataset::distinct(1), []).await;
+    let auth = client(&server).auth();
+    assert_eq!(
+        auth.web_approval_url(Some("https://example.org/back?from=app&x=a b")),
+        format!(
+            "https://www.last.fm/api/auth/?api_key={KEY}\
+             &cb=https%3A%2F%2Fexample.org%2Fback%3Ffrom%3Dapp%26x%3Da+b"
+        )
+    );
+    assert_eq!(
+        auth.web_approval_url(None),
+        format!("https://www.last.fm/api/auth/?api_key={KEY}")
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test]
+async fn the_mobile_sign_in_posts_the_name_and_password_and_never_shows_the_password() {
+    bounded(async {
+        const PASSWORD: &str = "SENTINEL_PASSWORD_0004";
+        let failed = br#"{"error":4,"message":"Authentication Failed - You do not have permissions to access the service"}"#;
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, AUTH_SESSION),
+                Behaviour::status(200, failed.as_slice()),
+            ],
+        )
+        .await;
+        let auth = client(&server).auth();
+
+        let query = auth.mobile_session(USER, scrobl::Password::new(PASSWORD));
+        assert!(!format!("{query:?}").contains(PASSWORD));
+        let session = query.send().await.unwrap();
+        assert_eq!(session.name(), "MyLastFMUsername");
+
+        let error = auth
+            .mobile_session(USER, scrobl::Password::new(PASSWORD))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
+        let shown = format!("{error} {error:?}");
+        assert!(!shown.contains(PASSWORD), "{shown}");
+
+        let sent = server.requests();
+        for request in &sent {
+            assert_eq!(request.verb, "POST");
+            assert!(!request.path.contains(PASSWORD));
+            assert_eq!(names(request), ["method", "username", "password", "api_sig"]);
+            assert_eq!(request.param("password").as_deref(), Some(PASSWORD));
+            assert_eq!(request.param("username").as_deref(), Some(USER));
+        }
+        assert_eq!(sent.len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_sign_in_without_a_secret_or_with_an_empty_field_is_refused_before_anything_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let unsigned = Client::builder(ApiKey::new(KEY))
+            .base_url(server.base_url())
+            .build()
+            .unwrap();
+        let error = unsigned.auth().token().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("secret"), "{error}");
+
+        let auth = client(&server).auth();
+        let error = auth
+            .session(&scrobl::AuthToken::new(" "))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("token is empty"), "{error}");
+        for (user, password, problem) in [
+            ("", "p", "username is empty"),
+            (USER, "", "password is empty"),
+        ] {
+            let error = auth
+                .mobile_session(user, scrobl::Password::new(password))
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert!(error.to_string().contains(problem), "{error}");
+        }
+        assert!(server.requests().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_debug_of_a_session_query_does_not_show_the_token() {
+    let server = serve(Dataset::distinct(1), []).await;
+    let token = scrobl::AuthToken::new("SENTINEL_TOKEN_0005");
+    let query = client(&server).auth().session(&token);
+    let debug = format!("{query:?}");
+    assert!(!debug.contains("SENTINEL_TOKEN_0005"), "{debug}");
+    assert!(debug.contains("AuthToken(<redacted>)"), "{debug}");
+}
+
+#[tokio::test]
+async fn a_password_of_spaces_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::status(200, AUTH_SESSION)]).await;
+        let auth = client(&server).auth();
+        let password = scrobl::Password::new("   ");
+        auth.mobile_session(USER, password).send().await.unwrap();
+        assert_eq!(
+            server.requests()[0].param("password").as_deref(),
+            Some("   ")
+        );
+    })
+    .await;
+}
+
+const SCROBBLE_BATCH: &[u8] = include_bytes!("../fixtures/derived/scrobble-batch.json");
+const NOW_PLAYING_REPLY: &[u8] = include_bytes!("../fixtures/derived/now-playing.json");
+
+#[tokio::test]
+async fn a_batch_of_scrobbles_is_posted_once_with_each_play_indexed() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, SCROBBLE_BATCH)],
+        )
+        .await;
+        let plays = [
+            scrobl::client::Play::new("Guns and Roses", "Paradise City", 1_287_140_447)
+                .duration(Duration::from_millis(406_500))
+                .chosen_by_user(true),
+            scrobl::client::Play::new("Cher", "Believe", 1_000_000_000)
+                .album("Believe")
+                .album_artist("Cher")
+                .track_number(1),
+        ];
+        let report = writer(&server).scrobble(&plays).send().await.unwrap();
+        assert_eq!(report.raw().body(), SCROBBLE_BATCH);
+        assert_eq!((report.accepted(), report.ignored()), (1, 1));
+
+        let sent = server.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].verb, "POST");
+        assert_eq!(
+            chosen(&sent[0])
+                .into_iter()
+                .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+                .collect::<Vec<_>>(),
+            pairs(&[
+                ("method", "track.scrobble"),
+                ("artist[0]", "Guns and Roses"),
+                ("track[0]", "Paradise City"),
+                ("timestamp[0]", "1287140447"),
+                ("duration[0]", "406"),
+                ("chosenByUser[0]", "1"),
+                ("artist[1]", "Cher"),
+                ("track[1]", "Believe"),
+                ("timestamp[1]", "1000000000"),
+                ("album[1]", "Believe"),
+                ("albumArtist[1]", "Cher"),
+                ("trackNumber[1]", "1"),
+            ])
+        );
+        assert_eq!(sent[0].param("sk").as_deref(), Some(SESSION));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_scrobble_is_never_sent_twice_and_a_bad_batch_is_never_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::html(500)]).await;
+        let writer = writer(&server);
+        let play = scrobl::client::Play::new("Cher", "Believe", 1_000_000_000);
+        let error = writer
+            .scrobble(std::slice::from_ref(&play))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+        assert_eq!(error.retry(), Retry::No);
+        assert_eq!(server.requests().len(), 1);
+
+        let too_many = vec![play; scrobl::client::MAX_BATCH + 1];
+        for plays in [&too_many[..], &[]] {
+            let error = writer.scrobble(plays).send().await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.delivery(), Some(Delivery::NotSent));
+        }
+        assert_eq!(server.requests().len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn now_playing_is_posted_once_with_what_was_set() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            [Behaviour::status(200, NOW_PLAYING_REPLY)],
+        )
+        .await;
+        let outcome = writer(&server)
+            .now_playing("Cher", "Believe")
+            .album("Believe")
+            .album_artist("Cher")
+            .track_number(1)
+            .mbid("b-id")
+            .duration(Duration::from_secs(239))
+            .send()
+            .await
+            .unwrap();
+        assert!(outcome.is_accepted());
+        let sent = server.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].verb, "POST");
+        assert_eq!(
+            chosen(&sent[0])
+                .into_iter()
+                .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+                .collect::<Vec<_>>(),
+            pairs(&[
+                ("method", "track.updateNowPlaying"),
+                ("artist", "Cher"),
+                ("track", "Believe"),
+                ("album", "Believe"),
+                ("albumArtist", "Cher"),
+                ("trackNumber", "1"),
+                ("mbid", "b-id"),
+                ("duration", "239"),
+            ])
+        );
+    })
+    .await;
+}
+
+const ACKNOWLEDGED: &[u8] = include_bytes!("../fixtures/derived/acknowledged.json");
+
+/// What a write sent, without the session and the signature.
+fn written(request: &Recorded) -> Vec<(String, String)> {
+    chosen(request)
+        .into_iter()
+        .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+        .collect()
+}
+
+#[tokio::test]
+async fn each_change_is_posted_once_with_its_parameters() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            std::iter::repeat_n(Behaviour::status(200, ACKNOWLEDGED), 8),
+        )
+        .await;
+        let writer = writer(&server);
+        let changes = [
+            writer.love("Cher", "Believe"),
+            writer.unlove("Cher", "Believe"),
+            writer.tag_artist("Cher", ["pop", "disco"]),
+            writer.tag_album("Cher", "Believe", vec!["pop".to_owned()]),
+            writer.tag_track("Cher", "Believe", ["pop"]),
+            writer.untag_artist("Cher", "pop"),
+            writer.untag_album("Cher", "Believe", "pop"),
+            writer.untag_track("Cher", "Believe", "pop"),
+        ];
+        for change in changes {
+            change.send().await.unwrap();
+        }
+        let sent = server.requests();
+        assert!(sent.iter().all(|r| r.verb == "POST"));
+        assert!(
+            sent.iter()
+                .all(|r| r.param("sk").as_deref() == Some(SESSION))
+        );
+        let sent: Vec<_> = sent.iter().map(written).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "track.love"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "track.unlove"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "artist.addTags"),
+                    ("artist", "Cher"),
+                    ("tags", "pop,disco")
+                ]),
+                pairs(&[
+                    ("method", "album.addTags"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.addTags"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "artist.removeTag"),
+                    ("artist", "Cher"),
+                    ("tag", "pop")
+                ]),
+                pairs(&[
+                    ("method", "album.removeTag"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tag", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.removeTag"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tag", "pop"),
+                ]),
+            ]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_change_is_never_sent_twice_and_bad_tags_are_never_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::html(500)]).await;
+        let writer = writer(&server);
+        let error = writer.love("Cher", "Believe").send().await.unwrap_err();
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+        assert_eq!(error.retry(), Retry::No);
+        assert_eq!(server.requests().len(), 1);
+
+        let eleven: Vec<String> = (0..=scrobl::client::MAX_TAGS)
+            .map(|i| i.to_string())
+            .collect();
+        for tags in [vec![], eleven, vec!["rock, pop".to_owned()]] {
+            let error = writer
+                .tag_track("Cher", "Believe", tags)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.delivery(), Some(Delivery::NotSent));
+        }
+        assert_eq!(server.requests().len(), 1);
     })
     .await;
 }

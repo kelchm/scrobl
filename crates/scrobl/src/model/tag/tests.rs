@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::ErrorKind;
+use crate::model::decode;
 use crate::protocol::{self, HttpResponse, MethodSpec, Request};
 
 // Fixtures. Provenance for each:
@@ -41,31 +42,31 @@ fn raw(spec: &'static MethodSpec, body: impl Into<Vec<u8>>) -> Raw {
 }
 
 fn info(body: &Value) -> Result<TagInfo, Error> {
-    TagInfo::decode(&raw(&methods::TAG_GET_INFO, body.to_string()))
+    decode::tag_get_info(&raw(&methods::TAG_GET_INFO, body.to_string()))
 }
 
-fn similar(body: &Value) -> Result<SimilarTags, Error> {
-    SimilarTags::decode(&raw(&methods::TAG_GET_SIMILAR, body.to_string()))
+fn similar(body: &Value) -> Result<List<Tag>, Error> {
+    decode::tag_get_similar(&raw(&methods::TAG_GET_SIMILAR, body.to_string()))
 }
 
-fn albums(body: &Value) -> Result<TagTopAlbumsPage, Error> {
-    TagTopAlbumsPage::decode(&raw(&methods::TAG_GET_TOP_ALBUMS, body.to_string()))
+fn albums(body: &Value) -> Result<Page<Album>, Error> {
+    decode::tag_get_top_albums(&raw(&methods::TAG_GET_TOP_ALBUMS, body.to_string()))
 }
 
-fn artists(body: &Value) -> Result<TagTopArtistsPage, Error> {
-    TagTopArtistsPage::decode(&raw(&methods::TAG_GET_TOP_ARTISTS, body.to_string()))
+fn artists(body: &Value) -> Result<Page<Artist>, Error> {
+    decode::tag_get_top_artists(&raw(&methods::TAG_GET_TOP_ARTISTS, body.to_string()))
 }
 
-fn tracks(body: &Value) -> Result<TagTopTracksPage, Error> {
-    TagTopTracksPage::decode(&raw(&methods::TAG_GET_TOP_TRACKS, body.to_string()))
+fn tracks(body: &Value) -> Result<Page<Track>, Error> {
+    decode::tag_get_top_tracks(&raw(&methods::TAG_GET_TOP_TRACKS, body.to_string()))
 }
 
-fn all(body: &Value) -> Result<AllTags, Error> {
-    AllTags::decode(&raw(&methods::TAG_GET_TOP_TAGS, body.to_string()))
+fn all(body: &Value) -> Result<List<Tag>, Error> {
+    decode::tag_get_top_tags(&raw(&methods::TAG_GET_TOP_TAGS, body.to_string()))
 }
 
-fn weeks(body: &Value) -> Result<TagWeeklyChartList, Error> {
-    TagWeeklyChartList::decode(&raw(&methods::TAG_GET_WEEKLY_CHART_LIST, body.to_string()))
+fn weeks(body: &Value) -> Result<List<Window>, Error> {
+    decode::tag_get_weekly_chart_list(&raw(&methods::TAG_GET_WEEKLY_CHART_LIST, body.to_string()))
 }
 
 /// A page of `total` rows in all, of which `rows` are on this one.
@@ -116,9 +117,9 @@ fn names<T>(result: Result<T, Error>, field: &str) {
 
 #[test]
 fn the_derived_tag_decodes() {
-    let tag = TagInfo::decode(&raw(&methods::TAG_GET_INFO, INFO)).unwrap();
-    assert_eq!(tag.name(), "indie");
-    assert_eq!((tag.total(), tag.reach()), (2_068_156, 260_909));
+    let tag = decode::tag_get_info(&raw(&methods::TAG_GET_INFO, INFO)).unwrap();
+    assert_eq!(tag.tag().name(), "indie");
+    assert_eq!((tag.taggings(), tag.reach()), (2_068_156, 260_909));
     let summary = tag.summary().unwrap();
     assert!(summary.starts_with("An invented description"));
     assert!(summary.ends_with("Read more on Last.fm</a>."));
@@ -133,7 +134,7 @@ fn a_tag_may_lack_a_description_and_its_counts_may_be_strings() {
     body["tag"]["wiki"]["content"] = json!("");
     body["tag"]["total"] = json!("7");
     let tag = info(&body).unwrap();
-    assert_eq!(tag.total(), 7);
+    assert_eq!(tag.taggings(), 7);
     assert_eq!(tag.summary(), Some("Summary."));
     assert_eq!(tag.content(), None);
 
@@ -168,9 +169,9 @@ fn a_malformed_tag_names_the_field() {
 
 #[test]
 fn the_recorded_similar_tags_are_none() {
-    let list = SimilarTags::decode(&raw(&methods::TAG_GET_SIMILAR, SIMILAR)).unwrap();
-    assert_eq!(list.tag(), "n/a");
-    assert!(list.tags().is_empty());
+    let list = decode::tag_get_similar(&raw(&methods::TAG_GET_SIMILAR, SIMILAR)).unwrap();
+    assert_eq!(list.subject(), Some("n/a"));
+    assert!(list.items().is_empty());
 }
 
 #[test]
@@ -184,8 +185,8 @@ fn similar_tags_decode_as_the_official_sample_lays_them_out() {
         "@attr": {"tag": "disco"}
     }});
     let list = similar(&body).unwrap();
-    assert_eq!(list.tag(), "disco");
-    let rows: Vec<_> = list.tags().iter().map(|t| (t.name(), t.url())).collect();
+    assert_eq!(list.subject(), Some("disco"));
+    let rows: Vec<_> = list.items().iter().map(|t| (t.name(), t.url())).collect();
     assert_eq!(
         rows,
         [
@@ -193,11 +194,11 @@ fn similar_tags_decode_as_the_official_sample_lays_them_out() {
             ("funk", None)
         ]
     );
-    assert_eq!(list.tags()[0].json()["streamable"], "1");
+    assert_eq!(list.items()[0].json()["streamable"], "1");
 
     let one =
         similar(&json!({"similartags": {"tag": {"name": "funk"}, "@attr": {"tag": "disco"}}}));
-    assert_eq!(one.unwrap().tags().len(), 1);
+    assert_eq!(one.unwrap().items().len(), 1);
 
     names(
         similar(&json!({"similartags": {"tag": [{"url": SECRET}], "@attr": {"tag": "disco"}}})),
@@ -215,77 +216,76 @@ fn similar_tags_decode_as_the_official_sample_lays_them_out() {
 
 #[test]
 fn the_recorded_albums_of_a_tag_decode() {
-    let page = TagTopAlbumsPage::decode(&raw(&methods::TAG_GET_TOP_ALBUMS, ALBUMS)).unwrap();
-    assert_eq!(page.tag(), "indie");
-    let attr = page.attr();
+    let page = decode::tag_get_top_albums(&raw(&methods::TAG_GET_TOP_ALBUMS, ALBUMS)).unwrap();
+    assert_eq!(page.subject(), Some("indie"));
     assert_eq!(
         (
-            attr.page(),
-            attr.per_page(),
-            attr.total_pages(),
-            attr.total()
+            page.number(),
+            page.per_page(),
+            page.total_pages(),
+            page.total()
         ),
         (1, 3, 7067, 21_199)
     );
     let rows: Vec<_> = page
-        .albums()
+        .items()
         .iter()
-        .map(|a| {
-            (
-                a.album().title(),
-                a.artist().name(),
-                a.album().mbid().is_some(),
-            )
-        })
+        .map(|a| (a.name(), a.artist().unwrap().name(), a.mbid().is_some()))
         .collect();
     // The second row has no `mbid` member at all.
     assert_eq!(
         rows,
         [
-            (Some("Le Tigre"), "Le Tigre", true),
-            (Some("Inside In / Inside Out"), "The Kooks", false),
-            (Some("Beacon"), "Two Door Cinema Club", true)
+            ("Le Tigre", "Le Tigre", true),
+            ("Inside In / Inside Out", "The Kooks", false),
+            ("Beacon", "Two Door Cinema Club", true)
         ]
     );
     assert_eq!(
-        page.albums()[1].album().url(),
+        page.items()[1].url(),
         Some("https://www.last.fm/music/The+Kooks/Inside+In+%2F+Inside+Out")
     );
-    assert_eq!(page.albums()[0].album().images().len(), 4);
+    assert_eq!(page.items()[0].images().len(), 4);
     // The rank the model does not read is still in the row.
-    assert_eq!(page.albums()[2].json()["@attr"]["rank"], "3");
+    assert_eq!(page.items()[2].json()["@attr"]["rank"], "3");
 }
 
 #[test]
 fn the_recorded_page_of_a_tag_nobody_used_is_empty() {
-    let page = TagTopAlbumsPage::decode(&raw(&methods::TAG_GET_TOP_ALBUMS, UNKNOWN)).unwrap();
-    assert_eq!(page.tag(), "zzqqxx-no-such-tag-scrobl");
-    assert!(page.albums().is_empty());
-    assert_eq!((page.attr().total(), page.attr().total_pages()), (0, 0));
+    let page = decode::tag_get_top_albums(&raw(&methods::TAG_GET_TOP_ALBUMS, UNKNOWN)).unwrap();
+    assert_eq!(page.subject(), Some("zzqqxx-no-such-tag-scrobl"));
+    assert!(page.items().is_empty());
+    assert_eq!((page.total(), page.total_pages()), (0, 0));
 }
 
 #[test]
 fn the_recorded_artists_and_tracks_of_a_tag_decode() {
-    let page = TagTopArtistsPage::decode(&raw(&methods::TAG_GET_TOP_ARTISTS, ARTISTS)).unwrap();
-    assert_eq!((page.tag(), page.attr().total()), ("indie", 82_722));
-    let names: Vec<_> = page.artists().iter().map(|a| a.artist().name()).collect();
+    let page = decode::tag_get_top_artists(&raw(&methods::TAG_GET_TOP_ARTISTS, ARTISTS)).unwrap();
+    assert_eq!((page.subject(), page.total()), (Some("indie"), 82_722));
+    let names: Vec<_> = page.items().iter().map(|a| a.name()).collect();
     assert_eq!(
         names,
         ["The Neighbourhood", "Arctic Monkeys", "Lana Del Rey"]
     );
     assert_eq!(
-        page.artists()[0].artist().mbid(),
+        page.items()[0].mbid(),
         Some("53b06622-ec51-4924-a554-58b0affde6b5")
     );
-    assert_eq!(page.artists()[0].artist().images().len(), 5);
-    assert_eq!(page.artists()[0].json()["streamable"], "0");
+    assert_eq!(page.items()[0].images().len(), 5);
+    assert_eq!(page.items()[0].json()["streamable"], "0");
 
-    let page = TagTopTracksPage::decode(&raw(&methods::TAG_GET_TOP_TRACKS, TRACKS)).unwrap();
-    assert_eq!((page.tag(), page.attr().total()), ("indie", 1296));
+    let page = decode::tag_get_top_tracks(&raw(&methods::TAG_GET_TOP_TRACKS, TRACKS)).unwrap();
+    assert_eq!((page.subject(), page.total()), (Some("indie"), 1296));
     let rows: Vec<_> = page
-        .tracks()
+        .items()
         .iter()
-        .map(|t| (t.track().name(), t.artist().name(), t.duration()))
+        .map(|t| {
+            (
+                t.name(),
+                t.artist().name(),
+                t.duration().map(|length| length.as_secs()),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
@@ -299,9 +299,9 @@ fn the_recorded_artists_and_tracks_of_a_tag_decode() {
             )
         ]
     );
-    assert_eq!(page.tracks()[0].track().images().len(), 4);
+    assert_eq!(page.items()[0].images().len(), 4);
     // What the model does not name is still in the row.
-    let row = page.tracks()[2].json();
+    let row = page.items()[2].json();
     assert_eq!(row["streamable"]["fulltrack"], "0");
     assert_eq!(row["@attr"]["rank"], "3");
 }
@@ -309,13 +309,13 @@ fn the_recorded_artists_and_tracks_of_a_tag_decode() {
 #[test]
 fn a_page_of_a_tag_may_be_one_object_and_names_what_is_malformed() {
     let one = albums(&paged("albums", "album", album_row("Only"), 1)).unwrap();
-    assert_eq!(one.albums()[0].album().title(), Some("Only"));
+    assert_eq!(one.items()[0].name(), "Only");
     let one = artists(&paged("topartists", "artist", artist_row("Only"), 1)).unwrap();
-    assert_eq!(one.artists()[0].artist().name(), "Only");
+    assert_eq!(one.items()[0].name(), "Only");
     let mut track = track_row("Only");
     track["duration"] = json!("0");
     let one = tracks(&paged("tracks", "track", track, 1)).unwrap();
-    assert_eq!(one.tracks()[0].duration(), None);
+    assert_eq!(one.items()[0].duration(), None);
 
     let mut row = album_row("A");
     row["artist"] = json!(SECRET);
@@ -349,12 +349,12 @@ fn a_page_of_a_tag_may_be_one_object_and_names_what_is_malformed() {
 
 #[test]
 fn the_recorded_list_of_every_tag_decodes() {
-    let list = AllTags::decode(&raw(&methods::TAG_GET_TOP_TAGS, ALL)).unwrap();
-    assert_eq!((list.offset(), list.total()), (0, 2_896_879));
+    let list = decode::tag_get_top_tags(&raw(&methods::TAG_GET_TOP_TAGS, ALL)).unwrap();
+    assert_eq!(list.subject(), None);
     let rows: Vec<_> = list
-        .tags()
+        .items()
         .iter()
-        .map(|t| (t.name(), t.count(), t.reach()))
+        .map(|t| (t.name(), t.taggings().unwrap(), t.reach().unwrap()))
         .collect();
     assert_eq!(
         rows,
@@ -364,13 +364,13 @@ fn the_recorded_list_of_every_tag_decodes() {
             ("seen live", 2_200_630, 82_570)
         ]
     );
-    assert_eq!(list.tags()[0].json()["count"], 4_077_917);
+    assert_eq!(list.items()[0].json()["count"], 4_077_917);
 }
 
 #[test]
 fn a_malformed_list_of_every_tag_names_the_field() {
     let row = json!({"name": "t", "count": 7, "reach": 3});
-    assert_eq!(all(&all_of(row.clone())).unwrap().tags().len(), 1);
+    assert_eq!(all(&all_of(row.clone())).unwrap().items().len(), 1);
 
     for (field, path) in [
         ("name", "toptags.tag[0].name"),
@@ -409,25 +409,44 @@ fn a_list_of_every_tag_is_empty_only_where_its_attr_allows() {
     ] {
         let mut body = all_of(json!([]));
         body["toptags"]["@attr"][member] = value;
-        assert!(all(&body).unwrap().tags().is_empty(), "{member}");
+        assert!(all(&body).unwrap().items().is_empty(), "{member}");
     }
+    // A list read from part of the way down counts its places from there.
+    let mut body = all_of(json!([
+        {"name": "t", "count": 7, "reach": 3},
+        {"name": "u", "count": 6, "reach": 2}
+    ]));
+    let from_the_top = all(&body).unwrap();
+    let places: Vec<_> = from_the_top
+        .ranked()
+        .map(|(place, tag)| (place, tag.name()))
+        .collect();
+    assert_eq!(places, [(1, "t"), (2, "u")]);
+    body["toptags"]["@attr"]["offset"] = json!(7);
+    let further = all(&body).unwrap();
+    let places: Vec<_> = further
+        .ranked()
+        .map(|(place, tag)| (place, tag.name()))
+        .collect();
+    assert_eq!(places, [(8, "t"), (9, "u")]);
+
     // The number asked for is not required, but a malformed one is named.
     let mut body = all_of(json!([{"name": "t", "count": 7, "reach": 3}]));
     body["toptags"]["@attr"]
         .as_object_mut()
         .unwrap()
         .remove("num_res");
-    assert_eq!(all(&body).unwrap().tags().len(), 1);
+    assert_eq!(all(&body).unwrap().items().len(), 1);
     body["toptags"]["@attr"]["num_res"] = json!(SECRET);
     names(all(&body), "toptags.@attr.num_res");
 }
 
 #[test]
 fn the_derived_list_of_weeks_decodes() {
-    let list =
-        TagWeeklyChartList::decode(&raw(&methods::TAG_GET_WEEKLY_CHART_LIST, WEEKS)).unwrap();
-    assert_eq!(list.tag(), "indie");
-    let spans: Vec<_> = list.ranges().iter().map(|w| (w.from(), w.to())).collect();
+    let list = decode::tag_get_weekly_chart_list(&raw(&methods::TAG_GET_WEEKLY_CHART_LIST, WEEKS))
+        .unwrap();
+    assert_eq!(list.subject(), Some("indie"));
+    let spans: Vec<_> = list.items().iter().map(|w| (w.from(), w.to())).collect();
     assert_eq!(
         spans,
         [
@@ -436,8 +455,8 @@ fn the_derived_list_of_weeks_decodes() {
             (1_792_929_600, 1_793_534_400),
             (1_793_534_400, 1_794_139_200)
         ]
+        .map(|(from, to)| (Some(from), Some(to)))
     );
-    assert_eq!(list.ranges()[0].json()["#text"], "");
 
     names(
         weeks(
@@ -456,19 +475,25 @@ fn the_derived_list_of_weeks_decodes() {
 fn a_response_to_another_method_is_refused() {
     // A user's list of weeks has the same root as a tag's.
     let raw = raw(&methods::USER_GET_WEEKLY_CHART_LIST, WEEKS);
-    let error = TagWeeklyChartList::decode(&raw).unwrap_err();
+    let error = decode::tag_get_weekly_chart_list(&raw).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert_eq!(error.method(), Some("user.getWeeklyChartList"));
 
     let raw = self::raw(&methods::TAG_GET_TOP_ARTISTS, ARTISTS);
     assert_eq!(
-        TagTopTracksPage::decode(&raw).unwrap_err().kind(),
+        decode::tag_get_top_tracks(&raw).unwrap_err().kind(),
         ErrorKind::Decode
     );
-    assert_eq!(TagInfo::decode(&raw).unwrap_err().kind(), ErrorKind::Decode);
-    assert_eq!(AllTags::decode(&raw).unwrap_err().kind(), ErrorKind::Decode);
     assert_eq!(
-        SimilarTags::decode(&raw).unwrap_err().kind(),
+        decode::tag_get_info(&raw).unwrap_err().kind(),
+        ErrorKind::Decode
+    );
+    assert_eq!(
+        decode::tag_get_top_tags(&raw).unwrap_err().kind(),
+        ErrorKind::Decode
+    );
+    assert_eq!(
+        decode::tag_get_similar(&raw).unwrap_err().kind(),
         ErrorKind::Decode
     );
 }
@@ -498,12 +523,26 @@ fn debug_leaves_out_the_text_of_the_response() {
     .unwrap();
     let shown = format!(
         "{info:?} {similar:?} {:?} {albums:?} {:?} {artists:?} {:?} {tracks:?} {:?} {all:?} {:?} {weeks:?}",
-        similar.tags()[0],
-        albums.albums()[0],
-        artists.artists()[0],
-        tracks.tracks()[0],
-        all.tags()[0],
+        similar.items()[0],
+        albums.items()[0],
+        artists.items()[0],
+        tracks.items()[0],
+        all.items()[0],
     );
     assert!(!shown.contains(SECRET), "{shown}");
-    assert!(shown.contains("TagTopAlbumsPage"), "{shown}");
+    assert!(shown.contains("Page {"), "{shown}");
+}
+
+#[test]
+fn what_is_said_about_a_tag_wraps_the_tag() {
+    let info = decode::tag_get_info(&raw(&methods::TAG_GET_INFO, INFO)).unwrap();
+    let tag: &Tag = info.as_ref();
+    // The counts are plain on the answer and present on the tag.
+    assert_eq!(
+        (info.taggings(), tag.taggings()),
+        (2_068_156, Some(2_068_156))
+    );
+    assert_eq!((info.reach(), tag.reach()), (260_909, Some(260_909)));
+    assert_eq!(info.json()["name"], "indie");
+    assert_eq!(info.into_tag().name(), "indie");
 }

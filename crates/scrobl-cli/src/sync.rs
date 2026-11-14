@@ -29,8 +29,9 @@
 //! [`loved`] reads the tracks the user has loved, which is a list of its
 //! own and not part of the history, and replaces the copy in the database.
 
-use scrobl::history::{ScanPage, ScanSummary, Window};
-use scrobl::{Client, ErrorKind};
+use scrobl::history::{ScanSummary, Window};
+use scrobl::model::HistoryPage;
+use scrobl::{Client, ErrorKind, Response};
 
 use crate::Error;
 use crate::store::{Change, Store};
@@ -176,7 +177,7 @@ async fn count(client: &Client, user: &str, from: u64, to: u64) -> Result<u64, E
         .limit(1)
         .send()
         .await?;
-    Ok(page.attr().total())
+    Ok(page.total())
 }
 
 /// Reads `[from, to)` completely, as one scan.
@@ -191,7 +192,7 @@ async fn read(
     from: u64,
     to: u64,
     page_size: u32,
-) -> Result<(ScanSummary, Vec<ScanPage>), Error> {
+) -> Result<(ScanSummary, Vec<Response<HistoryPage>>), Error> {
     let mut attempt = 1;
     loop {
         match scan(client, user, from, to, page_size).await {
@@ -215,7 +216,7 @@ async fn scan(
     from: u64,
     to: u64,
     page_size: u32,
-) -> Result<(ScanSummary, Vec<ScanPage>), scrobl::Error> {
+) -> Result<(ScanSummary, Vec<Response<HistoryPage>>), scrobl::Error> {
     let mut scan = client
         .user(user)
         .recent_tracks()
@@ -247,7 +248,7 @@ pub async fn loved(client: &Client, store: &mut Store, user: &str) -> Result<u64
             .page(pages.len() as u32 + 1)
             .send()
             .await?;
-        let (rows, total) = (page.tracks().len() as u64, page.attr().total());
+        let (rows, total) = (page.len() as u64, page.total());
         read += rows;
         pages.push(page);
         if rows == 0 || read >= total {
