@@ -25,13 +25,13 @@ const IMPLIED: &[&str] = &["api_key", "api_sig", "sk", "method", "format", "call
 /// Methods whose typed model or verification level is above the default, as
 /// `(method, typed model, status)`. Every other method is `—` and `inventoried`.
 const LEVELS: &[(&str, &str, &str)] = &[
+    ("album.addTags", "`()`", "typed-derived"),
     ("album.getInfo", "`model::AlbumInfo`", "live-verified"),
     ("album.getTags", "`model::List<Tag>`", "live-verified"),
     ("album.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("album.removeTag", "`()`", "typed-derived"),
     ("album.search", "`model::Page<Album>`", "live-verified"),
-    ("auth.getMobileSession", "`model::Session`", "typed-derived"),
-    ("auth.getSession", "`model::Session`", "live-verified"),
-    ("auth.getToken", "`AuthToken`", "live-verified"),
+    ("artist.addTags", "`()`", "typed-derived"),
     ("artist.getCorrection", "`model::Artist`", "live-verified"),
     ("artist.getInfo", "`model::ArtistInfo`", "live-verified"),
     (
@@ -55,7 +55,11 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::Page<Track>`",
         "live-verified",
     ),
+    ("artist.removeTag", "`()`", "typed-derived"),
     ("artist.search", "`model::Page<Artist>`", "live-verified"),
+    ("auth.getMobileSession", "`model::Session`", "typed-derived"),
+    ("auth.getSession", "`model::Session`", "live-verified"),
+    ("auth.getToken", "`AuthToken`", "live-verified"),
     (
         "chart.getTopArtists",
         "`model::Page<Artist>`",
@@ -97,6 +101,7 @@ const LEVELS: &[(&str, &str, &str)] = &[
         "`model::List<Window>`",
         "live-verified",
     ),
+    ("track.addTags", "`()`", "typed-derived"),
     ("track.getCorrection", "`model::Track`", "live-verified"),
     ("track.getInfo", "`model::TrackInfo`", "live-verified"),
     (
@@ -106,8 +111,11 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ),
     ("track.getTags", "`model::List<Tag>`", "live-verified"),
     ("track.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("track.love", "`()`", "typed-derived"),
+    ("track.removeTag", "`()`", "typed-derived"),
     ("track.scrobble", "`model::ScrobbleReport`", "live-verified"),
     ("track.search", "`model::Page<Track>`", "live-verified"),
+    ("track.unlove", "`()`", "typed-derived"),
     (
         "track.updateNowPlaying",
         "`model::Outcome`",

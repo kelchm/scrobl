@@ -14,7 +14,7 @@ This crate stores nothing. To keep a listening history in a SQLite file, see [`s
 - Every method that reads is typed, all forty-four of them: a user (scrobble history, profile, friends, loved tracks, top lists of all time or of one week, tagged items, library), an artist, an album, a track, a tag, a country's charts, the charts of the whole service, and the three searches. All have been run against the live service.
 - Signing a user in is typed too: the desktop, web and mobile flows under `client.auth()`, which end in a session key. The desktop flow has been run against the live service.
 - Scrobbling and now playing are typed on a `Writer`. Both have been run against the live service.
-- Not built yet: typed forms of the eight methods that love, unlove and tag. They can be called raw through a `Writer`.
+- Loving, unloving and tagging are typed on a `Writer` too. Not yet run against the live service.
 
 ## Install
 

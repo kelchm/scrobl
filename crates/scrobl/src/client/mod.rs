@@ -294,6 +294,7 @@ mod artist;
 mod auth;
 mod builder;
 mod cause;
+mod change;
 mod charts;
 mod country;
 mod pacing;
@@ -320,6 +321,7 @@ pub use artist::{
 };
 pub use auth::{AuthHandle, AuthMobileSessionQuery, AuthSessionQuery, AuthTokenQuery};
 pub use builder::ClientBuilder;
+pub use change::{ChangeQuery, MAX_TAGS};
 pub use charts::{
     ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
 };

@@ -11,6 +11,7 @@
 mod album;
 mod artist;
 mod auth;
+mod change;
 mod chart;
 mod entity;
 mod geo;
@@ -69,6 +70,10 @@ pub mod decode {
         artist_get_top_albums, artist_get_top_tags, artist_get_top_tracks,
     };
     pub use super::auth::{auth_get_mobile_session, auth_get_session, auth_get_token};
+    pub use super::change::{
+        album_add_tags, album_remove_tag, artist_add_tags, artist_remove_tag, track_add_tags,
+        track_love, track_remove_tag, track_unlove,
+    };
     pub use super::chart::{chart_get_top_artists, chart_get_top_tags, chart_get_top_tracks};
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;

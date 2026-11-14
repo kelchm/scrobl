@@ -4113,3 +4113,122 @@ async fn now_playing_is_posted_once_with_what_was_set() {
     })
     .await;
 }
+
+const ACKNOWLEDGED: &[u8] = include_bytes!("../fixtures/derived/acknowledged.json");
+
+/// What a write sent, without the session and the signature.
+fn written(request: &Recorded) -> Vec<(String, String)> {
+    chosen(request)
+        .into_iter()
+        .filter(|(name, _)| !["sk", "api_sig"].contains(&name.as_str()))
+        .collect()
+}
+
+#[tokio::test]
+async fn each_change_is_posted_once_with_its_parameters() {
+    bounded(async {
+        let server = serve(
+            Dataset::distinct(1),
+            std::iter::repeat_n(Behaviour::status(200, ACKNOWLEDGED), 8),
+        )
+        .await;
+        let writer = writer(&server);
+        let changes = [
+            writer.love("Cher", "Believe"),
+            writer.unlove("Cher", "Believe"),
+            writer.tag_artist("Cher", ["pop", "disco"]),
+            writer.tag_album("Cher", "Believe", vec!["pop".to_owned()]),
+            writer.tag_track("Cher", "Believe", ["pop"]),
+            writer.untag_artist("Cher", "pop"),
+            writer.untag_album("Cher", "Believe", "pop"),
+            writer.untag_track("Cher", "Believe", "pop"),
+        ];
+        for change in changes {
+            change.send().await.unwrap();
+        }
+        let sent = server.requests();
+        assert!(sent.iter().all(|r| r.verb == "POST"));
+        assert!(
+            sent.iter()
+                .all(|r| r.param("sk").as_deref() == Some(SESSION))
+        );
+        let sent: Vec<_> = sent.iter().map(written).collect();
+        assert_eq!(
+            sent,
+            [
+                pairs(&[
+                    ("method", "track.love"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "track.unlove"),
+                    ("artist", "Cher"),
+                    ("track", "Believe")
+                ]),
+                pairs(&[
+                    ("method", "artist.addTags"),
+                    ("artist", "Cher"),
+                    ("tags", "pop,disco")
+                ]),
+                pairs(&[
+                    ("method", "album.addTags"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.addTags"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tags", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "artist.removeTag"),
+                    ("artist", "Cher"),
+                    ("tag", "pop")
+                ]),
+                pairs(&[
+                    ("method", "album.removeTag"),
+                    ("artist", "Cher"),
+                    ("album", "Believe"),
+                    ("tag", "pop"),
+                ]),
+                pairs(&[
+                    ("method", "track.removeTag"),
+                    ("artist", "Cher"),
+                    ("track", "Believe"),
+                    ("tag", "pop"),
+                ]),
+            ]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_change_is_never_sent_twice_and_bad_tags_are_never_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::html(500)]).await;
+        let writer = writer(&server);
+        let error = writer.love("Cher", "Believe").send().await.unwrap_err();
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+        assert_eq!(error.retry(), Retry::No);
+        assert_eq!(server.requests().len(), 1);
+
+        let eleven: Vec<String> = (0..=scrobl::client::MAX_TAGS)
+            .map(|i| i.to_string())
+            .collect();
+        for tags in [vec![], eleven, vec!["rock, pop".to_owned()]] {
+            let error = writer
+                .tag_track("Cher", "Believe", tags)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert_eq!(error.delivery(), Some(Delivery::NotSent));
+        }
+        assert_eq!(server.requests().len(), 1);
+    })
+    .await;
+}
