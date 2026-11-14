@@ -39,7 +39,7 @@ jobs:
       # A version is a commit of `main`. A tag put anywhere else would
       # publish what was never merged, and that could not be taken back.
       - run: git merge-base --is-ancestor HEAD origin/main
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       # The tag is the one version every crate has.
       - run: >
           test "${TAG#v}" = "$(cargo metadata --no-deps --format-version 1
