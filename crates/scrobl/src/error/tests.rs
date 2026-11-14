@@ -422,6 +422,7 @@ fn api_codes_have_their_documented_numbers() {
         (ApiErrorCode::SERVICE_OFFLINE, 11),
         (ApiErrorCode::INVALID_SIGNATURE, 13),
         (ApiErrorCode::UNAUTHORIZED_TOKEN, 14),
+        (ApiErrorCode::TOKEN_EXPIRED, 15),
         (ApiErrorCode::TEMPORARY_ERROR, 16),
         (ApiErrorCode::LOGIN_REQUIRED, 17),
         (ApiErrorCode::SUSPENDED_KEY, 26),

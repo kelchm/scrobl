@@ -10,6 +10,7 @@
 
 mod album;
 mod artist;
+mod auth;
 mod chart;
 mod entity;
 mod geo;
@@ -23,6 +24,7 @@ mod user;
 
 pub use album::AlbumInfo;
 pub use artist::{ArtistInfo, SimilarArtist, TopTag};
+pub use auth::Session;
 pub use entity::{Album, Artist, Image, Images, Tag, Track};
 pub use geo::{CountryArtist, CountryTrack};
 pub use page::{List, Page};
@@ -64,6 +66,7 @@ pub mod decode {
         artist_get_correction, artist_get_info, artist_get_similar, artist_get_tags,
         artist_get_top_albums, artist_get_top_tags, artist_get_top_tracks,
     };
+    pub use super::auth::{auth_get_mobile_session, auth_get_session, auth_get_token};
     pub use super::chart::{chart_get_top_artists, chart_get_top_tags, chart_get_top_tracks};
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;

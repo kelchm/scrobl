@@ -33,9 +33,9 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `artist.removeTag` | POST | API key, signature, session | yes | — | artist, tag | — | inventoried |
 | `artist.search` | GET | API key | — | page, limit | _limit_, _page_, artist | `model::Page<Artist>` | live-verified |
 | **auth** | | | | | | | |
-| `auth.getMobileSession` | POST | API key, signature | — | — | password, username | — | inventoried |
-| `auth.getSession` | GET | API key, signature | — | — | token | — | inventoried |
-| `auth.getToken` | GET | API key, signature | — | — | — | — | inventoried |
+| `auth.getMobileSession` | POST | API key, signature | — | — | password, username | `model::Session` | typed-derived |
+| `auth.getSession` | GET | API key, signature | — | — | token | `model::Session` | live-verified |
+| `auth.getToken` | GET | API key, signature | — | — | — | `AuthToken` | live-verified |
 | **chart** | | | | | | | |
 | `chart.getTopArtists` | GET | API key | — | page, limit | _page_, _limit_ | `model::Page<Artist>` | live-verified |
 | `chart.getTopTags` | GET | API key | — | page, limit | _page_, _limit_ | `model::List<Tag>` | live-verified |

@@ -291,8 +291,15 @@ The calls so far. There are 46 for the forty-four typed methods, which are every
 | `client.album(artist, title)`, `client.album_mbid(id)` | `info`, `top_tags`, `tags_of(user)` |
 | `client.track(artist, title)`, `client.track_mbid(id)` | `info`, `correction`, `similar`, `top_tags`, `tags_of(user)` |
 | `client.search()` | `artists(query)`, `albums(query)`, `tracks(query)` |
+| `client.auth()` | `token`, `session(token)`, `mobile_session(username, password)`, and the addresses `approval_url(token)` and `web_approval_url(callback)` |
 
-Still to come: `client.auth()` for the three methods that sign a user in, and the ten writes on a `Writer`.
+Still to come: the ten writes on a `Writer`.
+
+Signing in has three rules of its own:
+
+- **Not approved yet is an answer.** `auth.session(token).send()` gives `Ok(None)` while the user has not approved the token, which the service says with error 14. The token is not spent, so the same call is made again.
+- **A token and a password are secrets.** `AuthToken` and `Password` are redacted like `ApiKey`, and `Session::key()` is a `SessionKey`. A `Session` keeps no JSON, because its JSON holds the key in plain text; the exact reply is on the `Response`.
+- **The library makes no browser or callback.** It builds the two addresses and makes the exchanges. Opening the address, receiving the web callback and storing the key are the application's.
 
 Rules:
 
@@ -479,21 +486,21 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 
 `Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both. Managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`. Secrets never cross IPC because the library's types do not serialize them.
 
-Authentication and writes (not built; shape only, to be checked against the live service):
+Signing in, and writes (writes not built; shape only, to be checked against the live service):
 
 ```rust
 // Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
 let auth = client.auth();
-let token = auth.token().send().await?;
-open_browser(&token.authorization_url());
+let token = auth.token().send().await?.into_value();
+open_browser(&auth.approval_url(&token));
 let session = loop {
-    match auth.session(&token).send().await?.into_value() {
-        Some(session) => break session,      // approved
-        None => wait_a_moment().await,       // not yet: an ordinary answer, not an error
+    match auth.session(&token).send().await? {
+        Some(session) => break session.into_value(),   // approved
+        None => wait_a_moment().await,                 // not yet: an ordinary answer, not an error
     }
 };
 
-let writer = writer.with_session(session.key().clone());   // typed writes exist only on a Writer
+let writer = writer.with_session(session.into_key());   // typed writes exist only on a Writer
 let play = Play::new("Cher", "Believe", started_at).album("Believe");
 match writer.scrobble(&[play]).send().await {              // at most 50 per call
     Ok(report) => for outcome in report.outcomes() {
@@ -577,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Forty-four have one so far, which is every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four have been read from the live service through the client. The thirteen left are the three that sign a user in and the ten that change an account. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Forty-seven have one so far: the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so has the desktop sign-in, `auth.getToken` and `auth.getSession`. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The ten left are the ten that change an account. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
@@ -593,13 +600,15 @@ A model can be first written from the official samples and community documentati
 | `fixture-verified` | A typed model checked against a recorded response |
 | `live-verified` | Exercised against Last.fm under explicit owner approval |
 
-Each of the forty-four is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
+Each of the forty-four reads is tested against a response the owner recorded, from their own account or from what the service shows anyone, with these exceptions:
 
 - `user.getFriends`: a friends list names other people, so the fixture follows a recording with every name, date and address in it invented.
 - The tagged albums of `user.getPersonalTags`: the owner has tagged no album, so that page is made the same way.
 - `user.getWeeklyChartList` and `tag.getWeeklyChartList`: each fixture is four weeks of the 1134 recorded.
 - `tag.getInfo`, `artist.getInfo`, `album.getInfo` and `track.getInfo`: a description is text that users of the service wrote, so each fixture follows a recording with that text invented. A small album and a track nobody has described are recorded as they came.
 - `artist.getTags` and `album.getTags`: the owner has tagged neither, so the recorded replies are empty and a reply with rows is made from the shape of another user's.
+
+The three that sign a user in are tested against the samples of their official pages, which show XML, in the JSON shape of other replies. A recorded reply would hold a live token or session key.
 
 ### What the live passes showed
 
@@ -704,15 +713,22 @@ A track, read and through the client on 2026-11-12:
 - `track.search` rows name the artist with a string and have `listeners`. An `artist` beside the query narrows the search: 97,919 matches became 51,150. Its `limit` and its `page` each stop at 1000, a tenth of what the other two searches allow.
 - A track the service does not know is error 6 on all five calls of a track.
 
+The desktop sign-in, through the client on 2026-11-13, signed with the API secret:
+
+- `auth.getToken` answers `{"token": ...}`, 32 characters. It checks no signature: a wrong one and none both got a token.
+- `auth.getSession` with a token not yet approved is error 14, with a token never issued error 4 and HTTP 403, and with a wrong signature error 13 and HTTP 400.
+- Approved, it answers `{"session": {"key", "name", "subscriber"}}`, the key 32 characters and `subscriber` a number. The same token again is error 4 and HTTP 403, as for one never issued, not the error 15 that names an expired token.
+- A read signed with the new session key, `as_user`, was answered.
+
 The command-line tool's sync of 2026-11-10 read 242,328 scrobbles of that history and, through the model of `user.getLovedTracks`, its 259 loved tracks, which fit one page.
 
 Not yet seen live:
 
-- A signed read (`as_user`), and a hidden history.
+- A hidden history.
 - A now-playing row.
 - Several scrobbles in one second across a page boundary.
 - Rate limiting and `Retry-After`.
-- Any method that signs a user in or changes an account.
+- `auth.getMobileSession`, and any method that changes an account.
 
 ### Order of typing
 

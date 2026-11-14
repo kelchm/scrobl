@@ -69,6 +69,11 @@ impl Credentials {
         }
     }
 
+    #[cfg(feature = "client")]
+    pub(crate) fn api_key(&self) -> &ApiKey {
+        &self.api_key
+    }
+
     /// Credentials with an API key only, enough for plain reads.
     pub fn new(api_key: ApiKey) -> Self {
         Self {

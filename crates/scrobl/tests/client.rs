@@ -3809,3 +3809,187 @@ async fn a_track_is_read_by_name_or_by_id_with_what_was_set() {
     })
     .await;
 }
+
+const AUTH_TOKEN: &[u8] = include_bytes!("../fixtures/derived/auth-token.json");
+const AUTH_SESSION: &[u8] = include_bytes!("../fixtures/derived/auth-session.json");
+const UNAPPROVED: &[u8] =
+    br#"{"error":14,"message":"Unauthorized Token - This token has not been authorized"}"#;
+const SPENT: &[u8] =
+    br#"{"error":4,"message":"Unauthorized Token - This token has not been issued"}"#;
+
+fn names(request: &Recorded) -> Vec<String> {
+    chosen(request).into_iter().map(|(name, _)| name).collect()
+}
+
+#[tokio::test]
+async fn the_desktop_sign_in_asks_for_a_token_and_waits_for_its_approval() {
+    bounded(async {
+        let script = [
+            Behaviour::status(200, AUTH_TOKEN),
+            Behaviour::status(200, UNAPPROVED),
+            Behaviour::status(200, AUTH_SESSION),
+            Behaviour::status(403, SPENT),
+        ];
+        let server = serve(Dataset::distinct(1), script).await;
+        let client = client(&server);
+        let auth = client.auth();
+
+        let token = auth.token().send().await.unwrap();
+        assert_eq!(token.raw().body(), AUTH_TOKEN);
+        let token = token.into_value();
+        assert_eq!(
+            auth.approval_url(&token),
+            format!(
+                "https://www.last.fm/api/auth/?api_key={KEY}&token=cf45fe5a3e3cebe168480a086d7fe481"
+            )
+        );
+
+        assert!(auth.session(&token).send().await.unwrap().is_none());
+        let session = auth.session(&token).send().await.unwrap().unwrap();
+        assert_eq!(session.raw().body(), AUTH_SESSION);
+        assert_eq!(session.name(), "MyLastFMUsername");
+        assert_eq!(session.key().expose(), "d580d57f32848f5dcf574d1ce18d78b2");
+
+        // Spent.
+        let error = auth.session(&token).send().await.unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
+        assert_eq!(error.retry(), Retry::No);
+
+        let sent = server.requests();
+        assert_eq!(sent.len(), 4);
+        assert_eq!(names(&sent[0]), ["method", "api_sig"]);
+        assert_eq!(sent[0].param("method").as_deref(), Some("auth.getToken"));
+        for request in &sent[1..] {
+            assert_eq!(request.verb, "GET");
+            assert_eq!(names(request), ["method", "token", "api_sig"]);
+            assert_eq!(request.param("method").as_deref(), Some("auth.getSession"));
+            assert_eq!(
+                request.param("token").as_deref(),
+                Some("cf45fe5a3e3cebe168480a086d7fe481")
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_web_sign_in_address_carries_the_key_and_the_callback() {
+    let server = serve(Dataset::distinct(1), []).await;
+    let auth = client(&server).auth();
+    assert_eq!(
+        auth.web_approval_url(Some("https://example.org/back?from=app&x=a b")),
+        format!(
+            "https://www.last.fm/api/auth/?api_key={KEY}\
+             &cb=https%3A%2F%2Fexample.org%2Fback%3Ffrom%3Dapp%26x%3Da+b"
+        )
+    );
+    assert_eq!(
+        auth.web_approval_url(None),
+        format!("https://www.last.fm/api/auth/?api_key={KEY}")
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test]
+async fn the_mobile_sign_in_posts_the_name_and_password_and_never_shows_the_password() {
+    bounded(async {
+        const PASSWORD: &str = "SENTINEL_PASSWORD_0004";
+        let failed = br#"{"error":4,"message":"Authentication Failed - You do not have permissions to access the service"}"#;
+        let server = serve(
+            Dataset::distinct(1),
+            [
+                Behaviour::status(200, AUTH_SESSION),
+                Behaviour::status(200, failed.as_slice()),
+            ],
+        )
+        .await;
+        let auth = client(&server).auth();
+
+        let query = auth.mobile_session(USER, scrobl::Password::new(PASSWORD));
+        assert!(!format!("{query:?}").contains(PASSWORD));
+        let session = query.send().await.unwrap();
+        assert_eq!(session.name(), "MyLastFMUsername");
+
+        let error = auth
+            .mobile_session(USER, scrobl::Password::new(PASSWORD))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
+        let shown = format!("{error} {error:?}");
+        assert!(!shown.contains(PASSWORD), "{shown}");
+
+        let sent = server.requests();
+        for request in &sent {
+            assert_eq!(request.verb, "POST");
+            assert!(!request.path.contains(PASSWORD));
+            assert_eq!(names(request), ["method", "username", "password", "api_sig"]);
+            assert_eq!(request.param("password").as_deref(), Some(PASSWORD));
+            assert_eq!(request.param("username").as_deref(), Some(USER));
+        }
+        assert_eq!(sent.len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_sign_in_without_a_secret_or_with_an_empty_field_is_refused_before_anything_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), []).await;
+        let unsigned = Client::builder(ApiKey::new(KEY))
+            .base_url(server.base_url())
+            .build()
+            .unwrap();
+        let error = unsigned.auth().token().send().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("secret"), "{error}");
+
+        let auth = client(&server).auth();
+        let error = auth
+            .session(&scrobl::AuthToken::new(" "))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+        assert!(error.to_string().contains("token is empty"), "{error}");
+        for (user, password, problem) in [
+            ("", "p", "username is empty"),
+            (USER, "", "password is empty"),
+        ] {
+            let error = auth
+                .mobile_session(user, scrobl::Password::new(password))
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+            assert!(error.to_string().contains(problem), "{error}");
+        }
+        assert!(server.requests().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_debug_of_a_session_query_does_not_show_the_token() {
+    let server = serve(Dataset::distinct(1), []).await;
+    let token = scrobl::AuthToken::new("SENTINEL_TOKEN_0005");
+    let query = client(&server).auth().session(&token);
+    let debug = format!("{query:?}");
+    assert!(!debug.contains("SENTINEL_TOKEN_0005"), "{debug}");
+    assert!(debug.contains("AuthToken(<redacted>)"), "{debug}");
+}
+
+#[tokio::test]
+async fn a_password_of_spaces_is_sent() {
+    bounded(async {
+        let server = serve(Dataset::distinct(1), [Behaviour::status(200, AUTH_SESSION)]).await;
+        let auth = client(&server).auth();
+        let password = scrobl::Password::new("   ");
+        auth.mobile_session(USER, password).send().await.unwrap();
+        assert_eq!(
+            server.requests()[0].param("password").as_deref(),
+            Some("   ")
+        );
+    })
+    .await;
+}
