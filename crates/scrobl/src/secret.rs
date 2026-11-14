@@ -1,6 +1,6 @@
 //! Secrets that must not leak through logs, errors or serialization.
 //!
-//! The three types here wrap a string and nothing more. `Debug` prints a
+//! The types here wrap a string and nothing more. `Debug` prints a
 //! fixed redaction, there is no `Display`, no `Serialize` and no
 //! `PartialEq`, so a secret reaches the outside only through an explicit
 //! call to `expose`.
@@ -61,6 +61,18 @@ secret! {
     SessionKey
 }
 
+secret! {
+    /// A token of the desktop or web sign-in, which the user approves and
+    /// the application then exchanges for a [`SessionKey`]. It lasts an
+    /// hour and is spent by the exchange.
+    AuthToken
+}
+
+secret! {
+    /// A user's Last.fm password, for the mobile sign-in.
+    Password
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +82,8 @@ mod tests {
         assert_eq!(ApiKey::new("k").expose(), "k");
         assert_eq!(ApiSecret::new(String::from("s")).expose(), "s");
         assert_eq!(SessionKey::new("sk").expose(), "sk");
+        assert_eq!(AuthToken::new("t").expose(), "t");
+        assert_eq!(Password::new("p").expose(), "p");
     }
 
     #[cfg(feature = "client")]
@@ -95,6 +109,14 @@ mod tests {
         assert_eq!(
             format!("{:#?}", SessionKey::new(SENTINEL)),
             "SessionKey(<redacted>)"
+        );
+        assert_eq!(
+            format!("{:?}", AuthToken::new(SENTINEL)),
+            "AuthToken(<redacted>)"
+        );
+        assert_eq!(
+            format!("{:?}", Password::new(SENTINEL)),
+            "Password(<redacted>)"
         );
         assert_eq!(
             format!("{:?}", Some(vec![ApiKey::new(SENTINEL)])),

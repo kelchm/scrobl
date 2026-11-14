@@ -77,4 +77,4 @@ mod secret;
 pub use client::{Client, ClientBuilder, Writer};
 pub use error::{ApiErrorCode, Delivery, Error, ErrorKind, Retry};
 pub use response::Response;
-pub use secret::{ApiKey, ApiSecret, SessionKey};
+pub use secret::{ApiKey, ApiSecret, AuthToken, Password, SessionKey};

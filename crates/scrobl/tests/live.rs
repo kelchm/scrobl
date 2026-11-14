@@ -1,19 +1,25 @@
-//! Acceptance against the live Last.fm service. Read-only.
+//! Acceptance against the live Last.fm service. Nothing here writes.
 //!
-//! Nothing here runs unless asked for: the test is ignored, and it fails at
-//! once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. It is never
-//! run in CI.
+//! Nothing here runs unless asked for: the tests are ignored, and each fails
+//! at once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. They are
+//! never run in CI.
 //!
 //! ```sh
 //! SCROBL_LIVE_API_KEY=... SCROBL_LIVE_USER=... \
 //!     cargo test --test live -- --ignored --nocapture
 //! ```
 //!
-//! The ten tests send about 180 key-only requests between them, a
-//! second apart: no signature, no session, no write. With
+//! Ten tests send about 180 key-only requests between them, a second
+//! apart: no signature, no session, no write. With
 //! `SCROBL_LIVE_CAPTURE_DIR` set, the exact body of every response is
 //! written there, for the owner to turn into fixtures by hand. The bodies
 //! are that user's listening history; the tests commit nothing.
+//!
+//! One more, [`the_desktop_sign_in_against_the_live_service`], also needs
+//! `SCROBL_LIVE_API_SECRET` and the owner at a browser. It prints an address
+//! for the owner to approve, waits up to five minutes, and creates a session
+//! on that account, which it uses for one read. The session key is never
+//! printed or written; the owner can revoke it on the website.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -1317,4 +1323,76 @@ async fn a_track_against_the_live_service() {
         Some(ApiErrorCode::INVALID_PARAMETERS)
     );
     assert!(large.is_err());
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and creates a session; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER and the owner at a browser"]
+async fn the_desktop_sign_in_against_the_live_service() {
+    let user = env("SCROBL_LIVE_USER");
+    let client = Client::builder(ApiKey::new(env("SCROBL_LIVE_API_KEY")))
+        .secret(scrobl::ApiSecret::new(env("SCROBL_LIVE_API_SECRET")))
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap();
+    let auth = client.auth();
+
+    // A token, then the exchange before the owner has approved it.
+    let token = auth.token().send().await.unwrap();
+    let shape = String::from_utf8_lossy(token.raw().body()).replace(token.expose(), "<token>");
+    println!(
+        "token reply, token replaced: {shape} (HTTP {})",
+        token.raw().status()
+    );
+    let token = token.into_value();
+    assert!(auth.session(&token).send().await.unwrap().is_none());
+
+    // A token the service never issued.
+    let never = scrobl::AuthToken::new("00000000000000000000000000000000");
+    let error = auth.session(&never).send().await.unwrap_err();
+    println!(
+        "a token never issued: {:?}, HTTP {:?}",
+        error.api_code(),
+        error.http_status()
+    );
+    assert_eq!(error.kind(), ErrorKind::Api);
+
+    println!("\nApprove the sign-in at:\n{}\n", auth.approval_url(&token));
+    let started = std::time::Instant::now();
+    let session = loop {
+        if let Some(session) = auth.session(&token).send().await.unwrap() {
+            break session;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(300),
+            "not approved within five minutes"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    };
+    let shape =
+        String::from_utf8_lossy(session.raw().body()).replace(session.key().expose(), "<key>");
+    println!(
+        "session reply, key replaced: {shape} (HTTP {})",
+        session.raw().status()
+    );
+    assert!(session.name().eq_ignore_ascii_case(&user));
+    assert!(!format!("{session:?}").contains(session.key().expose()));
+
+    // The token is spent.
+    let error = auth.session(&token).send().await.unwrap_err();
+    println!(
+        "the spent token again: {:?}, HTTP {:?}",
+        error.api_code(),
+        error.http_status()
+    );
+    assert_eq!(error.kind(), ErrorKind::Api);
+
+    // The key works: one read made as the user.
+    let as_user = client.with_session(session.into_value().into_key());
+    let request =
+        scrobl::protocol::Request::new(&scrobl::protocol::methods::USER_GET_RECENT_TRACKS)
+            .param("user", user.as_str())
+            .param("limit", 1)
+            .as_user();
+    let raw = as_user.call(&request).await.unwrap();
+    println!("a read as the user: HTTP {}", raw.status());
 }

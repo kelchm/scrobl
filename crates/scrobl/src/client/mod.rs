@@ -291,6 +291,7 @@
 
 mod album;
 mod artist;
+mod auth;
 mod builder;
 mod cause;
 mod charts;
@@ -316,6 +317,7 @@ pub use artist::{
     ArtistCorrectionQuery, ArtistHandle, ArtistInfoQuery, ArtistSimilarQuery, ArtistTagsOfQuery,
     ArtistTopAlbumsQuery, ArtistTopTagsQuery, ArtistTopTracksQuery,
 };
+pub use auth::{AuthHandle, AuthMobileSessionQuery, AuthSessionQuery, AuthTokenQuery};
 pub use builder::ClientBuilder;
 pub use charts::{
     ChartsHandle, ChartsTagsQuery, ChartsTopArtistsQuery, ChartsTopTagsQuery, ChartsTopTracksQuery,
@@ -551,6 +553,12 @@ impl Client {
     /// The service's search, for artists, albums and tracks by name.
     pub fn search(&self) -> SearchHandle {
         SearchHandle::new(self.clone())
+    }
+
+    /// Signing a user in, to get the session key a client acting for them
+    /// is made with. The client needs an API secret for it.
+    pub fn auth(&self) -> AuthHandle {
+        AuthHandle::new(self.clone())
     }
 
     /// One attempt: send, read the body, decode. It waits no longer than the

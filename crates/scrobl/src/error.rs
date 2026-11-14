@@ -120,6 +120,9 @@ impl ApiErrorCode {
     pub const INVALID_SIGNATURE: Self = Self(13);
     /// 14: the authentication token has not been authorized by the user yet.
     pub const UNAUTHORIZED_TOKEN: Self = Self(14);
+    /// 15: the authentication token has expired, an hour after it was
+    /// made, or was already exchanged for a session.
+    pub const TOKEN_EXPIRED: Self = Self(15);
     /// 16: a temporary error. The same request will probably succeed.
     pub const TEMPORARY_ERROR: Self = Self(16);
     /// 17: login required. The profile is not public, or the user changed
