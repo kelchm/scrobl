@@ -1463,8 +1463,7 @@ async fn scrobbling_against_the_live_service() {
     );
     assert!(now.is_accepted());
 
-    // Out of time order, so a reply sorted by time would not match: a play
-    // from five minutes ago between two from 2001, which are ignored.
+    // A play from five minutes ago between two from 2001, which are ignored.
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -1492,15 +1491,16 @@ async fn scrobbling_against_the_live_service() {
         shape(report.raw()),
         report.raw().status()
     );
-    let [old, recorded, older] = report.outcomes() else {
-        panic!("three outcomes")
-    };
-    assert!(recorded.is_accepted());
-    for old in [old, older] {
+    assert_eq!(report.outcomes().len(), 3);
+    for outcome in report.outcomes() {
         println!(
-            "an old play: {:?}",
-            old.ignored().map(scrobl::model::Ignored::code)
+            "{:?}: {:?}",
+            outcome.timestamp(),
+            outcome.ignored().map(scrobl::model::Ignored::code)
         );
-        assert!(!old.is_accepted());
+        assert_eq!(
+            outcome.is_accepted(),
+            outcome.timestamp() == Some(started_at)
+        );
     }
 }

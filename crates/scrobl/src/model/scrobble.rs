@@ -10,14 +10,15 @@ use crate::error::Error;
 use crate::protocol::{Raw, methods};
 
 /// What the service did with a batch of scrobbles: one [`Outcome`] for each
-/// play sent, in the order sent.
+/// play sent.
 #[derive(Clone)]
 pub struct ScrobbleReport {
     outcomes: Vec<Outcome>,
 }
 
 impl ScrobbleReport {
-    /// One for each play, in the order sent.
+    /// One for each play, in the service's order, which need not be the
+    /// order sent: match them to plays by timestamp and names.
     pub fn outcomes(&self) -> &[Outcome] {
         &self.outcomes
     }
@@ -179,11 +180,8 @@ impl IgnoredCode {
 }
 
 /// Decodes a `track.scrobble` response and checks it against the request:
-/// one outcome for each play sent, with its timestamp, and `accepted` plus
-/// `ignored` equal to the batch. The service lists accepted plays first;
-/// each outcome is matched to its play by timestamp and names, and put back
-/// in the order sent. An outcome that fits no play, or plays that differ,
-/// is an error.
+/// one outcome for each play sent, and `accepted` and `ignored` agreeing
+/// with them.
 ///
 /// # Errors
 ///
@@ -193,7 +191,6 @@ impl IgnoredCode {
 /// [`delivery`](crate::Error::delivery) is unknown.
 pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
     shared::decode(raw, &methods::TRACK_SCROBBLE, "scrobbles", |mut list| {
-        let sent = sent_plays(raw)?;
         let attr = match list.remove("@attr") {
             Some(Value::Object(attr)) => attr,
             _ => return Err(missing_or("scrobbles.@attr", "an object")),
@@ -207,12 +204,10 @@ pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
         let outcomes = shared::each(rows, "scrobbles.scrobble", |row, at| {
             outcome(&row, at, true)
         })?;
-        if outcomes.len() != sent.len() {
+        if outcomes.len() != plays_sent(raw) {
             return Err(Error::inconsistent("one outcome for each play sent"));
         }
-        let report = ScrobbleReport {
-            outcomes: in_sent_order(outcomes, &sent)?,
-        };
+        let report = ScrobbleReport { outcomes };
         if accepted != report.accepted() as u64 || ignored != report.ignored() as u64 {
             return Err(Error::inconsistent(
                 "`accepted` and `ignored` add up to the batch",
@@ -237,97 +232,13 @@ pub fn track_update_now_playing(raw: &Raw) -> Result<Outcome, Error> {
     )
 }
 
-/// Matches each play to the outcome with its timestamp and names. Identical
-/// plays take their outcomes in the reply's order.
-fn in_sent_order(outcomes: Vec<Outcome>, sent: &[Sent]) -> Result<Vec<Outcome>, Error> {
-    // Each play's class: the first play identical to it.
-    let classes: Vec<usize> = sent
+/// How many plays the request sent.
+fn plays_sent(raw: &Raw) -> usize {
+    raw.request()
+        .params()
         .iter()
-        .enumerate()
-        .map(|(i, play)| sent.iter().position(|p| p == play).unwrap_or(i))
-        .collect();
-    let mut rows = Vec::with_capacity(outcomes.len());
-    for outcome in outcomes {
-        let mut fits = sent
-            .iter()
-            .zip(&classes)
-            .filter(|(play, _)| play.fits(&outcome))
-            .map(|(_, class)| *class);
-        let class = fits
-            .next()
-            .ok_or_else(|| Error::inconsistent("each outcome fits a play sent"))?;
-        if fits.any(|other| other != class) {
-            return Err(Error::inconsistent("each outcome fits one play sent"));
-        }
-        rows.push((class, outcome));
-    }
-    let mut ordered = Vec::with_capacity(sent.len());
-    for class in &classes {
-        let at = rows
-            .iter()
-            .position(|(c, _)| c == class)
-            .ok_or_else(|| Error::inconsistent("each play sent has an outcome"))?;
-        ordered.push(rows.remove(at).1);
-    }
-    Ok(ordered)
-}
-
-/// A play as the request sent it. Plays are identical only if every
-/// parameter is, since any of them can get a play ignored.
-#[derive(PartialEq)]
-struct Sent {
-    timestamp: u64,
-    artist: String,
-    track: String,
-    params: Vec<(String, String)>,
-}
-
-impl Sent {
-    /// A name fits if it is the one sent or the service says it corrected it.
-    fn fits(&self, outcome: &Outcome) -> bool {
-        let name = |c: &Corrected, sent: &str| c.corrected || c.name == sent;
-        outcome.timestamp == Some(self.timestamp)
-            && name(&outcome.artist, &self.artist)
-            && name(&outcome.track, &self.track)
-    }
-}
-
-/// The plays the request sent, in batch order, numbered from 0 with no gap.
-fn sent_plays(raw: &Raw) -> Result<Vec<Sent>, Error> {
-    let request = raw.request();
-    let count = |prefix: &str| {
-        request
-            .params()
-            .iter()
-            .filter(|(name, _)| name.starts_with(prefix))
-            .count()
-    };
-    let plays = count("artist[");
-    let sent: Option<Vec<Sent>> = (0..plays)
-        .map(|i| {
-            let index = format!("[{i}]");
-            let mut params: Vec<_> = request
-                .params()
-                .iter()
-                .filter_map(|(name, value)| {
-                    Some((name.strip_suffix(&index)?.to_owned(), value.clone()))
-                })
-                .collect();
-            params.sort();
-            Some(Sent {
-                timestamp: request.get(&format!("timestamp{index}"))?.parse().ok()?,
-                artist: request.get(&format!("artist{index}"))?.to_owned(),
-                track: request.get(&format!("track{index}"))?.to_owned(),
-                params,
-            })
-        })
-        .collect();
-    match sent {
-        Some(sent) if count("timestamp[") == plays && count("track[") == plays => Ok(sent),
-        _ => Err(Error::inconsistent(
-            "the request numbers its plays from 0, each with a timestamp",
-        )),
-    }
+        .filter(|(name, _)| name.starts_with("artist["))
+        .count()
 }
 
 fn outcome(row: &Map<String, Value>, at: &str, scrobble: bool) -> Result<Outcome, Error> {
