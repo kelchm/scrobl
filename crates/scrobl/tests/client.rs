@@ -3814,7 +3814,8 @@ const AUTH_TOKEN: &[u8] = include_bytes!("../fixtures/derived/auth-token.json");
 const AUTH_SESSION: &[u8] = include_bytes!("../fixtures/derived/auth-session.json");
 const UNAPPROVED: &[u8] =
     br#"{"error":14,"message":"Unauthorized Token - This token has not been authorized"}"#;
-const EXPIRED: &[u8] = br#"{"error":15,"message":"This token has expired"}"#;
+const SPENT: &[u8] =
+    br#"{"error":4,"message":"Unauthorized Token - This token has not been issued"}"#;
 
 /// The names a request sent, in order, without the ones every call has.
 fn names(request: &Recorded) -> Vec<String> {
@@ -3824,12 +3825,13 @@ fn names(request: &Recorded) -> Vec<String> {
 #[tokio::test]
 async fn the_desktop_sign_in_asks_for_a_token_and_waits_for_its_approval() {
     bounded(async {
-        let script = [AUTH_TOKEN, UNAPPROVED, AUTH_SESSION, EXPIRED];
-        let server = serve(
-            Dataset::distinct(1),
-            script.map(|body| Behaviour::status(200, body)),
-        )
-        .await;
+        let script = [
+            Behaviour::status(200, AUTH_TOKEN),
+            Behaviour::status(200, UNAPPROVED),
+            Behaviour::status(200, AUTH_SESSION),
+            Behaviour::status(403, SPENT),
+        ];
+        let server = serve(Dataset::distinct(1), script).await;
         let client = client(&server);
         let auth = client.auth();
 
@@ -3850,9 +3852,9 @@ async fn the_desktop_sign_in_asks_for_a_token_and_waits_for_its_approval() {
         assert_eq!(session.name(), "MyLastFMUsername");
         assert_eq!(session.key().expose(), "d580d57f32848f5dcf574d1ce18d78b2");
 
-        // Spent, or over an hour old.
+        // Spent: the live service answers as for a token it never issued.
         let error = auth.session(&token).send().await.unwrap_err();
-        assert_eq!(error.api_code(), Some(ApiErrorCode::TOKEN_EXPIRED));
+        assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
         assert_eq!(error.retry(), Retry::No);
 
         // Signed, without the session the client holds.

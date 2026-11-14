@@ -12,7 +12,7 @@ This crate stores nothing. To keep a listening history in a SQLite file, see [`s
 
 - Any of the 57 API methods can be called raw, signed where the method needs it.
 - Every method that reads is typed, all forty-four of them: a user (scrobble history, profile, friends, loved tracks, top lists of all time or of one week, tagged items, library), an artist, an album, a track, a tag, a country's charts, the charts of the whole service, and the three searches. All have been run against the live service.
-- Signing a user in is typed too: the desktop, web and mobile flows under `client.auth()`, which end in a session key. Not yet run against the live service.
+- Signing a user in is typed too: the desktop, web and mobile flows under `client.auth()`, which end in a session key. The desktop flow has been run against the live service.
 - Not built yet: typed forms of the ten methods that change an account (scrobbling, loving, tagging). Those ten can be called raw through a `Writer`.
 
 ## Install

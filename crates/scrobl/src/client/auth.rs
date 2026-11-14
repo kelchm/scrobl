@@ -173,10 +173,10 @@ impl AuthSessionQuery {
     /// [`ErrorKind::InvalidRequest`](crate::ErrorKind), before anything is
     /// sent, when the token is empty or the client has no API secret. Any
     /// error of [`Client::call`], including
-    /// [`TOKEN_EXPIRED`](ApiErrorCode::TOKEN_EXPIRED) for a token that is
-    /// over an hour old or already spent, and
-    /// [`AUTHENTICATION_FAILED`](ApiErrorCode::AUTHENTICATION_FAILED) for
-    /// one the service never issued. [`ErrorKind::Decode`](crate::ErrorKind)
+    /// [`AUTHENTICATION_FAILED`](ApiErrorCode::AUTHENTICATION_FAILED), with
+    /// HTTP 403, for a token already spent or one the service never issued,
+    /// and [`TOKEN_EXPIRED`](ApiErrorCode::TOKEN_EXPIRED) for one over an
+    /// hour old. [`ErrorKind::Decode`](crate::ErrorKind)
     /// when the reply is not a session.
     pub async fn send(self) -> Result<Option<Response<Session>>, Error> {
         let spec = &methods::AUTH_GET_SESSION;

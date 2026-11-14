@@ -30,8 +30,8 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ("album.getTopTags", "`model::List<TopTag>`", "live-verified"),
     ("album.search", "`model::Page<Album>`", "live-verified"),
     ("auth.getMobileSession", "`model::Session`", "typed-derived"),
-    ("auth.getSession", "`model::Session`", "typed-derived"),
-    ("auth.getToken", "`AuthToken`", "typed-derived"),
+    ("auth.getSession", "`model::Session`", "live-verified"),
+    ("auth.getToken", "`AuthToken`", "live-verified"),
     ("artist.getCorrection", "`model::Artist`", "live-verified"),
     ("artist.getInfo", "`model::ArtistInfo`", "live-verified"),
     (

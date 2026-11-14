@@ -1383,7 +1383,7 @@ async fn the_desktop_sign_in_against_the_live_service() {
         error.api_code(),
         error.http_status()
     );
-    assert_eq!(error.kind(), ErrorKind::Api);
+    assert_eq!(error.api_code(), Some(ApiErrorCode::AUTHENTICATION_FAILED));
 
     // The key works: one read made as the user.
     let as_user = client.with_session(session.into_value().into_key());
