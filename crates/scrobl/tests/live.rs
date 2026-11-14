@@ -1,4 +1,5 @@
-//! Acceptance against the live Last.fm service. Nothing here writes.
+//! Acceptance against the live Last.fm service. Only
+//! [`scrobbling_against_the_live_service`] writes.
 //!
 //! Nothing here runs unless asked for: the tests are ignored, and each fails
 //! at once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. They are
@@ -17,7 +18,9 @@
 //!
 //! [`the_desktop_sign_in_against_the_live_service`] also needs
 //! `SCROBL_LIVE_API_SECRET` and the owner at a browser. It creates a session
-//! on that account.
+//! on that account. [`scrobbling_against_the_live_service`] signs in the
+//! same way, then writes: one scrobble of Radiohead's "Creep", which the
+//! owner deletes afterwards on the website.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -1409,4 +1412,95 @@ fn shape(raw: &Raw) -> String {
         }
     }
     of(&raw.json_strict().unwrap())
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and adds a scrobble; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
+async fn scrobbling_against_the_live_service() {
+    let user = env("SCROBL_LIVE_USER");
+    let key = env("SCROBL_LIVE_API_KEY");
+    let secret = env("SCROBL_LIVE_API_SECRET");
+    let client = Client::builder(ApiKey::new(&key))
+        .secret(scrobl::ApiSecret::new(&secret))
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap();
+    let auth = client.auth();
+    let token = auth.token().send().await.unwrap().into_value();
+    println!("\nApprove the sign-in at:\n{}\n", auth.approval_url(&token));
+    let started = std::time::Instant::now();
+    let session = loop {
+        if let Some(session) = auth.session(&token).send().await.unwrap() {
+            break session.into_value();
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(300),
+            "not approved within five minutes"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    };
+    assert!(
+        session.name().eq_ignore_ascii_case(&user),
+        "approved for another account; nothing was written"
+    );
+    let writer = Client::builder(ApiKey::new(key))
+        .secret(scrobl::ApiSecret::new(secret))
+        .session(session.into_key())
+        .user_agent(USER_AGENT)
+        .build_writer()
+        .unwrap();
+
+    let now = writer
+        .now_playing("Radiohead", "Creep")
+        .album("Pablo Honey")
+        .send()
+        .await
+        .unwrap();
+    println!(
+        "now playing: {} (HTTP {})",
+        shape(now.raw()),
+        now.raw().status()
+    );
+    assert!(now.is_accepted());
+
+    // Out of time order, so a reply sorted by time would not match: a play
+    // from five minutes ago between two from 2001, which are ignored.
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 300;
+    let plays = [
+        scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_000),
+        scrobl::client::Play::new("Radiohead", "Creep", started_at).album("Pablo Honey"),
+        scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_100),
+    ];
+    println!("\nDelete the scrobble of Radiohead, Creep at {started_at} on the website.");
+    let report = match writer.scrobble(&plays).send().await {
+        Ok(report) => report,
+        Err(error) => {
+            if let (Ok(dir), Some(body)) = (std::env::var("SCROBL_LIVE_CAPTURE_DIR"), error.body())
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(PathBuf::from(dir).join("scrobble-error.json"), body).unwrap();
+            }
+            panic!("{error:?}");
+        }
+    };
+    println!(
+        "scrobble: {} (HTTP {})",
+        shape(report.raw()),
+        report.raw().status()
+    );
+    let [old, recorded, older] = report.outcomes() else {
+        panic!("three outcomes")
+    };
+    assert!(recorded.is_accepted());
+    for old in [old, older] {
+        println!(
+            "an old play: {:?}",
+            old.ignored().map(scrobl::model::Ignored::code)
+        );
+        assert!(!old.is_accepted());
+    }
 }

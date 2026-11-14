@@ -62,10 +62,10 @@ Not in the index at the snapshot date, and so not in the table: `track.ban`, `tr
 | `track.getTopTags` | GET | API key | — | — | track\*, artist\*, _mbid_, _autocorrect_ | `model::List<TopTag>` | live-verified |
 | `track.love` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
 | `track.removeTag` | POST | API key, signature, session | yes | — | artist, track, tag | — | inventoried |
-| `track.scrobble` | POST | API key, signature, session | yes | — | artist[i], track[i], timestamp[i], _album[i]_, _context[i]_, _streamId[i]_, _chosenByUser[i]_, _trackNumber[i]_, _mbid[i]_, _albumArtist[i]_, _duration[i]_ | — | inventoried |
+| `track.scrobble` | POST | API key, signature, session | yes | — | artist[i], track[i], timestamp[i], _album[i]_, _context[i]_, _streamId[i]_, _chosenByUser[i]_, _trackNumber[i]_, _mbid[i]_, _albumArtist[i]_, _duration[i]_ | `model::ScrobbleReport` | live-verified |
 | `track.search` | GET | API key | — | page, limit | _limit_, _page_, track, _artist_ | `model::Page<Track>` | live-verified |
 | `track.unlove` | POST | API key, signature, session | yes | — | track, artist | — | inventoried |
-| `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | — | inventoried |
+| `track.updateNowPlaying` | POST | API key, signature, session | yes | — | artist, track, _album_, _trackNumber_, _context_, _mbid_, _duration_, _albumArtist_ | `model::Outcome` | live-verified |
 | **user** | | | | | | | |
 | `user.getFriends` | GET | API key | — | page, limit | user, _recenttracks_, _limit_, _page_ | `model::Page<User>` | live-verified |
 | `user.getInfo` | GET | API key | — | — | _user_ | `model::User` | live-verified |
