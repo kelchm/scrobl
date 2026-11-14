@@ -17,6 +17,7 @@ use crate::{Delivery, ErrorKind};
 const ONE: &[u8] = include_bytes!("../../../fixtures/derived/scrobble-one.json");
 const BATCH: &[u8] = include_bytes!("../../../fixtures/derived/scrobble-batch.json");
 const NOW: &[u8] = include_bytes!("../../../fixtures/derived/now-playing.json");
+const REORDERED: &[u8] = include_bytes!("../../../fixtures/derived/scrobble-reordered.json");
 
 fn sent(timestamps: &[u64]) -> Request {
     let mut request = Request::new(&methods::TRACK_SCROBBLE);
@@ -103,8 +104,10 @@ fn a_reply_that_does_not_account_for_every_play_is_unknown_delivery() {
         (vec![1, 2], reply(json!([row(1, 0), row(2, 0)]), 1, 0)),
         // Counts that disagree with the rows.
         (vec![1, 2], reply(json!([row(1, 0), row(2, 0)]), 1, 1)),
-        // Rows out of order.
-        (vec![1, 2], reply(json!([row(2, 0), row(1, 0)]), 2, 0)),
+        // A timestamp not sent.
+        (vec![1, 2], reply(json!([row(1, 0), row(3, 0)]), 2, 0)),
+        // One play answered twice.
+        (vec![1, 2], reply(json!([row(1, 0), row(1, 0)]), 2, 0)),
     ];
     for (timestamps, body) in cases {
         let error = scrobble(&timestamps, body).unwrap_err();
@@ -115,6 +118,27 @@ fn a_reply_that_does_not_account_for_every_play_is_unknown_delivery() {
     let error = scrobble(&[1], br#"{"scrobbles": {}}"#.to_vec()).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Decode);
     assert_eq!(error.delivery(), Some(Delivery::Unknown));
+}
+
+#[test]
+fn a_reply_listing_accepted_plays_first_is_put_in_the_order_sent() {
+    let report = scrobble(&[1_000_000_000, 1_700_000_000, 1_000_000_100], REORDERED).unwrap();
+    let outcomes = report.outcomes();
+    let stamps: Vec<_> = outcomes.iter().map(Outcome::timestamp).collect();
+    assert_eq!(
+        stamps,
+        [
+            Some(1_000_000_000),
+            Some(1_700_000_000),
+            Some(1_000_000_100)
+        ]
+    );
+    assert!(outcomes[1].is_accepted());
+    assert_eq!(outcomes[1].album().unwrap().name(), "Believe");
+    for old in [&outcomes[0], &outcomes[2]] {
+        assert_eq!(old.ignored().unwrap().code(), IgnoredCode::ARTIST);
+        assert!(old.album().is_none());
+    }
 }
 
 #[test]

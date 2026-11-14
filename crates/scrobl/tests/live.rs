@@ -1474,7 +1474,14 @@ async fn scrobbling_against_the_live_service() {
         scrobl::client::Play::new("Radiohead", "Creep", started_at).album("Pablo Honey"),
         scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_100),
     ];
-    let report = writer.scrobble(&plays).send().await.unwrap();
+    println!("\nDelete the scrobble of Radiohead, Creep at {started_at} on the website.");
+    let report = match writer.scrobble(&plays).send().await {
+        Ok(report) => report,
+        Err(error) => {
+            let body = String::from_utf8_lossy(error.body().unwrap_or_default());
+            panic!("{error:?}\nbody: {body}");
+        }
+    };
     println!(
         "scrobble: {} (HTTP {})",
         shape(report.raw()),
@@ -1491,5 +1498,4 @@ async fn scrobbling_against_the_live_service() {
         );
         assert!(!old.is_accepted());
     }
-    println!("\nDelete the scrobble of Radiohead, Creep at {started_at} on the website.");
 }

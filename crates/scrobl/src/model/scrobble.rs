@@ -158,7 +158,8 @@ impl fmt::Debug for Ignored {
 pub struct IgnoredCode(u32);
 
 impl IgnoredCode {
-    /// 1: the artist is filtered.
+    /// 1: the artist is filtered. The service also gave it for plays from
+    /// 2001, where 3 was documented.
     pub const ARTIST: Self = Self(1);
     /// 2: the track is filtered.
     pub const TRACK: Self = Self(2);
@@ -177,7 +178,8 @@ impl IgnoredCode {
 
 /// Decodes a `track.scrobble` response and checks it against the request:
 /// one outcome for each play sent, with its timestamp, and `accepted` plus
-/// `ignored` equal to the batch.
+/// `ignored` equal to the batch. The service lists accepted plays first;
+/// the outcomes are put back in the order sent.
 ///
 /// # Errors
 ///
@@ -201,24 +203,15 @@ pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
         let outcomes = shared::each(rows, "scrobbles.scrobble", |row, at| {
             outcome(&row, at, true)
         })?;
-        let report = ScrobbleReport { outcomes };
-
-        if report.outcomes.len() != sent.len() {
+        if outcomes.len() != sent.len() {
             return Err(Error::inconsistent("one outcome for each play sent"));
         }
+        let report = ScrobbleReport {
+            outcomes: in_sent_order(outcomes, &sent)?,
+        };
         if accepted != report.accepted() as u64 || ignored != report.ignored() as u64 {
             return Err(Error::inconsistent(
                 "`accepted` and `ignored` add up to the batch",
-            ));
-        }
-        if report
-            .outcomes
-            .iter()
-            .map(Outcome::timestamp)
-            .ne(sent.iter().copied().map(Some))
-        {
-            return Err(Error::inconsistent(
-                "each outcome has its play's timestamp, in order",
             ));
         }
         Ok(report)
@@ -238,6 +231,22 @@ pub fn track_update_now_playing(raw: &Raw) -> Result<Outcome, Error> {
         "nowplaying",
         |row| outcome(&row, "nowplaying", false),
     )
+}
+
+/// Matches each play to an outcome with its timestamp. Plays sharing a
+/// timestamp keep the reply's order.
+fn in_sent_order(mut outcomes: Vec<Outcome>, sent: &[u64]) -> Result<Vec<Outcome>, Error> {
+    let mut ordered = Vec::with_capacity(sent.len());
+    for &timestamp in sent {
+        let at = outcomes
+            .iter()
+            .position(|o| o.timestamp == Some(timestamp))
+            .ok_or_else(|| {
+                Error::inconsistent("each play sent has an outcome with its timestamp")
+            })?;
+        ordered.push(outcomes.remove(at));
+    }
+    Ok(ordered)
 }
 
 /// The timestamps the request sent, in batch order. Every play must have
