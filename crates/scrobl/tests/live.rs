@@ -1,4 +1,5 @@
-//! Acceptance against the live Last.fm service. Nothing here writes.
+//! Acceptance against the live Last.fm service. Only
+//! [`scrobbling_against_the_live_service`] writes.
 //!
 //! Nothing here runs unless asked for: the tests are ignored, and each fails
 //! at once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. They are
@@ -1478,8 +1479,12 @@ async fn scrobbling_against_the_live_service() {
     let report = match writer.scrobble(&plays).send().await {
         Ok(report) => report,
         Err(error) => {
-            let body = String::from_utf8_lossy(error.body().unwrap_or_default());
-            panic!("{error:?}\nbody: {body}");
+            if let (Ok(dir), Some(body)) = (std::env::var("SCROBL_LIVE_CAPTURE_DIR"), error.body())
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(PathBuf::from(dir).join("scrobble-error.json"), body).unwrap();
+            }
+            panic!("{error:?}");
         }
     };
     println!(

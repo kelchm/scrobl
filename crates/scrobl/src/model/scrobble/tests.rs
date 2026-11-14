@@ -19,26 +19,36 @@ const BATCH: &[u8] = include_bytes!("../../../fixtures/derived/scrobble-batch.js
 const NOW: &[u8] = include_bytes!("../../../fixtures/derived/now-playing.json");
 const REORDERED: &[u8] = include_bytes!("../../../fixtures/derived/scrobble-reordered.json");
 
-fn sent(timestamps: &[u64]) -> Request {
+fn sent(plays: &[(&str, &str, u64)]) -> Request {
     let mut request = Request::new(&methods::TRACK_SCROBBLE);
-    for (i, t) in timestamps.iter().enumerate() {
+    for (i, (artist, track, t)) in plays.iter().enumerate() {
         request = request
-            .indexed("artist", i, "a")
-            .indexed("track", i, "t")
+            .indexed("artist", i, *artist)
+            .indexed("track", i, *track)
             .indexed("timestamp", i, *t);
     }
     request
 }
 
-fn scrobble(timestamps: &[u64], body: impl Into<Vec<u8>>) -> Result<ScrobbleReport, Error> {
-    let raw = protocol::decode(&sent(timestamps), HttpResponse::new(200, body.into())).unwrap();
+fn named(plays: &[(&str, &str, u64)], body: impl Into<Vec<u8>>) -> Result<ScrobbleReport, Error> {
+    let raw = protocol::decode(&sent(plays), HttpResponse::new(200, body.into())).unwrap();
     track_scrobble(&raw)
 }
 
+/// Plays of artist `A`, track `T`.
+fn scrobble(timestamps: &[u64], body: impl Into<Vec<u8>>) -> Result<ScrobbleReport, Error> {
+    let plays: Vec<_> = timestamps.iter().map(|t| ("A", "T", *t)).collect();
+    named(&plays, body)
+}
+
 fn row(timestamp: u64, code: u32) -> Value {
+    track_row("T", timestamp, code)
+}
+
+fn track_row(track: &str, timestamp: u64, code: u32) -> Value {
     json!({
         "artist": {"corrected": "0", "#text": "A"},
-        "track": {"corrected": "0", "#text": "T"},
+        "track": {"corrected": "0", "#text": track},
         "ignoredMessage": {"code": code.to_string(), "#text": ""},
         "timestamp": timestamp.to_string()
     })
@@ -52,7 +62,7 @@ fn reply(rows: Value, accepted: u64, ignored: u64) -> Vec<u8> {
 
 #[test]
 fn one_accepted_scrobble_is_read() {
-    let report = scrobble(&[1_287_140_447], ONE).unwrap();
+    let report = named(&[("Cher", "Believe", 1_287_140_447)], ONE).unwrap();
     assert_eq!((report.accepted(), report.ignored()), (1, 0));
     let outcome = &report.outcomes()[0];
     assert!(outcome.is_accepted());
@@ -64,7 +74,14 @@ fn one_accepted_scrobble_is_read() {
 
 #[test]
 fn a_partly_ignored_batch_is_read_with_its_corrections() {
-    let report = scrobble(&[1_287_140_447, 1_000_000_000], BATCH).unwrap();
+    let report = named(
+        &[
+            ("Guns and Roses", "Paradise City", 1_287_140_447),
+            ("Cher", "Believe", 1_000_000_000),
+        ],
+        BATCH,
+    )
+    .unwrap();
     assert_eq!((report.accepted(), report.ignored()), (1, 1));
     let [first, second] = report.outcomes() else {
         panic!("two outcomes")
@@ -122,7 +139,8 @@ fn a_reply_that_does_not_account_for_every_play_is_unknown_delivery() {
 
 #[test]
 fn a_reply_listing_accepted_plays_first_is_put_in_the_order_sent() {
-    let report = scrobble(&[1_000_000_000, 1_700_000_000, 1_000_000_100], REORDERED).unwrap();
+    let plays = [1_000_000_000, 1_700_000_000, 1_000_000_100].map(|t| ("Cher", "Believe", t));
+    let report = named(&plays, REORDERED).unwrap();
     let outcomes = report.outcomes();
     let stamps: Vec<_> = outcomes.iter().map(Outcome::timestamp).collect();
     assert_eq!(
@@ -142,6 +160,85 @@ fn a_reply_listing_accepted_plays_first_is_put_in_the_order_sent() {
 }
 
 #[test]
+fn outcomes_are_matched_by_names_as_well_as_timestamps() {
+    let plays = [
+        ("A", "Blocked", 100),
+        ("A", "Middle", 200),
+        ("A", "Good", 100),
+    ];
+    let body = reply(
+        json!([
+            track_row("Middle", 200, 0),
+            track_row("Good", 100, 0),
+            track_row("Blocked", 100, 2)
+        ]),
+        2,
+        1,
+    );
+    let report = named(&plays, body).unwrap();
+    let names: Vec<_> = report
+        .outcomes()
+        .iter()
+        .map(|o| (o.track().name(), o.is_accepted()))
+        .collect();
+    assert_eq!(
+        names,
+        [("Blocked", false), ("Middle", true), ("Good", true)]
+    );
+}
+
+#[test]
+fn an_outcome_that_fits_no_play_or_several_is_unknown_delivery() {
+    let corrected = json!({
+        "artist": {"corrected": "0", "#text": "A"},
+        "track": {"corrected": "1", "#text": "X"},
+        "ignoredMessage": {"code": "0", "#text": ""},
+        "timestamp": "100"
+    });
+    let cases = [
+        // One play answered twice, another not at all.
+        (
+            vec![("A", "A", 100), ("A", "C", 200), ("A", "B", 100)],
+            reply(
+                json!([
+                    track_row("C", 200, 0),
+                    track_row("A", 100, 0),
+                    track_row("A", 100, 0)
+                ]),
+                3,
+                0,
+            ),
+        ),
+        // Names that match no play at that time.
+        (
+            vec![("A", "A", 100), ("A", "B", 200)],
+            reply(
+                json!([track_row("B", 200, 0), track_row("B", 100, 0)]),
+                2,
+                0,
+            ),
+        ),
+        // A corrected name that could be either play.
+        (
+            vec![("A", "P", 100), ("A", "Q", 100)],
+            reply(json!([corrected.clone(), corrected]), 2, 0),
+        ),
+    ];
+    for (plays, body) in cases {
+        let error = named(&plays, body).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Inconsistent, "{error}");
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+    }
+}
+
+#[test]
+fn identical_plays_take_their_outcomes_in_the_reply_order() {
+    let report = scrobble(&[100, 100], reply(json!([row(100, 0), row(100, 5)]), 1, 1)).unwrap();
+    let accepted: Vec<_> = report.outcomes().iter().map(Outcome::is_accepted).collect();
+    assert_eq!(accepted, [true, false]);
+}
+
+#[test]
 fn now_playing_is_read() {
     let request = Request::new(&methods::TRACK_UPDATE_NOW_PLAYING);
     let raw = protocol::decode(&request, HttpResponse::new(200, NOW)).unwrap();
@@ -154,7 +251,14 @@ fn now_playing_is_read() {
 
 #[test]
 fn debug_shows_no_name_and_no_message() {
-    let report = scrobble(&[1_287_140_447, 1_000_000_000], BATCH).unwrap();
+    let report = named(
+        &[
+            ("Guns and Roses", "Paradise City", 1_287_140_447),
+            ("Cher", "Believe", 1_000_000_000),
+        ],
+        BATCH,
+    )
+    .unwrap();
     let debug = format!("{report:?} {:?}", report.outcomes());
     for text in ["Guns", "Cher", "Believe", "Timestamp failed"] {
         assert!(!debug.contains(text), "{debug}");

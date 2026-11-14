@@ -179,7 +179,9 @@ impl IgnoredCode {
 /// Decodes a `track.scrobble` response and checks it against the request:
 /// one outcome for each play sent, with its timestamp, and `accepted` plus
 /// `ignored` equal to the batch. The service lists accepted plays first;
-/// the outcomes are put back in the order sent.
+/// each outcome is matched to its play by timestamp and names, and put back
+/// in the order sent. An outcome that fits no play, or plays that differ,
+/// is an error.
 ///
 /// # Errors
 ///
@@ -189,7 +191,7 @@ impl IgnoredCode {
 /// [`delivery`](crate::Error::delivery) is unknown.
 pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
     shared::decode(raw, &methods::TRACK_SCROBBLE, "scrobbles", |mut list| {
-        let sent = sent_timestamps(raw)?;
+        let sent = sent_plays(raw)?;
         let attr = match list.remove("@attr") {
             Some(Value::Object(attr)) => attr,
             _ => return Err(missing_or("scrobbles.@attr", "an object")),
@@ -233,39 +235,81 @@ pub fn track_update_now_playing(raw: &Raw) -> Result<Outcome, Error> {
     )
 }
 
-/// Matches each play to an outcome with its timestamp. Plays sharing a
-/// timestamp keep the reply's order.
-fn in_sent_order(mut outcomes: Vec<Outcome>, sent: &[u64]) -> Result<Vec<Outcome>, Error> {
-    let mut ordered = Vec::with_capacity(sent.len());
-    for &timestamp in sent {
-        let at = outcomes
+/// Matches each play to the outcome with its timestamp and names. Identical
+/// plays take their outcomes in the reply's order.
+fn in_sent_order(outcomes: Vec<Outcome>, sent: &[Sent]) -> Result<Vec<Outcome>, Error> {
+    // Each play's class: the first play identical to it.
+    let classes: Vec<usize> = sent
+        .iter()
+        .enumerate()
+        .map(|(i, play)| sent.iter().position(|p| p == play).unwrap_or(i))
+        .collect();
+    let mut rows = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        let mut fits = sent
             .iter()
-            .position(|o| o.timestamp == Some(timestamp))
-            .ok_or_else(|| {
-                Error::inconsistent("each play sent has an outcome with its timestamp")
-            })?;
-        ordered.push(outcomes.remove(at));
+            .zip(&classes)
+            .filter(|(play, _)| play.fits(&outcome))
+            .map(|(_, class)| *class);
+        let class = fits
+            .next()
+            .ok_or_else(|| Error::inconsistent("each outcome fits a play sent"))?;
+        if fits.any(|other| other != class) {
+            return Err(Error::inconsistent("each outcome fits one play sent"));
+        }
+        rows.push((class, outcome));
+    }
+    let mut ordered = Vec::with_capacity(sent.len());
+    for class in &classes {
+        let at = rows
+            .iter()
+            .position(|(c, _)| c == class)
+            .ok_or_else(|| Error::inconsistent("each play sent has an outcome"))?;
+        ordered.push(rows.remove(at).1);
     }
     Ok(ordered)
 }
 
-/// The timestamps the request sent, in batch order. Every play must have
-/// one, numbered from 0 with no gap.
-fn sent_timestamps(raw: &Raw) -> Result<Vec<u64>, Error> {
-    let params = raw.request().params();
-    let plays = params
-        .iter()
-        .filter(|(name, _)| name.starts_with("artist["))
-        .count();
-    let sent: Option<Vec<u64>> = (0..plays)
-        .map(|i| raw.request().get(&format!("timestamp[{i}]"))?.parse().ok())
+/// A play as the request sent it.
+#[derive(PartialEq)]
+struct Sent {
+    timestamp: u64,
+    artist: String,
+    track: String,
+}
+
+impl Sent {
+    /// A name fits if it is the one sent or the service says it corrected it.
+    fn fits(&self, outcome: &Outcome) -> bool {
+        let name = |c: &Corrected, sent: &str| c.corrected || c.name == sent;
+        outcome.timestamp == Some(self.timestamp)
+            && name(&outcome.artist, &self.artist)
+            && name(&outcome.track, &self.track)
+    }
+}
+
+/// The plays the request sent, in batch order, numbered from 0 with no gap.
+fn sent_plays(raw: &Raw) -> Result<Vec<Sent>, Error> {
+    let request = raw.request();
+    let count = |prefix: &str| {
+        request
+            .params()
+            .iter()
+            .filter(|(name, _)| name.starts_with(prefix))
+            .count()
+    };
+    let plays = count("artist[");
+    let sent: Option<Vec<Sent>> = (0..plays)
+        .map(|i| {
+            Some(Sent {
+                timestamp: request.get(&format!("timestamp[{i}]"))?.parse().ok()?,
+                artist: request.get(&format!("artist[{i}]"))?.to_owned(),
+                track: request.get(&format!("track[{i}]"))?.to_owned(),
+            })
+        })
         .collect();
-    let stamped = params
-        .iter()
-        .filter(|(name, _)| name.starts_with("timestamp["))
-        .count();
     match sent {
-        Some(sent) if stamped == plays => Ok(sent),
+        Some(sent) if count("timestamp[") == plays && count("track[") == plays => Ok(sent),
         _ => Err(Error::inconsistent(
             "the request numbers its plays from 0, each with a timestamp",
         )),

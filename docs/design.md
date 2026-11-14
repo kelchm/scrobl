@@ -511,7 +511,7 @@ match writer.scrobble(&[play]).send().await {              // at most 50 per cal
 }
 ```
 
-A scrobble reply is checked against the request: one outcome per play, matched to it by timestamp, and `accepted + ignored` equal to the batch size. The service lists accepted plays first; the report puts outcomes back in the order sent. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
+A scrobble reply is checked against the request: one outcome per play, matched to it by timestamp and by artist and track as sent or as corrected, and `accepted + ignored` equal to the batch size. The service lists accepted plays first; the report puts outcomes back in the order sent. An outcome that fits no play, or fits plays that differ, makes the reply inconsistent. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
 
 ## Command-line tool
 
