@@ -16,6 +16,7 @@ mod entity;
 mod geo;
 mod library;
 mod page;
+mod scrobble;
 mod search;
 mod shared;
 mod tag;
@@ -28,6 +29,7 @@ pub use auth::Session;
 pub use entity::{Album, Artist, Image, Images, Tag, Track};
 pub use geo::{CountryArtist, CountryTrack};
 pub use page::{List, Page};
+pub use scrobble::{Corrected, Ignored, IgnoredCode, Outcome, ScrobbleReport};
 pub use tag::TagInfo;
 pub use track::{SimilarTrack, TrackInfo};
 pub use user::{
@@ -70,6 +72,7 @@ pub mod decode {
     pub use super::chart::{chart_get_top_artists, chart_get_top_tags, chart_get_top_tracks};
     pub use super::geo::{geo_get_top_artists, geo_get_top_tracks};
     pub use super::library::library_get_artists;
+    pub use super::scrobble::{track_scrobble, track_update_now_playing};
     pub use super::search::{album_search, artist_search, track_search};
     pub use super::tag::{
         tag_get_info, tag_get_similar, tag_get_top_albums, tag_get_top_artists, tag_get_top_tags,

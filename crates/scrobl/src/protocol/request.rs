@@ -226,6 +226,10 @@ impl Request {
             .map(|(_, value)| value.as_str())
     }
 
+    pub(crate) fn params(&self) -> &[(String, String)] {
+        &self.params
+    }
+
     pub(crate) fn spec(&self) -> &'static MethodSpec {
         self.spec
     }
