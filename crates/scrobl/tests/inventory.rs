@@ -106,7 +106,13 @@ const LEVELS: &[(&str, &str, &str)] = &[
     ),
     ("track.getTags", "`model::List<Tag>`", "live-verified"),
     ("track.getTopTags", "`model::List<TopTag>`", "live-verified"),
+    ("track.scrobble", "`model::ScrobbleReport`", "typed-derived"),
     ("track.search", "`model::Page<Track>`", "live-verified"),
+    (
+        "track.updateNowPlaying",
+        "`model::Outcome`",
+        "typed-derived",
+    ),
     ("user.getFriends", "`model::Page<User>`", "live-verified"),
     ("user.getInfo", "`model::User`", "live-verified"),
     (

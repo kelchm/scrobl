@@ -293,7 +293,7 @@ The calls so far. There are 46 for the forty-four typed methods, which are every
 | `client.search()` | `artists(query)`, `albums(query)`, `tracks(query)` |
 | `client.auth()` | `token`, `session(token)`, `mobile_session(username, password)`, and the addresses `approval_url(token)` and `web_approval_url(callback)` |
 
-Still to come: the ten writes on a `Writer`.
+On a `Writer` only: `scrobble(&plays)`, 1 to 50 `Play`s, and `now_playing(artist, track)`. Still to come: the eight writes that love, unlove and tag.
 
 Signing in has three rules of its own:
 
@@ -486,7 +486,7 @@ async fn recent(client: tauri::State<'_, scrobl::Client>, user: String) -> Resul
 
 `Client` lives in Tauri managed state and is cloned into commands. The app builds a `Writer` at start-up and manages both. Managed state is keyed by type, so a command that takes `State<'_, scrobl::Client>` cannot write and one that takes `State<'_, scrobl::Writer>` says that it can. `UiError` is the app's own serializable type built from `kind()`, `api_code()` and `retry()`. Secrets never cross IPC because the library's types do not serialize them.
 
-Signing in, and writes (writes not built; shape only, to be checked against the live service):
+Signing in and scrobbling:
 
 ```rust
 // Desktop flow. The library builds URLs and exchanges tokens; the app opens the browser and stores the session.
@@ -511,7 +511,7 @@ match writer.scrobble(&[play]).send().await {              // at most 50 per cal
 }
 ```
 
-A scrobble reply is checked against the request: one outcome per item, `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
+A scrobble reply is checked against the request: one outcome per play, in order with its timestamp, and `accepted + ignored` equal to the batch size. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
 
 ## Command-line tool
 
@@ -584,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Forty-seven have one so far: the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so has the desktop sign-in, `auth.getToken` and `auth.getSession`. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The ten left are the ten that change an account. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. Forty-nine have one so far: the two that scrobble, which are `typed-derived`, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so has the desktop sign-in, `auth.getToken` and `auth.getSession`. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight left love, unlove and tag. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
