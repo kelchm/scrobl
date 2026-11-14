@@ -22,7 +22,7 @@ impl ScrobbleReport {
         &self.outcomes
     }
 
-    /// How many were recorded.
+    /// How many the service reported accepted.
     pub fn accepted(&self) -> usize {
         self.outcomes.iter().filter(|o| o.is_accepted()).count()
     }
@@ -42,7 +42,7 @@ impl fmt::Debug for ScrobbleReport {
     }
 }
 
-/// What the service did with one play: the names as it recorded them, and
+/// What the service reported for one play: the names as it took them, and
 /// why it ignored the play if it did.
 #[derive(Clone)]
 pub struct Outcome {
@@ -55,22 +55,22 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// Whether the play was recorded.
+    /// Whether the service reported the play accepted.
     pub fn is_accepted(&self) -> bool {
         self.ignored.is_none()
     }
 
-    /// Why the play was not recorded.
+    /// Why the service ignored the play.
     pub fn ignored(&self) -> Option<&Ignored> {
         self.ignored.as_ref()
     }
 
-    /// The artist as the service recorded it.
+    /// The artist as the service took it.
     pub fn artist(&self) -> &Corrected {
         &self.artist
     }
 
-    /// The track as the service recorded it.
+    /// The track as the service took it.
     pub fn track(&self) -> &Corrected {
         &self.track
     }
@@ -101,7 +101,7 @@ impl fmt::Debug for Outcome {
     }
 }
 
-/// A name as the service recorded it.
+/// A name as the service took it.
 #[derive(Clone)]
 pub struct Corrected {
     name: String,
@@ -153,13 +153,14 @@ impl fmt::Debug for Ignored {
     }
 }
 
-/// Why a play was ignored. Codes this library does not know are kept.
+/// Why a play was ignored. The meanings are Last.fm's documented ones, which
+/// the service does not keep to; codes this library does not know are kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IgnoredCode(u32);
 
 impl IgnoredCode {
-    /// 1: the artist is filtered. The service also gave it for plays from
-    /// 2001, where 3 was documented.
+    /// 1: the artist is filtered. In practice also given for a timestamp far
+    /// in the past or future, or a malformed MusicBrainz id.
     pub const ARTIST: Self = Self(1);
     /// 2: the track is filtered.
     pub const TRACK: Self = Self(2);
@@ -167,7 +168,8 @@ impl IgnoredCode {
     pub const TOO_OLD: Self = Self(3);
     /// 4: the timestamp is too far in the future.
     pub const TOO_NEW: Self = Self(4);
-    /// 5: the user's daily scrobble limit is reached.
+    /// 5: the user's daily scrobble limit is reached. The limit may instead
+    /// come as error 29, rate limit exceeded.
     pub const DAILY_LIMIT: Self = Self(5);
 
     /// The number the service sent.
@@ -270,12 +272,14 @@ fn in_sent_order(outcomes: Vec<Outcome>, sent: &[Sent]) -> Result<Vec<Outcome>, 
     Ok(ordered)
 }
 
-/// A play as the request sent it.
+/// A play as the request sent it. Plays are identical only if every
+/// parameter is, since any of them can get a play ignored.
 #[derive(PartialEq)]
 struct Sent {
     timestamp: u64,
     artist: String,
     track: String,
+    params: Vec<(String, String)>,
 }
 
 impl Sent {
@@ -301,10 +305,20 @@ fn sent_plays(raw: &Raw) -> Result<Vec<Sent>, Error> {
     let plays = count("artist[");
     let sent: Option<Vec<Sent>> = (0..plays)
         .map(|i| {
+            let index = format!("[{i}]");
+            let mut params: Vec<_> = request
+                .params()
+                .iter()
+                .filter_map(|(name, value)| {
+                    Some((name.strip_suffix(&index)?.to_owned(), value.clone()))
+                })
+                .collect();
+            params.sort();
             Some(Sent {
-                timestamp: request.get(&format!("timestamp[{i}]"))?.parse().ok()?,
-                artist: request.get(&format!("artist[{i}]"))?.to_owned(),
-                track: request.get(&format!("track[{i}]"))?.to_owned(),
+                timestamp: request.get(&format!("timestamp{index}"))?.parse().ok()?,
+                artist: request.get(&format!("artist{index}"))?.to_owned(),
+                track: request.get(&format!("track{index}"))?.to_owned(),
+                params,
             })
         })
         .collect();

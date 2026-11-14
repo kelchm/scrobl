@@ -511,7 +511,7 @@ match writer.scrobble(&[play]).send().await {              // at most 50 per cal
 }
 ```
 
-A scrobble reply is checked against the request: one outcome per play, matched to it by timestamp and by artist and track as sent or as corrected, and `accepted + ignored` equal to the batch size. The service lists accepted plays first; the report puts outcomes back in the order sent. An outcome that fits no play, or fits plays that differ, makes the reply inconsistent. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it.
+A scrobble reply is checked against the request: one outcome per play, matched to it by timestamp and by artist and track as sent or as corrected, and `accepted + ignored` equal to the batch size. On 2026-11-14 the service listed accepted plays first; the report puts outcomes back in the order sent. An outcome that fits no play, or fits plays that differ, makes the reply inconsistent. A reply that fails this check is `Delivery::Unknown` with the raw body, never a success. Both spellings of the outcome keys (`ignoredMessage`, `ignoredmessage`) are accepted. Submitted metadata is kept as sent, and corrections are reported next to it. Ignore codes are kept as sent: the service gives 1 for plays it documents as 3, and the meanings are not to be relied on. Last.fm lowered its undisclosed daily limit in June 2026, and the limit can arrive as error 29 rather than code 5.
 
 ## Command-line tool
 
@@ -557,7 +557,7 @@ That one rule is the first import, the daily run and the repair of old history:
 **The newest history is always read.** Equal counts do not prove equal rows, and the newest history is where that matters: a scrobble is dated when its track started and sent when it ended, or days later from a device that was offline.
 
 - Every sync reads, whatever the counts say, from fourteen days before the newest scrobble the file holds up to the present. It reads that first, so that the newest history is in the file whatever becomes of the rest.
-- Fourteen days because several clients report that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
+- Fourteen days because several clients report, and a moderator on Last.fm's forum confirmed (https://support.last.fm/t/6754), that Last.fm ignores a scrobble dated more than about two weeks back. Last.fm documents no number. If that holds, a scrobble that arrived since the last sync is dated after where the reading starts, however long ago that sync was.
 - A file that holds no scrobble yet, or one dated after the present, is read from fourteen days before the present instead. A scrobble that arrived in a longer gap than that is found by its count, like a change to older history.
 - The cost is that the fortnight before the newest scrobble is read by every sync, also when nothing has been played for months.
 - `--full` reads every span that way.

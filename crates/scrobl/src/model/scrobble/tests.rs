@@ -232,6 +232,16 @@ fn an_outcome_that_fits_no_play_or_several_is_unknown_delivery() {
 }
 
 #[test]
+fn plays_differing_only_in_other_parameters_are_unknown_delivery() {
+    let request = sent(&[("A", "T", 100), ("A", "T", 100)]).indexed("duration", 1, 20);
+    let body = reply(json!([row(100, 0), row(100, 1)]), 1, 1);
+    let raw = protocol::decode(&request, HttpResponse::new(200, body)).unwrap();
+    let error = track_scrobble(&raw).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Inconsistent, "{error}");
+    assert_eq!(error.delivery(), Some(Delivery::Unknown));
+}
+
+#[test]
 fn identical_plays_take_their_outcomes_in_the_reply_order() {
     let report = scrobble(&[100, 100], reply(json!([row(100, 0), row(100, 5)]), 1, 1)).unwrap();
     let accepted: Vec<_> = report.outcomes().iter().map(Outcome::is_accepted).collect();

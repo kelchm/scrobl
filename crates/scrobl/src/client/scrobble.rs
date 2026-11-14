@@ -66,14 +66,15 @@ impl Play {
         self
     }
 
-    /// The track's MusicBrainz id.
+    /// The track's MusicBrainz id. A malformed one can get the play ignored.
     #[must_use]
     pub fn mbid(mut self, mbid: impl Into<String>) -> Self {
         self.mbid = Some(mbid.into());
         self
     }
 
-    /// The track's length, sent in whole seconds.
+    /// The track's length, sent in whole seconds. Under 30 seconds can get
+    /// the play ignored.
     #[must_use]
     pub fn duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
