@@ -1,5 +1,5 @@
-//! Acceptance against the live Last.fm service. Only
-//! [`scrobbling_against_the_live_service`] writes.
+//! Acceptance against the live Last.fm service. Only the last two tests
+//! write.
 //!
 //! Nothing here runs unless asked for: the tests are ignored, and each fails
 //! at once without `SCROBL_LIVE_API_KEY` and `SCROBL_LIVE_USER`. They are
@@ -21,6 +21,8 @@
 //! on that account. [`scrobbling_against_the_live_service`] signs in the
 //! same way, then writes: one scrobble of Radiohead's "Creep", which the
 //! owner deletes afterwards on the website.
+//! [`loving_and_tagging_against_the_live_service`] loves and unloves
+//! "Creep", and adds and removes a tag on it, its album and Radiohead.
 
 #![cfg(feature = "client")]
 #![allow(
@@ -37,7 +39,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use scrobl::client::Period;
 use scrobl::history::Window;
 use scrobl::protocol::Raw;
-use scrobl::{ApiErrorCode, ApiKey, Client, ErrorKind};
+use scrobl::{ApiErrorCode, ApiKey, Client, ErrorKind, Writer};
 
 const USER_AGENT: &str = "scrobl-live-acceptance/0 (+https://github.com/kelchm/scrobl)";
 
@@ -1414,9 +1416,9 @@ fn shape(raw: &Raw) -> String {
     of(&raw.json_strict().unwrap())
 }
 
-#[tokio::test]
-#[ignore = "calls Last.fm and adds a scrobble; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
-async fn scrobbling_against_the_live_service() {
+/// Signs in at the browser and returns a writer for `SCROBL_LIVE_USER`,
+/// refusing a session for any other account.
+async fn signed_in_writer() -> Writer {
     let user = env("SCROBL_LIVE_USER");
     let key = env("SCROBL_LIVE_API_KEY");
     let secret = env("SCROBL_LIVE_API_SECRET");
@@ -1443,12 +1445,18 @@ async fn scrobbling_against_the_live_service() {
         session.name().eq_ignore_ascii_case(&user),
         "approved for another account; nothing was written"
     );
-    let writer = Client::builder(ApiKey::new(key))
+    Client::builder(ApiKey::new(key))
         .secret(scrobl::ApiSecret::new(secret))
         .session(session.into_key())
         .user_agent(USER_AGENT)
         .build_writer()
-        .unwrap();
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and adds a scrobble; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
+async fn scrobbling_against_the_live_service() {
+    let writer = signed_in_writer().await;
 
     let now = writer
         .now_playing("Radiohead", "Creep")
@@ -1501,6 +1509,49 @@ async fn scrobbling_against_the_live_service() {
         assert_eq!(
             outcome.is_accepted(),
             outcome.timestamp() == Some(started_at)
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "calls Last.fm and changes the account, then changes it back; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
+async fn loving_and_tagging_against_the_live_service() {
+    let writer = signed_in_writer().await;
+    let info = writer
+        .track("Radiohead", "Creep")
+        .info()
+        .for_user(env("SCROBL_LIVE_USER"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        info.user_loved(),
+        Some(false),
+        "Creep is loved already, and unloving it would lose that; nothing was written"
+    );
+    let tag = "scrobl-live-test";
+    let changes = [
+        ("love", writer.love("Radiohead", "Creep")),
+        ("unlove", writer.unlove("Radiohead", "Creep")),
+        ("tag artist", writer.tag_artist("Radiohead", [tag])),
+        ("untag artist", writer.untag_artist("Radiohead", tag)),
+        (
+            "tag album",
+            writer.tag_album("Radiohead", "Pablo Honey", [tag]),
+        ),
+        (
+            "untag album",
+            writer.untag_album("Radiohead", "Pablo Honey", tag),
+        ),
+        ("tag track", writer.tag_track("Radiohead", "Creep", [tag])),
+        ("untag track", writer.untag_track("Radiohead", "Creep", tag)),
+    ];
+    for (name, change) in changes {
+        let done = change.send().await.unwrap();
+        println!(
+            "{name}: {} (HTTP {})",
+            shape(done.raw()),
+            done.raw().status()
         );
     }
 }

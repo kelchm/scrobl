@@ -293,7 +293,7 @@ The calls so far. There are 46 for the forty-four typed methods, which are every
 | `client.search()` | `artists(query)`, `albums(query)`, `tracks(query)` |
 | `client.auth()` | `token`, `session(token)`, `mobile_session(username, password)`, and the addresses `approval_url(token)` and `web_approval_url(callback)` |
 
-On a `Writer` only: `scrobble(&plays)`, 1 to 50 `Play`s, and `now_playing(artist, track)`. Still to come: the eight writes that love, unlove and tag.
+On a `Writer` only: `scrobble(&plays)`, 1 to 50 `Play`s, and `now_playing(artist, track)`. And `love` and `unlove(artist, track)`, `tag_artist`, `tag_album` and `tag_track` with up to ten tags, and `untag_artist`, `untag_album` and `untag_track` with one. A tag with a comma is refused, since the service takes tags as one comma-separated list. These eight answer with nothing, so they return `Response<()>`.
 
 Signing in has three rules of its own:
 
@@ -584,7 +584,7 @@ That one rule is the first import, the daily run and the repair of old history:
 
 ## Coverage
 
-Every method gets a typed model for v1. Forty-nine have one so far: the two that scrobble, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so have the desktop sign-in, `auth.getToken` and `auth.getSession`, and both that scrobble. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight left love, unlove and tag. One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
+Every method gets a typed model for v1. All fifty-seven have one: the eight that love, unlove and tag, the two that scrobble, the three that sign a user in, and every method that reads: the thirteen of the `user` package, `library.getArtists`, the three charts of the service, the two of a country, the seven of the `tag` package, the eight of the `artist` package, the four of the `album` package and the six of the `track` package. All forty-four reads have been made against the live service through the client, and so have the desktop sign-in, `auth.getToken` and `auth.getSession`, and both that scrobble. `auth.getMobileSession` stays `typed-derived`: checking it live needs the owner's password. The eight that love, unlove and tag stay `typed-derived` until a test account runs them (#95). One, `tag.getSimilar`, stays at `typed-derived`: the service sent it no rows, so its rows are modelled on the official sample alone.
 
 A model can be first written from the official samples and community documentation, and a model written that way can be wrong about the live service. Three things keep that honest:
 
