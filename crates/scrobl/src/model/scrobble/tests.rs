@@ -174,3 +174,65 @@ fn a_malformed_row_is_an_error_naming_the_field() {
         assert!(error.to_string().contains(field), "{field}: {error}");
     }
 }
+
+fn request_with(params: &[(&str, &str)]) -> Request {
+    params
+        .iter()
+        .fold(Request::new(&methods::TRACK_SCROBBLE), |r, (n, v)| {
+            r.param(n, *v)
+        })
+}
+
+#[test]
+fn a_request_with_a_gap_or_a_bad_timestamp_is_never_accounted_for() {
+    let gap = request_with(&[
+        ("artist[0]", "a"),
+        ("track[0]", "t"),
+        ("timestamp[0]", "1"),
+        ("artist[2]", "a"),
+        ("track[2]", "t"),
+        ("timestamp[2]", "2"),
+    ]);
+    let bad = request_with(&[
+        ("artist[0]", "a"),
+        ("track[0]", "t"),
+        ("timestamp[0]", "soon"),
+    ]);
+    for request in [gap, bad] {
+        let body = reply(row(1, 0), 1, 0);
+        let raw = protocol::decode(&request, HttpResponse::new(200, body)).unwrap();
+        let error = track_scrobble(&raw).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Inconsistent, "{error}");
+        assert_eq!(error.delivery(), Some(Delivery::Unknown));
+    }
+}
+
+#[test]
+fn counts_out_of_range_or_given_as_strings_are_compared_not_added() {
+    let huge = json!({"scrobbles": {"scrobble": row(1, 0),
+        "@attr": {"accepted": u64::MAX, "ignored": 1}}});
+    let error = scrobble(&[1], huge.to_string()).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Inconsistent);
+    let strings = json!({"scrobbles": {"scrobble": row(1, 0),
+        "@attr": {"accepted": "1", "ignored": "0"}}});
+    assert_eq!(scrobble(&[1], strings.to_string()).unwrap().accepted(), 1);
+}
+
+#[test]
+fn both_spellings_at_once_are_an_error() {
+    let mut row = row(1, 0);
+    row.as_object_mut()
+        .unwrap()
+        .insert("ignoredmessage".into(), json!({"code": "3", "#text": ""}));
+    let error = scrobble(&[1], reply(row, 1, 0)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    assert_eq!(error.delivery(), Some(Delivery::Unknown));
+}
+
+#[test]
+fn an_unknown_ignored_code_is_kept() {
+    let report = scrobble(&[1], reply(row(1, 9), 0, 1)).unwrap();
+    let ignored = report.outcomes()[0].ignored().unwrap();
+    assert_eq!(ignored.code().get(), 9);
+    assert_eq!(format!("{ignored:?}"), "Ignored(IgnoredCode(9))");
+}

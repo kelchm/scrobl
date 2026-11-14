@@ -1416,6 +1416,7 @@ fn shape(raw: &Raw) -> String {
 #[tokio::test]
 #[ignore = "calls Last.fm and adds a scrobble; needs SCROBL_LIVE_API_KEY, SCROBL_LIVE_API_SECRET, SCROBL_LIVE_USER, the owner at a browser and the owner's go-ahead"]
 async fn scrobbling_against_the_live_service() {
+    let user = env("SCROBL_LIVE_USER");
     let key = env("SCROBL_LIVE_API_KEY");
     let secret = env("SCROBL_LIVE_API_SECRET");
     let client = Client::builder(ApiKey::new(&key))
@@ -1437,6 +1438,10 @@ async fn scrobbling_against_the_live_service() {
         );
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     };
+    assert!(
+        session.name().eq_ignore_ascii_case(&user),
+        "approved for another account; nothing was written"
+    );
     let writer = Client::builder(ApiKey::new(key))
         .secret(scrobl::ApiSecret::new(secret))
         .session(session.into_key())
@@ -1457,15 +1462,17 @@ async fn scrobbling_against_the_live_service() {
     );
     assert!(now.is_accepted());
 
-    // One play from five minutes ago, and one from 2001, which is ignored.
+    // Out of time order, so a reply sorted by time would not match: a play
+    // from five minutes ago between two from 2001, which are ignored.
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
         - 300;
     let plays = [
-        scrobl::client::Play::new("Radiohead", "Creep", started_at).album("Pablo Honey"),
         scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_000),
+        scrobl::client::Play::new("Radiohead", "Creep", started_at).album("Pablo Honey"),
+        scrobl::client::Play::new("Radiohead", "Creep", 1_000_000_100),
     ];
     let report = writer.scrobble(&plays).send().await.unwrap();
     println!(
@@ -1473,14 +1480,16 @@ async fn scrobbling_against_the_live_service() {
         shape(report.raw()),
         report.raw().status()
     );
-    let [recorded, old] = report.outcomes() else {
-        panic!("two outcomes")
+    let [old, recorded, older] = report.outcomes() else {
+        panic!("three outcomes")
     };
     assert!(recorded.is_accepted());
-    println!(
-        "the old play: {:?}",
-        old.ignored().map(scrobl::model::Ignored::code)
-    );
-    assert!(!old.is_accepted());
+    for old in [old, older] {
+        println!(
+            "an old play: {:?}",
+            old.ignored().map(scrobl::model::Ignored::code)
+        );
+        assert!(!old.is_accepted());
+    }
     println!("\nDelete the scrobble of Radiohead, Creep at {started_at} on the website.");
 }

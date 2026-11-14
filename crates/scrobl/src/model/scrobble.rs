@@ -186,8 +186,8 @@ impl IgnoredCode {
 /// match the request. Either way the error's
 /// [`delivery`](crate::Error::delivery) is unknown.
 pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
-    let sent = sent_timestamps(raw);
     shared::decode(raw, &methods::TRACK_SCROBBLE, "scrobbles", |mut list| {
+        let sent = sent_timestamps(raw)?;
         let attr = match list.remove("@attr") {
             Some(Value::Object(attr)) => attr,
             _ => return Err(missing_or("scrobbles.@attr", "an object")),
@@ -206,7 +206,7 @@ pub fn track_scrobble(raw: &Raw) -> Result<ScrobbleReport, Error> {
         if report.outcomes.len() != sent.len() {
             return Err(Error::inconsistent("one outcome for each play sent"));
         }
-        if accepted + ignored != sent.len() as u64 || accepted != report.accepted() as u64 {
+        if accepted != report.accepted() as u64 || ignored != report.ignored() as u64 {
             return Err(Error::inconsistent(
                 "`accepted` and `ignored` add up to the batch",
             ));
@@ -240,13 +240,27 @@ pub fn track_update_now_playing(raw: &Raw) -> Result<Outcome, Error> {
     )
 }
 
-/// The timestamps the request sent, in batch order.
-fn sent_timestamps(raw: &Raw) -> Vec<u64> {
-    let request = raw.request();
-    (0..)
-        .map_while(|i| request.get(&format!("timestamp[{i}]")))
-        .map(|t| t.parse().unwrap_or_default())
-        .collect()
+/// The timestamps the request sent, in batch order. Every play must have
+/// one, numbered from 0 with no gap.
+fn sent_timestamps(raw: &Raw) -> Result<Vec<u64>, Error> {
+    let params = raw.request().params();
+    let plays = params
+        .iter()
+        .filter(|(name, _)| name.starts_with("artist["))
+        .count();
+    let sent: Option<Vec<u64>> = (0..plays)
+        .map(|i| raw.request().get(&format!("timestamp[{i}]"))?.parse().ok())
+        .collect();
+    let stamped = params
+        .iter()
+        .filter(|(name, _)| name.starts_with("timestamp["))
+        .count();
+    match sent {
+        Some(sent) if stamped == plays => Ok(sent),
+        _ => Err(Error::inconsistent(
+            "the request numbers its plays from 0, each with a timestamp",
+        )),
+    }
 }
 
 fn outcome(row: &Map<String, Value>, at: &str, scrobble: bool) -> Result<Outcome, Error> {
@@ -288,8 +302,14 @@ fn corrected(row: &Map<String, Value>, at: &str, key: &str) -> Result<Option<Cor
 /// `{"code": "0", "#text": ""}` under either spelling. Code 0 is not ignored.
 fn ignored(row: &Map<String, Value>, at: &str) -> Result<Option<Ignored>, Error> {
     let (key, value) = match (row.get("ignoredMessage"), row.get("ignoredmessage")) {
-        (Some(value), _) => ("ignoredMessage", value),
+        (Some(value), None) => ("ignoredMessage", value),
         (None, Some(value)) => ("ignoredmessage", value),
+        (Some(_), Some(_)) => {
+            return Err(Error::decode_field(
+                &format!("{at}.ignoredMessage"),
+                "given twice",
+            ));
+        }
         (None, None) => return Err(missing_or(&format!("{at}.ignoredMessage"), "an object")),
     };
     let path = format!("{at}.{key}");
