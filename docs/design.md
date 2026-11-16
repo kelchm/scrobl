@@ -763,7 +763,7 @@ The recorded fixtures are the owner's own captures: of their own account, and of
 | Transport | Decided: one async `reqwest` client. No blocking adapter and no public transport trait until a consumer needs one. |
 | Coverage | Decided: a typed model for every method in v1, with the verification level of each recorded in `endpoints.md`. |
 | License | Decided: MIT. |
-| Versions | Decided: one version for the library, the tool and its image, set in the workspace manifest, and one tag, `v` and the version, for a release. Before 1.0 a change that breaks the library's API raises the middle number and anything else the last. A release gives both crates the new number even when only one of them changed. |
+| Versions | Decided: one version for the library, the tool and its image, set in the workspace manifest, and one tag, `v` and the version, for a release. Before 1.0 a new feature or a change that breaks the library's API raises the middle number; fixes and other maintenance raise the last. A release gives both crates the new number even when only one of them changed. |
 | Minimum Rust | Decided: 1.88 for the library and 1.89 for the command-line tool, each tested in CI. See [Rust version](#rust-version). |
 | Visibility | Decided: the repository is public. A version's tag publishes both crates to crates.io, then releases it on GitHub with a container image of the command-line tool. |
 | Typed API | Decided: a call is a handle, a question and `send()`. Five things have one type each, a number true only in one list is on a row, and a list is a `Page` or a `List`. See [Typed views](#typed-views) and [Typed calls](#typed-calls). |
